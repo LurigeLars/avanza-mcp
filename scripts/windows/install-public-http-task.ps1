@@ -1,6 +1,5 @@
 param(
-    [string]$TaskName = "AvanzaMcpHttpServer",
-    [int]$Port = 8767
+    [string]$TaskName = "AvanzaMcpHttpServer"
 )
 
 $ErrorActionPreference = "Stop"
@@ -22,9 +21,9 @@ $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoi
 
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger @($logonTrigger, $watchdogTrigger) -Principal $principal -Settings $settings -Description "Runs the loopback-only Avanza FastMCP HTTP server without a visible terminal window." -Force | Out-Null
 
-$listener = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+$listener = Get-NetTCPConnection -LocalPort 8767 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($listener) {
-    Write-Host "Task '$TaskName' registered but not started because port $Port is already in use by PID $($listener.OwningProcess)."
+    Write-Host "Task '$TaskName' registered but not started because port 8767 is already in use by PID $($listener.OwningProcess)."
     Write-Host "Stop the existing manual FastMCP process, then run:"
     Write-Host "  Start-ScheduledTask -TaskName `"$TaskName`""
     exit 0
