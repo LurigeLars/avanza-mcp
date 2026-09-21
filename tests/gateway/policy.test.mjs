@@ -11,11 +11,11 @@ import {
 
 test('default public allowlist contains the current 35 read-only Avanza tools', () => {
   const allowed = parseAllowedTools();
-  assert.equal(allowed.size, 34);
+  assert.equal(allowed.size, 35);
   assert.equal(allowed.has('search_instruments'), true);
   assert.equal(allowed.has('get_orderbook'), true);
   assert.equal(allowed.has('get_marketmaker_chart'), true);
-  assert.equal(DEFAULT_ALLOWED_TOOLS.split(',').length, 34);
+  assert.equal(DEFAULT_ALLOWED_TOOLS.split(',').length, 35);
 });
 
 test('explicit ALLOWED_TOOLS override is authoritative', () => {
