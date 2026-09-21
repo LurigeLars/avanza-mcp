@@ -1,0 +1,44 @@
+name: Leveraged Screen Benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      underlying_order_book_id:
+        description: "Verified Avanza underlying order-book ID"
+        required: true
+        default: "4478"
+      direction:
+        description: "long or short"
+        required: true
+        default: "long"
+        type: choice
+        options:
+          - long
+          - short
+      max_per_type:
+        description: "Maximum products per certificate/warrant family"
+        required: true
+        default: "100"
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - name: Run live public-Avanza benchmark
+        run: >
+          uv run --locked python scripts/benchmark_leveraged_screen_live.py
+          --underlying-order-book-id "${{ inputs.underlying_order_book_id }}"
+          --direction "${{ inputs.direction }}"
+          --max-per-type "${{ inputs.max_per_type }}"

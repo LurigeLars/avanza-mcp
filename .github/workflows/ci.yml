@@ -40,6 +40,10 @@ jobs:
       - name: Run public gateway tests
         run: node --test tests/gateway/*.test.mjs
 
+      - name: Measure MCP catalog and serialization overhead
+        if: matrix.python-version == '3.12'
+        run: uv run --locked python scripts/benchmark_mcp_efficiency.py
+
       - name: Verify imports
         run: uv run python -c "from avanza_mcp import mcp; print('✓ Import successful')"
 
