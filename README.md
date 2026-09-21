@@ -155,7 +155,7 @@ docker compose -f compose.public.yaml up -d
 ```
 
 The gateway requires a valid Cloudflare Access JWT, restricts calls to an explicit
-allowlist of the current 34 read-only tools, strips client credentials before
+allowlist of the current 35 read-only tools, strips client credentials before
 forwarding, and compacts tool schemas to reduce model-context overhead. New MCP tools
 are not exposed through the public connector until the allowlist is reviewed.
 
@@ -190,7 +190,7 @@ If a desktop client cannot find `uvx`, use its absolute executable path. See [DE
 
 ## Tools
 
-All 34 tools are read-only. Search first to obtain an `order_book_id`; history tools expose pagination. Data is latest available, not guaranteed live.
+All 35 tools are read-only. Search first to obtain an `order_book_id`; history tools expose pagination. Data is latest available, not guaranteed live.
 
 | Category | Tool | Description |
 |----------|------|-------------|
@@ -206,6 +206,7 @@ All 34 tools are read-only. Search first to obtain an `order_book_id`; history t
 | Market | `get_marketplace_info` | Trading hours and market status |
 | Market | `get_recent_trades` | Recent trade snapshot |
 | Market | `get_broker_trade_summary` | Broker buy/sell activity |
+| Derivatives | `screen_leveraged_instruments` | Bounded certificate/warrant screen for one underlying |
 | Funds | `get_fund_info` | NAV, performance, fees and fund information |
 | Funds | `get_fund_sustainability` | ESG and sustainability metrics |
 | Funds | `get_fund_chart` | Historical fund chart points |

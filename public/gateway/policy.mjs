@@ -35,6 +35,7 @@ export const DEFAULT_ALLOWED_TOOLS = [
   'get_number_of_owners',
   'get_short_selling',
   'get_marketmaker_chart',
+  'screen_leveraged_instruments',
 ].join(',');
 
 export function parseAllowedTools(value) {
