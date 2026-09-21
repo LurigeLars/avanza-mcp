@@ -9,7 +9,7 @@ import {
   rewriteResponse,
 } from '../../public/gateway/policy.mjs';
 
-test('default public allowlist contains the current 34 read-only Avanza tools', () => {
+test('default public allowlist contains the current 35 read-only Avanza tools', () => {
   const allowed = parseAllowedTools();
   assert.equal(allowed.size, 34);
   assert.equal(allowed.has('search_instruments'), true);
