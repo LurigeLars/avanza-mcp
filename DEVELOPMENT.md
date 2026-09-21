@@ -3,7 +3,7 @@
 ## Setup
 
 Requires Python >=3.12 and [uv](https://docs.astral.sh/uv/). FastMCP is pinned to
-3.4.7. Run from the repository root:
+4.0.5. Run from the repository root:
 
 ```bash
 uv sync --all-extras
@@ -26,22 +26,25 @@ launches a subprocess, use its documented configuration format. A common format 
 
 Do not write diagnostic output to stdout on stdio transport.
 
-For HTTP using the [FastMCP v3 CLI](https://gofastmcp.com/v3/getting-started/quickstart):
+For loopback HTTP using the FastMCP CLI:
 
 ```bash
-uv run fastmcp run src/avanza_mcp/__init__.py:mcp --transport http
+uv run fastmcp run src/avanza_mcp/__init__.py:mcp --transport http --host 127.0.0.1 --port 8767
 ```
 
-This starts a transport endpoint; it does not deploy a hosted service. A ChatGPT
-remote connection needs a separate reachable deployment, not a local stdio command.
-Public upstream endpoints need no account authentication; remote MCP access controls
-are deployment-specific, not implied by upstream public access.
+This endpoint may be shared by multiple local HTTP MCP clients. It remains loopback-only.
+For ChatGPT web, `compose.public.yaml` adds a Cloudflare Tunnel and a JWT-validating
+Node gateway; the raw FastMCP port is never published. The gateway also applies the
+explicit public tool allowlist and compacts tool definitions before they enter model
+context. Public upstream endpoints need no Avanza account authentication; remote MCP
+access still requires Cloudflare Access.
 
 ## Tests
 
 ```bash
 uv run pytest tests/unit/test_workflows.py -v
 uv run pytest tests/unit -v
+node --test tests/gateway/*.test.mjs
 uv run pytest tests/integration -v
 ```
 
