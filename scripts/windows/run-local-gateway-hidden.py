@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 from pathlib import Path
 
-CREATE_NO_WINDOW = 0x08000000
+from _job_process import run_child
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GATEWAY = REPO_ROOT / "public" / "gateway" / "gateway.mjs"
 LOG_DIR = Path(os.environ["LOCALAPPDATA"]) / "avanza-mcp"
@@ -36,7 +36,7 @@ def main() -> int:
         {
             "GATEWAY_MODE": "local",
             "BIND_HOST": "127.0.0.1",
-            "PORT": "8766",
+            "PORT": "8769",
             "UPSTREAM_HOST": "127.0.0.1",
             "UPSTREAM_PORT": "8767",
             "UPSTREAM_PATH": "/mcp",
@@ -45,17 +45,12 @@ def main() -> int:
     )
 
     with LOG_FILE.open("a", encoding="utf-8") as log:
-        completed = subprocess.run(
+        return run_child(
             [str(node), str(GATEWAY)],
-            cwd=REPO_ROOT,
+            cwd=str(REPO_ROOT),
             env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            creationflags=CREATE_NO_WINDOW,
-            check=False,
+            log=log,
         )
-    return completed.returncode
 
 
 if __name__ == "__main__":

@@ -41,7 +41,7 @@ test('local gateway is loopback-only and needs no Cloudflare credentials', () =>
   assert.equal(config.bindHost, '127.0.0.1');
   assert.equal(config.upstreamHost, '127.0.0.1');
   assert.equal(config.upstreamPort, 8767);
-  assert.equal(config.port, 8766);
+  assert.equal(config.port, 8769);
   assert.equal(config.ratePerMin, 600);
 
   assert.equal(isLoopbackAddress('127.0.0.1'), true);

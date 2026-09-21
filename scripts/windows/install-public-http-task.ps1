@@ -6,9 +6,8 @@ $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $launcher = Join-Path $PSScriptRoot "run-public-http-hidden.py"
 $pythonw = Join-Path $repoRoot ".venv\Scripts\pythonw.exe"
-$fastmcp = Join-Path $repoRoot ".venv\Scripts\fastmcp.exe"
 
-if (-not (Test-Path $pythonw) -or -not (Test-Path $fastmcp)) {
+if (-not (Test-Path $pythonw)) {
     throw "Project virtualenv is missing. Run: uv sync --locked"
 }
 
