@@ -1,21 +1,26 @@
 param(
-    [string]$TaskName = "Avanza MCP Public HTTP",
+    [string]$TaskName = "AvanzaMcpHttpServer",
     [int]$Port = 8767
 )
 
 $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-$runner = Join-Path $PSScriptRoot "run-public-http.ps1"
-$uv = Get-Command uv.exe -ErrorAction Stop
-$shell = Get-Command pwsh.exe -ErrorAction SilentlyContinue
-if (-not $shell) { $shell = Get-Command powershell.exe -ErrorAction Stop }
+$launcher = Join-Path $PSScriptRoot "run-public-http-hidden.py"
+$pythonw = Join-Path $repoRoot ".venv\Scripts\pythonw.exe"
+$fastmcp = Join-Path $repoRoot ".venv\Scripts\fastmcp.exe"
+
+if (-not (Test-Path $pythonw) -or -not (Test-Path $fastmcp)) {
+    throw "Project virtualenv is missing. Run: uv sync --locked"
+}
+
 $userId = "$env:USERDOMAIN\$env:USERNAME"
-$arguments = "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$runner`" -UvPath `"$($uv.Source)`" -Port $Port"
-$action = New-ScheduledTaskAction -Execute $shell.Source -Argument $arguments -WorkingDirectory $repoRoot
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $userId
+$action = New-ScheduledTaskAction -Execute $pythonw -Argument "`"$launcher`"" -WorkingDirectory $repoRoot
+$logonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $userId
+$watchdogTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650)
 $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
-Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "Runs the loopback-only Avanza FastMCP HTTP server on 127.0.0.1:$Port without a visible terminal window." -Force | Out-Null
+
+Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger @($logonTrigger, $watchdogTrigger) -Principal $principal -Settings $settings -Description "Runs the loopback-only Avanza FastMCP HTTP server without a visible terminal window." -Force | Out-Null
 
 $listener = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($listener) {
