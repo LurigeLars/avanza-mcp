@@ -6,7 +6,7 @@ Status: design only. No account authentication or private-account code is implem
 
 Add future read-only account access without weakening the existing public-market-data MCP boundary.
 
-The design must assume that account credentials and authenticated sessions are highly sensitive even when the account capability is read-only.
+The design must assume that account credentials and authenticated sessions are highly sensitive even when the account capability is read-only. Protocol provenance and the pinned upstream comparison are documented in [`avanza-auth-provenance.md`](avanza-auth-provenance.md).
 
 ## Non-negotiable security requirements
 
@@ -114,7 +114,7 @@ Use a separate Cloudflare Access application/AUD and preferably a separate hostn
 - Reusing account credentials in test fixtures
 - Sending credentials to any model or remote MCP client
 
-Any future write or trading capability requires a separate trust boundary, separate security review and explicit human authorization before activation.
+Any future write or trading capability requires a separate trust boundary, a fresh security/code review of that capability, and explicit human authorization before activation.
 
 ## Implementation gates
 
@@ -124,7 +124,7 @@ Before account authentication code is allowed to move beyond design:
 2. Select and threat-model the OS secret-storage mechanism.
 3. Define the exact read-only endpoint/tool allowlist.
 4. Add secret-redaction and negative tests before live-account testing.
-5. Run an independent security review.
+5. Run the repository's security/code review checklist against the exact candidate diff, including secret handling, network allowlists and negative tests.
 6. Perform bounded local live validation before enabling remote access.
 7. Verify that remote MCP responses contain portfolio/account data only and never authentication material or raw authenticated headers.
 
