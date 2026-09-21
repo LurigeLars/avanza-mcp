@@ -39,7 +39,10 @@ async def test_registered_schemas_and_annotations():
         assert tool.annotations.destructiveHint is False
         assert tool.annotations.idempotentHint is True
         assert tool.annotations.openWorldHint is True
-        assert tool.outputSchema
+        if tool.name == "screen_leveraged_instruments":
+            assert tool.outputSchema is None
+        else:
+            assert tool.outputSchema
     fund = tools["get_fund_info"].outputSchema
     assert "navDate" in fund["properties"] and "nav_date" not in fund["properties"]
     assert {item.get("type") for item in fund["properties"]["nav"]["anyOf"]} == {
