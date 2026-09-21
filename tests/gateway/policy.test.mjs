@@ -126,4 +126,18 @@ test('model-facing response compaction removes only duplicate structuredContent'
     compactToolResults: true,
   });
   assert.deepEqual(structuredOnly.result.structuredContent, { last: 123 });
+
+  const mismatched = {
+    jsonrpc: '2.0',
+    id: 3,
+    result: {
+      content: [{ type: 'text', text: '{"last":999}' }],
+      structuredContent: { last: 123 },
+    },
+  };
+  rewriteResponse(mismatched, {
+    allowedTools: parseAllowedTools(),
+    compactToolResults: true,
+  });
+  assert.deepEqual(mismatched.result.structuredContent, { last: 123 });
 });
