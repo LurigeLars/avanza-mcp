@@ -42,10 +42,10 @@ The design must assume that account credentials and authenticated sessions are h
    - Logs must not contain credentials, session material, portfolio payloads, account numbers, personal identifiers or raw authenticated responses.
    - Error handling must map sensitive upstream errors to sanitized internal error classes.
 
-7. **Private data is separate from authentication secrets.**
-   - Even with local credential storage, account tool results can contain sensitive portfolio/account data.
-   - Remote exposure to ChatGPT must therefore be a separate explicit activation step after security review.
-   - Local-only operation is the default during development and validation.
+7. **Authentication secrets are the protected boundary.**
+   - Username, password, recovery material, session cookies/tokens and any second-factor material must never leave the local account process.
+   - Read-only portfolio/account data returned by approved account tools may be sent through MCP to approved remote clients such as ChatGPT.
+   - Tool responses must still exclude authentication material and raw authenticated headers/cookies by construction.
 
 ## Proposed topology
 
@@ -97,11 +97,11 @@ openWorldHint: false
 
 Metadata is descriptive only; enforcement must exist in code and tests.
 
-## Future remote access
+## Remote access
 
-Remote ChatGPT access is not part of the initial account implementation.
+Read-only portfolio/account data may be exposed to ChatGPT through MCP. Authentication material may not.
 
-If later approved, use a separate Cloudflare Access application/AUD and preferably a separate hostname/gateway policy from the public market-data connector. The remote account surface must expose only explicit account-read tools.
+Use a separate Cloudflare Access application/AUD and preferably a separate hostname/gateway policy from the public market-data connector. The remote account surface must expose only explicit account-read tools, and the local account process must be the only component capable of retrieving credentials or session secrets.
 
 ## Explicitly out of scope
 
@@ -125,8 +125,8 @@ Before account authentication code is allowed to move beyond design:
 3. Define the exact read-only endpoint/tool allowlist.
 4. Add secret-redaction and negative tests before live-account testing.
 5. Run an independent security review.
-6. Perform bounded local-only live validation.
-7. Only after successful review may remote account access be designed or enabled.
+6. Perform bounded local live validation before enabling remote access.
+7. Verify that remote MCP responses contain portfolio/account data only and never authentication material or raw authenticated headers.
 
 ## Testing requirements
 
