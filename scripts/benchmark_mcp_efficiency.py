@@ -28,8 +28,8 @@ def typed_probe() -> ProbeResult:
     return ProbeResult(symbol="TEST", values=list(range(20)))
 
 
-@probe.tool(structured_output=False)
-def unstructured_probe() -> str:
+@probe.tool
+def unstructured_probe():
     return json.dumps(
         {"symbol": "TEST", "values": list(range(20))},
         separators=(",", ":"),
