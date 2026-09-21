@@ -7,6 +7,7 @@ import {
   createAccessVerifier,
   createGatewayServer,
   isAllowedPath,
+  isLoopbackAddress,
   loadConfig,
 } from '../../public/gateway/gateway.mjs';
 
@@ -27,9 +28,35 @@ test('gateway fails closed without Cloudflare Access configuration', () => {
 
 test('gateway defaults to the dedicated Avanza upstream port', () => {
   const config = loadConfig(validEnv);
+  assert.equal(config.mode, 'cloudflare');
+  assert.equal(config.bindHost, '0.0.0.0');
   assert.equal(config.upstreamPort, 8767);
   assert.equal(config.upstreamPath, '/mcp');
   assert.equal(config.port, 8080);
+});
+
+test('local gateway is loopback-only and needs no Cloudflare credentials', () => {
+  const config = loadConfig({ GATEWAY_MODE: 'local' });
+  assert.equal(config.mode, 'local');
+  assert.equal(config.bindHost, '127.0.0.1');
+  assert.equal(config.upstreamHost, '127.0.0.1');
+  assert.equal(config.upstreamPort, 8767);
+  assert.equal(config.port, 8766);
+  assert.equal(config.ratePerMin, 600);
+
+  assert.equal(isLoopbackAddress('127.0.0.1'), true);
+  assert.equal(isLoopbackAddress('::1'), true);
+  assert.equal(isLoopbackAddress('::ffff:127.0.0.1'), true);
+  assert.equal(isLoopbackAddress('192.0.2.10'), false);
+
+  assert.throws(
+    () => loadConfig({ GATEWAY_MODE: 'local', BIND_HOST: '0.0.0.0' }),
+    /BIND_HOST must be loopback/,
+  );
+  assert.throws(
+    () => loadConfig({ GATEWAY_MODE: 'local', UPSTREAM_HOST: '192.0.2.10' }),
+    /UPSTREAM_HOST must be loopback/,
+  );
 });
 
 test('only the MCP path is accepted', () => {
@@ -196,4 +223,87 @@ test('authenticated MCP traffic is proxied, compacted, and blocked tools never r
   assert.equal(blocked.status, 200);
   assert.equal(blockedBody.error.code, -32601);
   assert.equal(upstreamCalls, 1);
+});
+
+
+test('local gateway proxies without JWT and compacts model-facing results', async t => {
+  let upstreamCalls = 0;
+  const upstream = http.createServer(async (req, res) => {
+    upstreamCalls += 1;
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const request = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+
+    let response;
+    if (request.method === 'tools/list') {
+      response = {
+        jsonrpc: '2.0',
+        id: request.id,
+        result: {
+          tools: [{
+            name: 'get_stock_quote',
+            description: 'Quote description. '.repeat(30),
+            inputSchema: {
+              type: 'object',
+              properties: { order_book_id: { type: 'string', description: 'Identifier'.repeat(20) } },
+              required: ['order_book_id'],
+            },
+            outputSchema: { type: 'object', properties: { last: { type: 'number' } } },
+          }],
+        },
+      };
+    } else {
+      response = {
+        jsonrpc: '2.0',
+        id: request.id,
+        result: {
+          content: [{ type: 'text', text: '{"last":123.45}' }],
+          structuredContent: { last: 123.45 },
+          isError: false,
+        },
+      };
+    }
+
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(response));
+  });
+  await new Promise(resolve => upstream.listen(0, '127.0.0.1', resolve));
+  t.after(() => upstream.close());
+
+  const gateway = createGatewayServer({
+    GATEWAY_MODE: 'local',
+    UPSTREAM_HOST: '127.0.0.1',
+    UPSTREAM_PORT: String(upstream.address().port),
+    ALLOWED_TOOLS: 'get_stock_quote',
+  });
+  await new Promise(resolve => gateway.listen(0, '127.0.0.1', resolve));
+  t.after(() => gateway.close());
+  const gatewayPort = gateway.address().port;
+
+  const listed = await fetch(`http://127.0.0.1:${gatewayPort}/mcp`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }),
+  });
+  assert.equal(listed.status, 200);
+  const listedBody = await listed.json();
+  assert.equal(listedBody.result.tools.length, 1);
+  assert.equal('outputSchema' in listedBody.result.tools[0], false);
+  assert.ok(listedBody.result.tools[0].description.length <= 180);
+
+  const called = await fetch(`http://127.0.0.1:${gatewayPort}/mcp`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/call',
+      params: { name: 'get_stock_quote', arguments: { order_book_id: '4478' } },
+    }),
+  });
+  assert.equal(called.status, 200);
+  const calledBody = await called.json();
+  assert.deepEqual(calledBody.result.content, [{ type: 'text', text: '{"last":123.45}' }]);
+  assert.equal('structuredContent' in calledBody.result, false);
+  assert.equal(upstreamCalls, 2);
 });
