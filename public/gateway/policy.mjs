@@ -87,8 +87,19 @@ export function compactToolDefinition(tool) {
   return out;
 }
 
-export function rewriteResponse(message, { allowedTools }) {
+export function rewriteResponse(message, { allowedTools, compactToolResults = false }) {
   if (!message || typeof message !== 'object') return message;
+
+  if (
+    compactToolResults
+    && Array.isArray(message.result?.content)
+    && message.result?.structuredContent !== undefined
+  ) {
+    // FastMCP typed tools commonly serialize the same result twice: once as text
+    // content and once as structuredContent. Model-facing gateways keep the text
+    // representation for broad client compatibility and drop only the duplicate.
+    delete message.result.structuredContent;
+  }
 
   if (message.result?.tools) {
     message.result.tools = message.result.tools
