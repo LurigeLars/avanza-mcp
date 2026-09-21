@@ -37,6 +37,9 @@ jobs:
       - name: Run unit tests
         run: uv run --locked pytest tests/unit -v
 
+      - name: Run public gateway tests
+        run: node --test tests/gateway/*.test.mjs
+
       - name: Verify imports
         run: uv run python -c "from avanza_mcp import mcp; print('✓ Import successful')"
 

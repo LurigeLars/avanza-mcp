@@ -11,3 +11,7 @@ wheels/
 .claude
 
 .env
+
+# Local deployment secrets
+public/gateway.env
+public/tunnel.env
