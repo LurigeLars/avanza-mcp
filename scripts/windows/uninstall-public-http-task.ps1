@@ -1,5 +1,5 @@
 param(
-    [string]$TaskName = "Avanza MCP Public HTTP"
+    [string]$TaskName = "AvanzaMcpHttpServer"
 )
 
 $ErrorActionPreference = "Stop"
