@@ -31,11 +31,13 @@ The introduction commit documents the safety goal and authenticated execution-da
 - a specific upstream repository as the source of the authentication protocol;
 - copied third-party source attribution for the auth implementation.
 
-Therefore we must not claim that the protocol was independently reverse-engineered from the Avanza website, nor claim that one specific repository was copied.
+The Git history alone therefore does not establish the original source.
 
-The strongest supportable statement is:
+The project owner has since explicitly confirmed that, during the earlier ChatGPT work that produced the scanner authentication flow, `Qluxzz/avanza` was the repository consulted for the Avanza login implementation. Treat that as owner-attested provenance even though the original commit omitted attribution.
 
-> The historical implementation uses the same long-established unofficial Avanza authentication protocol documented by multiple independent open-source clients. Its exact original source is not recorded.
+Accordingly:
+
+> The scanner authentication flow was derived from the Avanza login protocol implemented in `Qluxzz/avanza`, then adapted into the scanner's async read-only execution source. The repository history failed to record that provenance at the time.
 
 ## Primary current protocol reference
 
