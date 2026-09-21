@@ -66,6 +66,6 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-      - run: uv sync --locked
+      - run: uv sync --locked --all-extras
       - name: Verify Windows launcher lifecycle
         run: uv run --locked pytest -q tests/unit/test_windows_launchers.py tests/unit/test_windows_job_object.py
