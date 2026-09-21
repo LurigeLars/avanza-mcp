@@ -5,7 +5,7 @@ import re
 
 import pytest
 from fastmcp import Client
-from mcp.shared.exceptions import McpError
+from mcp.shared.exceptions import MCPError
 
 from avanza_mcp import mcp
 from avanza_mcp.resources.usage import QUICK_START, USAGE_GUIDE
@@ -93,7 +93,7 @@ async def test_rendered_research_prompts(name, arguments, expected):
 )
 async def test_prompt_validation(name, arguments):
     async with Client(mcp) as client:
-        with pytest.raises(McpError):
+        with pytest.raises(MCPError):
             await client.get_prompt(name, arguments)
 
 
