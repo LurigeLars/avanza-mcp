@@ -115,23 +115,20 @@ included Scheduled Task installer:
 pwsh -File .\scripts\windows\install-public-http-task.ps1
 ```
 
-The task runs as the current Windows user with limited privileges, starts at logon,
-stores no Windows password, and keeps the FastMCP endpoint bound to `127.0.0.1:8767`.
-Logs are written to `%LOCALAPPDATA%\avanza-mcp\public-http.log` and rotated once
-at 5 MiB.
+The task uses the repository virtualenv's `pythonw.exe`, so no console window is created. It runs as the current Windows user with limited privileges, starts at logon, and also has a five-minute recovery trigger with `IgnoreNew` so an already-running server is never duplicated. No Windows password is stored. The FastMCP endpoint remains bound to `127.0.0.1:8767`. Logs are written to `%LOCALAPPDATA%\avanza-mcp\public-http.log` and rotated once at 5 MiB.
 
 If port 8767 is already occupied by a manually started FastMCP process, the installer
 registers the task but deliberately does not kill or replace that process. Stop the
 manual server with Ctrl+C, then start the hidden task:
 
 ```powershell
-Start-ScheduledTask -TaskName "Avanza MCP Public HTTP"
+Start-ScheduledTask -TaskName "AvanzaMcpHttpServer"
 ```
 
 Check it with:
 
 ```powershell
-Get-ScheduledTask -TaskName "Avanza MCP Public HTTP"
+Get-ScheduledTask -TaskName "AvanzaMcpHttpServer"
 Get-NetTCPConnection -LocalPort 8767 -State Listen
 ```
 
