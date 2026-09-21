@@ -1,0 +1,41 @@
+# ChatGPT access:
+# Cloudflare Access Managed OAuth -> Tunnel -> JWT-validating gateway -> host Avanza MCP HTTP server.
+# Configure the public hostname to target http://gateway:8080.
+# The Avanza MCP server itself remains bound to 127.0.0.1:8767.
+name: avanza-mcp-public
+
+services:
+  gateway:
+    image: node:24.21.0-alpine
+    container_name: avanza-mcp-gateway
+    command: ["node", "/app/gateway.mjs"]
+    user: node
+    env_file: public/gateway.env
+    environment:
+      UPSTREAM_HOST: host.docker.internal
+      UPSTREAM_PORT: "8767"
+      UPSTREAM_PATH: /mcp
+      UPSTREAM_HOST_HEADER: localhost
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./public/gateway:/app:ro
+    networks: [edge]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  cloudflared:
+    image: cloudflare/cloudflared:2026.9.1
+    container_name: avanza-mcp-cloudflared
+    command: ["tunnel", "--no-autoupdate", "run"]
+    env_file: public/tunnel.env
+    networks: [edge]
+    depends_on: [gateway]
+    restart: unless-stopped
+
+networks:
+  edge:
+    driver: bridge
