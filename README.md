@@ -96,18 +96,41 @@ Add to your project's `opencode.json` or global `~/.config/opencode/opencode.jso
 </details>
 
 <details>
-<summary>HTTP and ChatGPT</summary>
+<summary>HTTP, local agents and ChatGPT</summary>
 
-From a source checkout:
+From a source checkout, run one loopback-only Streamable HTTP server:
 
 ```bash
 uv sync
-uv run fastmcp run src/avanza_mcp/__init__.py:mcp --transport http
+uv run fastmcp run src/avanza_mcp/__init__.py:mcp --transport http --host 127.0.0.1 --port 8767
 ```
 
-Connect HTTP clients to `http://localhost:8000/mcp`. ChatGPT requires a remotely reachable HTTPS deployment; add its `/mcp` URL using [ChatGPT's developer-mode setup](https://platform.openai.com/docs/guides/developer-mode).
+Local HTTP-capable MCP clients such as Codex or Claude Code can connect directly to
+`http://127.0.0.1:8767/mcp`.
 
-This project does not provide a hosted endpoint. Configure access controls before exposing your server publicly.
+For ChatGPT web, keep the FastMCP endpoint on loopback and use the included public deployment layer:
+
+```text
+ChatGPT -> Cloudflare Access Managed OAuth -> Cloudflare Tunnel
+        -> public/gateway -> 127.0.0.1:8767/mcp
+```
+
+Copy `public/gateway.env.example` to `public/gateway.env` and
+`public/tunnel.env.example` to `public/tunnel.env`; never commit the real files.
+Configure the Cloudflare Access application for Managed OAuth and point the tunnel's
+public hostname at `http://gateway:8080`, then start:
+
+```bash
+docker compose -f compose.public.yaml up -d
+```
+
+The gateway requires a valid Cloudflare Access JWT, restricts calls to an explicit
+allowlist of the current 34 read-only tools, strips client credentials before
+forwarding, and compacts tool schemas to reduce model-context overhead. New MCP tools
+are not exposed through the public connector until the allowlist is reviewed.
+
+This project does not provide a hosted endpoint. The current tool surface has no
+Avanza account access and cannot place orders.
 
 </details>
 
