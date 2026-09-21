@@ -108,6 +108,39 @@ uv run fastmcp run src/avanza_mcp/__init__.py:mcp --transport http --host 127.0.
 Local HTTP-capable MCP clients such as Codex or Claude Code can connect directly to
 `http://127.0.0.1:8767/mcp`.
 
+On Windows, the HTTP server can run without a visible terminal window using the
+included Scheduled Task installer:
+
+```powershell
+pwsh -File .\scripts\windows\install-public-http-task.ps1
+```
+
+The task runs as the current Windows user with limited privileges, starts at logon,
+stores no Windows password, and keeps the FastMCP endpoint bound to `127.0.0.1:8767`.
+Logs are written to `%LOCALAPPDATA%\avanza-mcp\public-http.log` and rotated once
+at 5 MiB.
+
+If port 8767 is already occupied by a manually started FastMCP process, the installer
+registers the task but deliberately does not kill or replace that process. Stop the
+manual server with Ctrl+C, then start the hidden task:
+
+```powershell
+Start-ScheduledTask -TaskName "Avanza MCP Public HTTP"
+```
+
+Check it with:
+
+```powershell
+Get-ScheduledTask -TaskName "Avanza MCP Public HTTP"
+Get-NetTCPConnection -LocalPort 8767 -State Listen
+```
+
+Remove the background task with:
+
+```powershell
+pwsh -File .\scripts\windows\uninstall-public-http-task.ps1
+```
+
 For ChatGPT web, keep the FastMCP endpoint on loopback and use the included public deployment layer:
 
 ```text
