@@ -38,7 +38,11 @@ def unstructured_probe():
 
 def _jsonable(value):
     if hasattr(value, "model_dump"):
-        return value.model_dump(mode="json", by_alias=True, exclude_none=True)
+        return _jsonable(value.model_dump(mode="json", by_alias=True, exclude_none=True))
+    if isinstance(value, list):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _jsonable(item) for key, item in value.items()}
     return value
 
 
@@ -65,12 +69,20 @@ async def main() -> None:
         unstructured = _jsonable(await client.call_tool("unstructured_probe"))
 
     def result_shape(payload):
-        structured = payload.get("structuredContent", payload.get("structured_content"))
-        content = payload.get("content")
+        content = getattr(payload, "content", None)
+        structured = getattr(payload, "structured_content", None)
+        normalized = {
+            "content": _jsonable(content),
+            "structuredContent": _jsonable(structured),
+        }
         return {
-            "wire_bytes": _bytes(payload),
-            "content_bytes": _bytes(content) if content is not None else 0,
-            "structured_content_bytes": _bytes(structured) if structured is not None else 0,
+            "wire_shape_bytes": _bytes(normalized),
+            "content_bytes": _bytes(normalized["content"]) if content is not None else 0,
+            "structured_content_bytes": (
+                _bytes(normalized["structuredContent"])
+                if structured is not None
+                else 0
+            ),
             "has_content": content is not None,
             "has_structured_content": structured is not None,
         }
