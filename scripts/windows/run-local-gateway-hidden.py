@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -25,8 +24,10 @@ def rotate_log() -> None:
 
 
 def main() -> int:
-    node = shutil.which("node.exe") or shutil.which("node")
-    if not node or not GATEWAY.exists():
+    if len(sys.argv) != 2 or not GATEWAY.exists():
+        return 2
+    node = Path(sys.argv[1])
+    if not node.is_file():
         return 2
 
     rotate_log()
@@ -45,7 +46,7 @@ def main() -> int:
 
     with LOG_FILE.open("a", encoding="utf-8") as log:
         completed = subprocess.run(
-            [node, str(GATEWAY)],
+            [str(node), str(GATEWAY)],
             cwd=REPO_ROOT,
             env=env,
             stdin=subprocess.DEVNULL,
