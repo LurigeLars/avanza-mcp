@@ -12,6 +12,8 @@ services:
     user: node
     env_file: public/gateway.env
     environment:
+      GATEWAY_MODE: cloudflare
+      BIND_HOST: 0.0.0.0
       UPSTREAM_HOST: host.docker.internal
       UPSTREAM_PORT: "8767"
       UPSTREAM_PATH: /mcp

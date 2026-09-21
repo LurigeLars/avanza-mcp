@@ -12,7 +12,24 @@ import {
   rpcError,
 } from './policy.mjs';
 
+export function isLoopbackAddress(value) {
+  const address = String(value ?? '').trim().toLowerCase();
+  return address === '127.0.0.1'
+    || address === '::1'
+    || address === '::ffff:127.0.0.1';
+}
+
+function isLoopbackHost(value) {
+  const host = String(value ?? '').trim().toLowerCase();
+  return host === '127.0.0.1' || host === 'localhost' || host === '::1';
+}
+
 export function loadConfig(env = process.env) {
+  const mode = String(env.GATEWAY_MODE ?? 'cloudflare').trim().toLowerCase();
+  if (!['cloudflare', 'local'].includes(mode)) {
+    throw new Error('GATEWAY_MODE must be cloudflare or local');
+  }
+
   const accessTeamDomain = String(env.ACCESS_TEAM_DOMAIN ?? '').trim();
   const accessAud = String(env.ACCESS_AUD ?? '').trim();
   const allowedEmails = new Set(
@@ -22,13 +39,22 @@ export function loadConfig(env = process.env) {
       .filter(Boolean),
   );
 
-  if (!accessTeamDomain) throw new Error('ACCESS_TEAM_DOMAIN is required');
-  if (!accessAud) throw new Error('ACCESS_AUD is required');
-  if (allowedEmails.size === 0) throw new Error('ACCESS_ALLOWED_EMAILS must contain at least one address');
+  if (mode === 'cloudflare') {
+    if (!accessTeamDomain) throw new Error('ACCESS_TEAM_DOMAIN is required');
+    if (!accessAud) throw new Error('ACCESS_AUD is required');
+    if (allowedEmails.size === 0) throw new Error('ACCESS_ALLOWED_EMAILS must contain at least one address');
+  }
+
+  const upstreamHost = env.UPSTREAM_HOST ?? (mode === 'local' ? '127.0.0.1' : 'host.docker.internal');
+  const bindHost = env.BIND_HOST ?? (mode === 'local' ? '127.0.0.1' : '0.0.0.0');
+  if (mode === 'local') {
+    if (!isLoopbackHost(bindHost)) throw new Error('local gateway BIND_HOST must be loopback');
+    if (!isLoopbackHost(upstreamHost)) throw new Error('local gateway UPSTREAM_HOST must be loopback');
+  }
 
   const upstreamPort = Number(env.UPSTREAM_PORT ?? 8767);
-  const port = Number(env.PORT ?? 8080);
-  const ratePerMin = Number(env.RATE_PER_MIN ?? 120);
+  const port = Number(env.PORT ?? (mode === 'local' ? 8766 : 8080));
+  const ratePerMin = Number(env.RATE_PER_MIN ?? (mode === 'local' ? 600 : 120));
   const maxBodyBytes = Number(env.MAX_BODY_BYTES ?? (2 * 1024 * 1024));
 
   for (const [name, value] of [
@@ -41,12 +67,14 @@ export function loadConfig(env = process.env) {
   }
 
   return {
+    mode,
     accessTeamDomain,
     accessAud,
     allowedEmails,
     allowedTools: parseAllowedTools(env.ALLOWED_TOOLS),
-    accessIssuer: `https://${accessTeamDomain}`,
-    upstreamHost: env.UPSTREAM_HOST ?? 'host.docker.internal',
+    accessIssuer: accessTeamDomain ? `https://${accessTeamDomain}` : null,
+    bindHost,
+    upstreamHost,
     upstreamPort,
     upstreamPath: env.UPSTREAM_PATH ?? '/mcp',
     upstreamHostHeader: env.UPSTREAM_HOST_HEADER ?? 'localhost',
@@ -276,7 +304,9 @@ function forward(req, res, body, config, ctx = null) {
 
 export function createGatewayServer(env = process.env, dependencies = {}) {
   const config = loadConfig(env);
-  const verifyAccessJwt = createAccessVerifier(config, dependencies.fetch ?? fetch);
+  const verifyAccessJwt = config.mode === 'cloudflare'
+    ? createAccessVerifier(config, dependencies.fetch ?? fetch)
+    : null;
   const windows = new Map();
 
   function rateLimited(key) {
@@ -306,10 +336,19 @@ export function createGatewayServer(env = process.env, dependencies = {}) {
         return send(res, 405, 'method not allowed');
       }
 
-      const identity = await verifyAccessJwt(req.headers['cf-access-jwt-assertion']);
-      if (!identity.ok) {
-        console.warn(`access denied from ${clientIp(req)}: ${identity.reason}`);
-        return send(res, 403, 'forbidden');
+      let identity;
+      if (config.mode === 'local') {
+        if (!isLoopbackAddress(req.socket.remoteAddress)) {
+          console.warn(`local gateway denied non-loopback client ${clientIp(req)}`);
+          return send(res, 403, 'forbidden');
+        }
+        identity = { ok: true, email: 'local' };
+      } else {
+        identity = await verifyAccessJwt(req.headers['cf-access-jwt-assertion']);
+        if (!identity.ok) {
+          console.warn(`access denied from ${clientIp(req)}: ${identity.reason}`);
+          return send(res, 403, 'forbidden');
+        }
       }
 
       if (rateLimited(identity.email)) return send(res, 429, 'rate limited');
@@ -332,8 +371,12 @@ export function createGatewayServer(env = process.env, dependencies = {}) {
             return sendJson(res, rpcError(message.id, verdict.error));
           }
 
-          if (message?.method === 'tools/list' || message?.method === 'initialize') {
-            ctx = { allowedTools: config.allowedTools };
+          if (
+            message?.method === 'tools/list'
+            || message?.method === 'initialize'
+            || message?.method === 'tools/call'
+          ) {
+            ctx = { allowedTools: config.allowedTools, compactToolResults: true };
           }
         }
       }
@@ -353,9 +396,10 @@ export async function startGateway(env = process.env) {
   const server = createGatewayServer(env);
   await new Promise((resolve, reject) => {
     server.once('error', reject);
-    server.listen(config.port, '0.0.0.0', resolve);
+    server.listen(config.port, config.bindHost, resolve);
   });
-  console.log(`gateway listening on ${config.port}; Access JWT required; upstream ${config.upstreamHost}:${config.upstreamPort}${config.upstreamPath}; public tools ${config.allowedTools.size}`);
+  const auth = config.mode === 'cloudflare' ? 'Access JWT required' : 'loopback-only';
+  console.log(`gateway listening on ${config.bindHost}:${config.port}; ${auth}; upstream ${config.upstreamHost}:${config.upstreamPort}${config.upstreamPath}; tools ${config.allowedTools.size}`);
   return server;
 }
 

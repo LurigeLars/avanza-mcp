@@ -97,3 +97,47 @@ test('tools/list is filtered and compacted', () => {
   assert.equal(rewritten.result.tools[0].name, 'search_instruments');
   assert.equal('outputSchema' in rewritten.result.tools[0], false);
 });
+
+
+test('model-facing response compaction removes only duplicate structuredContent', () => {
+  const duplicated = {
+    jsonrpc: '2.0',
+    id: 1,
+    result: {
+      content: [{ type: 'text', text: '{"last":123}' }],
+      structuredContent: { last: 123 },
+      isError: false,
+    },
+  };
+  const rewritten = rewriteResponse(duplicated, {
+    allowedTools: parseAllowedTools(),
+    compactToolResults: true,
+  });
+  assert.equal('structuredContent' in rewritten.result, false);
+  assert.deepEqual(rewritten.result.content, [{ type: 'text', text: '{"last":123}' }]);
+
+  const structuredOnly = {
+    jsonrpc: '2.0',
+    id: 2,
+    result: { structuredContent: { last: 123 } },
+  };
+  rewriteResponse(structuredOnly, {
+    allowedTools: parseAllowedTools(),
+    compactToolResults: true,
+  });
+  assert.deepEqual(structuredOnly.result.structuredContent, { last: 123 });
+
+  const mismatched = {
+    jsonrpc: '2.0',
+    id: 3,
+    result: {
+      content: [{ type: 'text', text: '{"last":999}' }],
+      structuredContent: { last: 123 },
+    },
+  };
+  rewriteResponse(mismatched, {
+    allowedTools: parseAllowedTools(),
+    compactToolResults: true,
+  });
+  assert.deepEqual(mismatched.result.structuredContent, { last: 123 });
+});
