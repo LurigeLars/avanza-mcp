@@ -53,3 +53,19 @@ jobs:
       - name: Check package
         run: |
           uv tool run twine check dist/*
+
+
+  windows-task-lifecycle:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv sync --locked --all-extras
+      - name: Verify Windows launcher lifecycle
+        run: uv run --locked pytest -q tests/unit/test_windows_launchers.py tests/unit/test_windows_job_object.py

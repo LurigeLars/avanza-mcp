@@ -49,12 +49,12 @@ For a source checkout running the background HTTP stack, prefer the model-optimi
 loopback gateway:
 
 ```bash
-claude mcp add --transport http avanza http://127.0.0.1:8766/mcp
-codex mcp add avanza --url http://127.0.0.1:8766/mcp
+claude mcp add --transport http avanza http://127.0.0.1:8769/mcp
+codex mcp add avanza --url http://127.0.0.1:8769/mcp
 ```
 
 This keeps the canonical FastMCP server on port 8767 while presenting the compact
-35-tool catalog on port 8766. Use `/mcp` in Claude Code or `codex mcp list` to
+35-tool catalog on port 8769. Use `/mcp` in Claude Code or `codex mcp list` to
 verify the connection.
 
 The portable stdio form remains available when no background HTTP stack is installed:
@@ -118,13 +118,13 @@ uv run fastmcp run src/avanza_mcp/__init__.py:mcp --transport http --host 127.0.
 ```
 
 The FastMCP server on `127.0.0.1:8767` is the canonical backend. Model-facing local
-clients should use the compact loopback gateway on `127.0.0.1:8766` instead. It
+clients should use the compact loopback gateway on `127.0.0.1:8769` instead. It
 applies the same allowlist and schema compaction used by the ChatGPT path and removes
 duplicate `structuredContent` only when FastMCP also returned the same tool result as
 text `content`.
 
 ```text
-Claude Code / Codex -> 127.0.0.1:8766/mcp -> compact model gateway
+Claude Code / Codex -> 127.0.0.1:8769/mcp -> compact model gateway
                                              -> 127.0.0.1:8767/mcp -> FastMCP
 ChatGPT -> Cloudflare Access -> public gateway -> 127.0.0.1:8767/mcp
 ```
@@ -165,11 +165,11 @@ pwsh -File .\scripts\windows\install-local-gateway-task.ps1
 Verify both loopback listeners:
 
 ```powershell
-Get-NetTCPConnection -LocalPort 8766,8767 -State Listen |
+Get-NetTCPConnection -LocalPort 8769,8767 -State Listen |
     Select-Object LocalAddress,LocalPort,OwningProcess
 ```
 
-Use `http://127.0.0.1:8766/mcp` for Claude Code and Codex. The local gateway binds
+Use `http://127.0.0.1:8769/mcp` for Claude Code and Codex. The local gateway binds
 only to loopback, accepts only loopback clients, forwards only to a loopback upstream,
 stores no credentials, and uses the same explicit read-only allowlist as the public
 gateway.
@@ -177,13 +177,13 @@ gateway.
 For Codex CLI, an HTTP MCP server can be configured with:
 
 ```bash
-codex mcp add avanza --url http://127.0.0.1:8766/mcp
+codex mcp add avanza --url http://127.0.0.1:8769/mcp
 ```
 
 For Claude Code:
 
 ```bash
-claude mcp add --transport http avanza http://127.0.0.1:8766/mcp
+claude mcp add --transport http avanza http://127.0.0.1:8769/mcp
 ```
 
 If an `avanza` MCP entry already exists, update/remove that entry first rather than
