@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { isDeepStrictEqual } from 'node:util';
 
 export const DEFAULT_ALLOWED_TOOLS = [
   'search_instruments',
@@ -87,17 +88,25 @@ export function compactToolDefinition(tool) {
   return out;
 }
 
+function hasEquivalentTextAndStructuredResult(result) {
+  if (!Array.isArray(result?.content) || result.content.length !== 1) return false;
+  if (result?.structuredContent === undefined) return false;
+  const item = result.content[0];
+  if (item?.type !== 'text' || typeof item.text !== 'string') return false;
+
+  try {
+    return isDeepStrictEqual(JSON.parse(item.text), result.structuredContent);
+  } catch {
+    return false;
+  }
+}
+
 export function rewriteResponse(message, { allowedTools, compactToolResults = false }) {
   if (!message || typeof message !== 'object') return message;
 
-  if (
-    compactToolResults
-    && Array.isArray(message.result?.content)
-    && message.result?.structuredContent !== undefined
-  ) {
-    // FastMCP typed tools commonly serialize the same result twice: once as text
-    // content and once as structuredContent. Model-facing gateways keep the text
-    // representation for broad client compatibility and drop only the duplicate.
+  if (compactToolResults && hasEquivalentTextAndStructuredResult(message.result)) {
+    // FastMCP typed tools commonly serialize the same JSON-compatible result twice.
+    // Drop structuredContent only after proving the text representation is equivalent.
     delete message.result.structuredContent;
   }
 
