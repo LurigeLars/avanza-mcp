@@ -23,14 +23,14 @@ MaxPerType = Annotated[
 ]
 
 
-@mcp.tool(annotations=READ_ONLY, structured_output=False)
+@mcp.tool(annotations=READ_ONLY)
 async def screen_leveraged_instruments(
     ctx: Context,
     underlying_order_book_id: OrderBookId,
     direction: Literal["long", "short"],
     product_types: list[Literal["certificate", "warrant"]] | None = None,
     max_per_type: MaxPerType = 100,
-) -> str:
+):
     """Screen leveraged products for one verified underlying in one bounded call.
 
     Aggregates certificate and warrant filter pages server-side. Returns compact
