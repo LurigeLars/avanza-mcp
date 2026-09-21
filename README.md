@@ -43,15 +43,27 @@ Both use this configuration:
 </details>
 
 <details>
-<summary>Claude Code</summary>
+<summary>Claude Code and Codex</summary>
 
-Run in your project:
+For a source checkout running the background HTTP stack, prefer the model-optimized
+loopback gateway:
+
+```bash
+claude mcp add --transport http avanza http://127.0.0.1:8766/mcp
+codex mcp add avanza --url http://127.0.0.1:8766/mcp
+```
+
+This keeps the canonical FastMCP server on port 8767 while presenting the compact
+35-tool catalog on port 8766. Use `/mcp` in Claude Code or `codex mcp list` to
+verify the connection.
+
+The portable stdio form remains available when no background HTTP stack is installed:
 
 ```bash
 claude mcp add avanza -- uvx avanza-mcp
 ```
 
-Use `/mcp` in Claude Code to check the connection.
+The stdio form talks directly to FastMCP and therefore exposes the full raw schemas.
 
 </details>
 
