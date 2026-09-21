@@ -105,8 +105,20 @@ uv sync
 uv run fastmcp run src/avanza_mcp/__init__.py:mcp --transport http --host 127.0.0.1 --port 8767
 ```
 
-Local HTTP-capable MCP clients such as Codex or Claude Code can connect directly to
-`http://127.0.0.1:8767/mcp`.
+The FastMCP server on `127.0.0.1:8767` is the canonical backend. Model-facing local
+clients should use the compact loopback gateway on `127.0.0.1:8766` instead. It
+applies the same allowlist and schema compaction used by the ChatGPT path and removes
+duplicate `structuredContent` only when FastMCP also returned the same tool result as
+text `content`.
+
+```text
+Claude Code / Codex -> 127.0.0.1:8766/mcp -> compact model gateway
+                                             -> 127.0.0.1:8767/mcp -> FastMCP
+ChatGPT -> Cloudflare Access -> public gateway -> 127.0.0.1:8767/mcp
+```
+
+Keep direct `8767` access for development, typed-contract tests, or clients that
+specifically require the full output schemas/structured results.
 
 On Windows, the HTTP server can run without a visible terminal window using the
 included Scheduled Task installer:
@@ -132,9 +144,43 @@ Get-ScheduledTask -TaskName "AvanzaMcpHttpServer"
 Get-NetTCPConnection -LocalPort 8767 -State Listen
 ```
 
-Remove the background task with:
+Install the model-optimized local gateway as a second hidden Windows task:
 
 ```powershell
+pwsh -File .\scripts\windows\install-local-gateway-task.ps1
+```
+
+Verify both loopback listeners:
+
+```powershell
+Get-NetTCPConnection -LocalPort 8766,8767 -State Listen |
+    Select-Object LocalAddress,LocalPort,OwningProcess
+```
+
+Use `http://127.0.0.1:8766/mcp` for Claude Code and Codex. The local gateway binds
+only to loopback, accepts only loopback clients, forwards only to a loopback upstream,
+stores no credentials, and uses the same explicit read-only allowlist as the public
+gateway.
+
+For Codex CLI, an HTTP MCP server can be configured with:
+
+```bash
+codex mcp add avanza --url http://127.0.0.1:8766/mcp
+```
+
+For Claude Code:
+
+```bash
+claude mcp add --transport http avanza http://127.0.0.1:8766/mcp
+```
+
+If an `avanza` MCP entry already exists, update/remove that entry first rather than
+creating two servers with the same capability.
+
+Remove the background tasks with:
+
+```powershell
+pwsh -File .\scripts\windows\uninstall-local-gateway-task.ps1
 pwsh -File .\scripts\windows\uninstall-public-http-task.ps1
 ```
 
@@ -154,10 +200,12 @@ public hostname at `http://gateway:8080`, then start:
 docker compose -f compose.public.yaml up -d
 ```
 
-The gateway requires a valid Cloudflare Access JWT, restricts calls to an explicit
-allowlist of the current 35 read-only tools, strips client credentials before
-forwarding, and compacts tool schemas to reduce model-context overhead. New MCP tools
-are not exposed through the public connector until the allowlist is reviewed.
+The public gateway requires a valid Cloudflare Access JWT. Both model-facing gateway
+modes restrict calls to the explicit current 35-tool read-only allowlist, strip client
+credentials before forwarding, compact tool schemas to reduce model-context overhead,
+and remove duplicate structured tool-result payloads when an equivalent text result is
+already present. New MCP tools are not exposed through either model-facing gateway
+until the allowlist is reviewed.
 
 This project does not provide a hosted endpoint. The current tool surface has no
 Avanza account access and cannot place orders.
