@@ -1,9 +1,12 @@
-"""Futures and forwards selection and detail tools."""
+"""Futures, forwards, and structural option-chain tools."""
 
+import json
 from datetime import date
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from fastmcp import Context
+from fastmcp.exceptions import ToolError
+from pydantic import Field
 
 from .. import mcp
 from ..models.common import Limit, Offset, OrderBookId
@@ -16,7 +19,28 @@ from ..models.future_forward import (
     FutureForwardMatrixResponse,
 )
 from ..services import MarketDataService
+from ..services.options_screen_service import OptionScreenSpec, OptionsScreenService
 from ._helpers import READ_ONLY, api_errors
+
+OptionPageSize = Annotated[
+    int,
+    Field(
+        ge=1,
+        description=(
+            "Rows to return from the frozen option-chain snapshot page. No fixed upper bound; "
+            "pagination.total/has_more/next_offset make partial results explicit."
+        ),
+    ),
+]
+OptionPageOffset = Annotated[int, Field(ge=0, description="Zero-based option row offset.")]
+OptionSnapshotId = Annotated[
+    str,
+    Field(
+        pattern=r"^[0-9a-f]{32}$",
+        description="Snapshot ID returned by an earlier screen_options call.",
+    ),
+]
+NonNegativeStrike = Annotated[float, Field(ge=0)]
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -52,6 +76,69 @@ async def list_futures_forwards(
         return await MarketDataService(
             ctx.lifespan_context["client"]
         ).list_futures_forwards(request)
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def screen_options(
+    ctx: Context,
+    underlying_order_book_id: OrderBookId,
+    option_types: list[str] | None = None,
+    call_indicators: list[Literal["CALL", "PUT"]] | None = None,
+    end_dates: list[date] | None = None,
+    min_strike: NonNegativeStrike | None = None,
+    max_strike: NonNegativeStrike | None = None,
+    snapshot_id: OptionSnapshotId | None = None,
+    offset: OptionPageOffset = 0,
+    page_size: OptionPageSize = 100,
+):
+    """Create or page one complete structural option-chain snapshot.
+
+    Without snapshot_id, discovers current option types/expiries for one verified underlying,
+    fully pages every selected type/expiry combination, flattens CALL/PUT contracts, applies
+    local CALL/PUT and strike filters, freezes the chain for ten minutes, and returns one page.
+
+    This is structural discovery only: it does not imply live bid/ask, spread, Greeks or
+    turnover. Inspect snapshot.market_data_enriched and pagination.has_more. With snapshot_id,
+    later pages reuse the same chain and do not refetch Avanza.
+    """
+    spec = OptionScreenSpec(
+        option_types=tuple(option_types or ()),
+        call_indicators=tuple(call_indicators or ()),
+        end_dates=tuple(value.isoformat() for value in end_dates or ()),
+        min_strike=min_strike,
+        max_strike=max_strike,
+    )
+    spec_was_supplied = any(
+        (
+            option_types,
+            call_indicators,
+            end_dates,
+            min_strike is not None,
+            max_strike is not None,
+        )
+    )
+    service = OptionsScreenService(ctx.lifespan_context["client"])
+    try:
+        if snapshot_id is None:
+            if offset != 0:
+                raise ValueError("offset must be 0 when creating a new snapshot")
+            with api_errors():
+                result = await service.screen(
+                    underlying_order_book_id,
+                    page_size,
+                    spec,
+                )
+        else:
+            result = service.get_page(
+                snapshot_id,
+                underlying_order_book_id,
+                offset,
+                page_size,
+                spec=spec if spec_was_supplied else None,
+            )
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
+    return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
 
 
 @mcp.tool(annotations=READ_ONLY)
