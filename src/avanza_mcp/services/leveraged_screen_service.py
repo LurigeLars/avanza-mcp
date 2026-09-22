@@ -143,7 +143,6 @@ def _page(snapshot: _Snapshot, offset: int, page_size: int) -> dict[str, Any]:
             "returned": returned,
             "has_more": has_more,
             "next_offset": offset + returned if has_more else None,
-            "complete_result_set": offset == 0 and returned == total,
         },
         "products": products,
         "returned": returned,
