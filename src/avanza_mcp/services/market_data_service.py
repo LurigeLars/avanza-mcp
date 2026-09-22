@@ -6,6 +6,7 @@ from pydantic import TypeAdapter, validate_call
 
 from ..client.base import AvanzaClient
 from ..client.endpoints import PublicEndpoint
+from ..client.exceptions import AvanzaNotFoundError
 from ..models.certificate import (
     CertificateDetails,
     CertificateFilterRequest,
@@ -287,17 +288,25 @@ class MarketDataService:
         return FutureForwardMatrixResponse.model_validate(raw_data)
 
     async def get_future_forward_info(self, instrument_id: str) -> FutureForwardInfo:
-        """Fetch detailed future/forward information."""
+        """Fetch future/forward info, falling back to the option market-guide path on 404."""
         endpoint = PublicEndpoint.FUTURE_FORWARD_INFO.format(id=instrument_id)
-        raw_data = await self._client.get(endpoint)
+        try:
+            raw_data = await self._client.get(endpoint)
+        except AvanzaNotFoundError:
+            option_endpoint = PublicEndpoint.OPTION_INFO.format(id=instrument_id)
+            raw_data = await self._client.get(option_endpoint)
         return FutureForwardInfo.model_validate(raw_data)
 
     async def get_future_forward_details(
         self, instrument_id: str
     ) -> FutureForwardDetails:
-        """Fetch extended future/forward details."""
+        """Fetch future/forward details, falling back to the option path on 404."""
         endpoint = PublicEndpoint.FUTURE_FORWARD_DETAILS.format(id=instrument_id)
-        raw_data = await self._client.get(endpoint)
+        try:
+            raw_data = await self._client.get(endpoint)
+        except AvanzaNotFoundError:
+            option_endpoint = PublicEndpoint.OPTION_DETAILS.format(id=instrument_id)
+            raw_data = await self._client.get(option_endpoint)
         return FutureForwardDetails.model_validate(raw_data)
 
     async def get_future_forward_filter_options(self) -> dict[str, Any]:
