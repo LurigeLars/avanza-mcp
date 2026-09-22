@@ -103,9 +103,23 @@ class ScreenFilters:
     min_turnover: float | None = None
 
 
+def _normalize_filter_values(values: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(sorted({value.strip().casefold() for value in values if value.strip()}))
+
+
+def _normalize_filters(filters: ScreenFilters) -> ScreenFilters:
+    return ScreenFilters(
+        issuers=_normalize_filter_values(filters.issuers),
+        sub_types=_normalize_filter_values(filters.sub_types),
+        min_leverage=filters.min_leverage,
+        max_leverage=filters.max_leverage,
+        require_two_way_quote=filters.require_two_way_quote,
+        max_spread_percent=filters.max_spread_percent,
+        min_turnover=filters.min_turnover,
+    )
+
+
 def _validate_filters(filters: ScreenFilters) -> None:
-    if any(not value.strip() for value in (*filters.issuers, *filters.sub_types)):
-        raise ValueError("issuer and sub_type filters must not contain blank values")
     if filters.min_leverage is not None and filters.min_leverage < 0:
         raise ValueError("min_leverage must be >= 0")
     if filters.max_leverage is not None and filters.max_leverage < 0:
@@ -144,14 +158,12 @@ def _filter_payload(filters: ScreenFilters) -> dict[str, Any]:
 def _matches_filters(candidate: dict[str, Any], filters: ScreenFilters) -> bool:
     if filters.issuers:
         issuer = str(candidate.get("issuer") or "").strip().casefold()
-        allowed = {value.strip().casefold() for value in filters.issuers}
-        if issuer not in allowed:
+        if issuer not in filters.issuers:
             return False
 
     if filters.sub_types:
         sub_type = str(candidate.get("sub_type") or "").strip().casefold()
-        allowed = {value.strip().casefold() for value in filters.sub_types}
-        if sub_type not in allowed:
+        if sub_type not in filters.sub_types:
             return False
 
     leverage = _number(candidate.get("leverage"))
@@ -178,6 +190,35 @@ def _matches_filters(candidate: dict[str, Any], filters: ScreenFilters) -> bool:
     return True
 
 
+def _display_values(candidates: list[dict[str, Any]], field: str) -> list[str]:
+    values: dict[str, str] = {}
+    for candidate in candidates:
+        raw = candidate.get(field)
+        if raw is None:
+            continue
+        value = str(raw).strip()
+        if value:
+            values.setdefault(value.casefold(), value)
+    return [values[key] for key in sorted(values)]
+
+
+def _available_filter_values(candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    leverage_values = [
+        value
+        for candidate in candidates
+        if (value := _number(candidate.get("leverage"))) is not None
+    ]
+    return {
+        "issuers": _display_values(candidates, "issuer"),
+        "sub_types": _display_values(candidates, "sub_type"),
+        "leverage": {
+            "reported_count": len(leverage_values),
+            "min": min(leverage_values) if leverage_values else None,
+            "max": max(leverage_values) if leverage_values else None,
+        },
+    }
+
+
 @dataclass(frozen=True)
 class _Snapshot:
     snapshot_id: str
@@ -185,6 +226,7 @@ class _Snapshot:
     direction: Direction
     product_types: tuple[ProductType, ...]
     filters: ScreenFilters
+    available_filter_values: dict[str, Any]
     families: dict[str, dict[str, Any]]
     products: list[dict[str, Any]]
     started_at: datetime
@@ -204,16 +246,26 @@ class _SnapshotStore:
     def put(self, snapshot: _Snapshot) -> None:
         now = datetime.now(timezone.utc)
         with self._lock:
-            self._data = {key: value for key, value in self._data.items() if value.expires_at > now}
+            self._data = {
+                key: value
+                for key, value in self._data.items()
+                if value.expires_at > now
+            }
             self._data[snapshot.snapshot_id] = snapshot
 
     def get(self, snapshot_id: str) -> _Snapshot:
         now = datetime.now(timezone.utc)
         with self._lock:
-            self._data = {key: value for key, value in self._data.items() if value.expires_at > now}
+            self._data = {
+                key: value
+                for key, value in self._data.items()
+                if value.expires_at > now
+            }
             snapshot = self._data.get(snapshot_id)
         if snapshot is None:
-            raise ValueError("snapshot_id was not found or has expired; create a new leveraged screen snapshot")
+            raise ValueError(
+                "snapshot_id was not found or has expired; create a new leveraged screen snapshot"
+            )
         return snapshot
 
 
@@ -231,6 +283,7 @@ def _page(snapshot: _Snapshot, offset: int, page_size: int) -> dict[str, Any]:
         "direction": snapshot.direction,
         "product_types": list(snapshot.product_types),
         "filters": _filter_payload(snapshot.filters),
+        "available_filter_values": snapshot.available_filter_values,
         "families": snapshot.families,
         "snapshot": {
             "started_at": snapshot.started_at.isoformat(),
@@ -241,7 +294,9 @@ def _page(snapshot: _Snapshot, offset: int, page_size: int) -> dict[str, Any]:
             "quote_complete_count": snapshot.quote_complete_count,
             "eligible_quote_complete_count": snapshot.eligible_quote_complete_count,
             "atomic": False,
-            "comparison_complete": all("error" not in family for family in snapshot.families.values()),
+            "comparison_complete": all(
+                "error" not in family for family in snapshot.families.values()
+            ),
             "expires_at": snapshot.expires_at.isoformat(),
         },
         "pagination": {
@@ -258,7 +313,8 @@ def _page(snapshot: _Snapshot, offset: int, page_size: int) -> dict[str, Any]:
         "data_note": (
             "The complete underlying/direction/product-family universe was scanned once, then "
             "the reported filters were applied before ranking. pagination.total is the eligible "
-            "filtered count; snapshot.scanned_count is the full scanned count. Calls using "
+            "filtered count; snapshot.scanned_count is the full scanned count. "
+            "available_filter_values comes from the full scanned universe. Calls using "
             "snapshot_id reuse the frozen ranking and do not refetch market data. Initial quote "
             "collection is non-atomic because upstream pages are sequential. If pagination.has_more "
             "is true, this response is only a partial view of the snapshot."
@@ -294,14 +350,18 @@ class LeveragedScreenService:
             items.extend(page)
             total = response.totalNumberOfOrderbooks
             offset += len(page)
-            if not page or len(page) < _PAGE_SIZE or (total is not None and offset >= total):
+            if not page or len(page) < _PAGE_SIZE or (
+                total is not None and offset >= total
+            ):
                 break
         products = [_normalize_candidate(item, "certificate") for item in items]
         return {
             "products": products,
             "upstream_total": total,
             "scanned_count": len(items),
-            "quote_complete_count": sum(_has_two_way_quote(item) for item in products),
+            "quote_complete_count": sum(
+                _has_two_way_quote(item) for item in products
+            ),
         }
 
     async def _collect_warrants(
@@ -328,14 +388,18 @@ class LeveragedScreenService:
             items.extend(page)
             total = response.totalNumberOfOrderbooks
             offset += len(page)
-            if not page or len(page) < _PAGE_SIZE or (total is not None and offset >= total):
+            if not page or len(page) < _PAGE_SIZE or (
+                total is not None and offset >= total
+            ):
                 break
         products = [_normalize_candidate(item, "warrant") for item in items]
         return {
             "products": products,
             "upstream_total": total,
             "scanned_count": len(items),
-            "quote_complete_count": sum(_has_two_way_quote(item) for item in products),
+            "quote_complete_count": sum(
+                _has_two_way_quote(item) for item in products
+            ),
         }
 
     async def screen(
@@ -351,7 +415,7 @@ class LeveragedScreenService:
         if page_size < 1:
             raise ValueError("page_size must be at least 1")
 
-        selected_filters = filters or ScreenFilters()
+        selected_filters = _normalize_filters(filters or ScreenFilters())
         _validate_filters(selected_filters)
 
         started_at, timer = datetime.now(timezone.utc), perf_counter()
@@ -360,7 +424,10 @@ class LeveragedScreenService:
             "warrant": self._collect_warrants,
         }
         results = await asyncio.gather(
-            *(collectors[product_type](underlying_order_book_id, direction) for product_type in product_types),
+            *(
+                collectors[product_type](underlying_order_book_id, direction)
+                for product_type in product_types
+            ),
             return_exceptions=True,
         )
         completed_at = datetime.now(timezone.utc)
@@ -375,17 +442,26 @@ class LeveragedScreenService:
                     "scanned_count": 0,
                     "quote_complete_count": 0,
                     "eligible_count": 0,
-                    "error": "upstream_unavailable" if isinstance(result, AvanzaError) else "screen_failed",
+                    "error": (
+                        "upstream_unavailable"
+                        if isinstance(result, AvanzaError)
+                        else "screen_failed"
+                    ),
                 }
                 continue
             families[product_type] = {
                 key: result[key]
-                for key in ("upstream_total", "scanned_count", "quote_complete_count")
+                for key in (
+                    "upstream_total",
+                    "scanned_count",
+                    "quote_complete_count",
+                )
             }
             scanned_count += result["scanned_count"]
             quote_complete_count += result["quote_complete_count"]
             all_products.extend(result["products"])
 
+        available_filter_values = _available_filter_values(all_products)
         products = [
             candidate
             for candidate in all_products
@@ -393,17 +469,21 @@ class LeveragedScreenService:
         ]
         for product_type in product_types:
             families[product_type]["eligible_count"] = sum(
-                candidate.get("product_type") == product_type for candidate in products
+                candidate.get("product_type") == product_type
+                for candidate in products
             )
 
         products.sort(key=_candidate_rank)
-        eligible_quote_complete_count = sum(_has_two_way_quote(candidate) for candidate in products)
+        eligible_quote_complete_count = sum(
+            _has_two_way_quote(candidate) for candidate in products
+        )
         snapshot = _Snapshot(
             uuid4().hex,
             underlying_order_book_id,
             direction,
             tuple(product_types),
             selected_filters,
+            available_filter_values,
             families,
             products,
             started_at,
@@ -430,11 +510,17 @@ class LeveragedScreenService:
         if offset < 0 or page_size < 1:
             raise ValueError("offset must be >= 0 and page_size must be >= 1")
         if filters is not None:
+            filters = _normalize_filters(filters)
             _validate_filters(filters)
 
         snapshot = _SNAPSHOTS.get(snapshot_id)
-        if snapshot.underlying_order_book_id != underlying_order_book_id or snapshot.direction != direction:
-            raise ValueError("snapshot_id does not match the supplied underlying_order_book_id and direction")
+        if (
+            snapshot.underlying_order_book_id != underlying_order_book_id
+            or snapshot.direction != direction
+        ):
+            raise ValueError(
+                "snapshot_id does not match the supplied underlying_order_book_id and direction"
+            )
         if product_types is not None and set(product_types) != set(snapshot.product_types):
             raise ValueError("product_types do not match the stored snapshot")
         if filters is not None and filters != snapshot.filters:

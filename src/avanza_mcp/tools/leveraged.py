@@ -101,8 +101,11 @@ async def screen_leveraged_instruments(
     universe once, applies the supplied structural/liquidity filters, ranks all eligible
     products, stores the frozen result for ten minutes, and returns the requested first page.
 
+    The response includes available_filter_values derived from the full scanned universe so
+    callers can reuse exact issuer/sub-type values rather than guessing them.
+
     With snapshot_id, returns another page from that same frozen ranking without refetching
-    Avanza. Omit product/filter arguments when paging, or repeat the exact original values.
+    Avanza. Omit product/filter arguments when paging, or repeat semantically equivalent values.
     Always inspect pagination.total, pagination.has_more and pagination.next_offset.
     """
     selected = product_types or ["certificate", "warrant"]
