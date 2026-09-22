@@ -266,6 +266,7 @@ async def test_option_enrichment_pages_existing_snapshot_without_matrix_refetch(
         "total_volume_traded": 100,
         "updated": 123456789,
         "is_real_time": False,
+        "spread_percent_from_quote_prices": 4.878049,
     }
     assert enriched["options"][0]["market_data"]["underlying_quote"]["is_real_time"] is False
 
