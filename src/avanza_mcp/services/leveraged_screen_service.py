@@ -133,7 +133,7 @@ def _page(snapshot: _Snapshot, offset: int, page_size: int) -> dict[str, Any]:
             "scanned_count": snapshot.scanned_count,
             "quote_complete_count": snapshot.quote_complete_count,
             "atomic": False,
-            "comparison_complete": True,
+            "comparison_complete": all("error" not in family for family in snapshot.families.values()),
             "expires_at": snapshot.expires_at.isoformat(),
         },
         "pagination": {
