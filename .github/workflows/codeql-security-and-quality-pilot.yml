@@ -51,6 +51,49 @@ jobs:
           upload: never
           upload-database: false
 
+      - name: Summarize SARIF
+        shell: bash
+        run: |
+          python - <<'PY'
+          import collections
+          import glob
+          import json
+
+          total = 0
+          rules = {}
+          counts = collections.Counter()
+
+          for path in glob.glob('codeql-results/**/*.sarif', recursive=True):
+              with open(path, encoding='utf-8') as handle:
+                  sarif = json.load(handle)
+              for run in sarif.get('runs', []):
+                  for rule in run.get('tool', {}).get('driver', {}).get('rules', []):
+                      rid = rule.get('id')
+                      if not rid:
+                          continue
+                      props = rule.get('properties', {}) or {}
+                      rules[rid] = {
+                          'level': (rule.get('defaultConfiguration', {}) or {}).get('level'),
+                          'security_severity': props.get('security-severity'),
+                          'precision': props.get('precision'),
+                          'tags': props.get('tags', []),
+                      }
+                  for result in run.get('results', []):
+                      rid = result.get('ruleId') or '<unknown>'
+                      counts[rid] += 1
+                      total += 1
+
+          summary = {
+              'total_results': total,
+              'unique_rules_with_results': len(counts),
+              'rules': [
+                  {'rule': rid, 'count': count, **rules.get(rid, {})}
+                  for rid, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+              ],
+          }
+          print('CODEQL_PILOT_SUMMARY=' + json.dumps(summary, separators=(',', ':')))
+          PY
+
       - name: Upload SARIF artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
