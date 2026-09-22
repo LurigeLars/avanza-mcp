@@ -140,6 +140,36 @@ class FakeMarket:
         )
 
 
+class RankingFakeMarket(FakeMarket):
+    async def get_option_info(self, order_book_id):
+        self.option_info_calls.append(order_book_id)
+        quotes = {
+            "101": {"buy": 10.0, "sell": 10.5, "totalValueTraded": 100},
+            "102": {"buy": 10.0, "sell": 10.2, "totalValueTraded": 100},
+            "103": {"buy": 10.0, "sell": 10.1, "totalValueTraded": 50},
+            "104": {"buy": 10.0, "sell": 10.1, "totalValueTraded": 500},
+        }
+        quote = {
+            **quotes[order_book_id],
+            "last": 10.0,
+            "updated": 123456789,
+            "isRealTime": False,
+        }
+        return FakeResponse(
+            {
+                "orderbookId": order_book_id,
+                "name": f"OPTION {order_book_id}",
+                "type": "OPTION",
+                "quote": quote,
+                "keyIndicators": {
+                    "endDate": "2026-10-16",
+                    "strikePrice": 100 if order_book_id in {"101", "102"} else 110,
+                    "subType": "STANDARD",
+                },
+            }
+        )
+
+
 @pytest.mark.asyncio
 async def test_options_screen_discovers_expiry_flattens_pairs_and_filters():
     service = OptionsScreenService(object())
@@ -241,6 +271,53 @@ async def test_option_enrichment_pages_existing_snapshot_without_matrix_refetch(
 
 
 @pytest.mark.asyncio
+async def test_market_quality_enriches_full_snapshot_once_then_pages_cached_ranking():
+    service = OptionsScreenService(object())
+    fake = RankingFakeMarket()
+    service._market = fake
+    first = await service.screen(
+        "5269",
+        1,
+        OptionScreenSpec(option_types=("STANDARD",)),
+    )
+    matrix_calls = len(fake.calls)
+
+    ranked = await service.enrich_page(
+        first["snapshot_id"],
+        "5269",
+        0,
+        1,
+        "market_quality",
+    )
+
+    assert len(fake.calls) == matrix_calls
+    assert fake.option_info_calls == ["101", "102", "103", "104"]
+    assert ranked["options"][0]["order_book_id"] == "104"
+    assert ranked["options"][0]["market_data"]["quote"][
+        "spread_percent_from_quote_prices"
+    ] == pytest.approx(0.995025)
+    assert ranked["enrichment"]["scope"] == "full_structural_snapshot"
+    assert ranked["enrichment"]["cache_hit"] is False
+    assert ranked["enrichment"]["current_call_upstream_requests"] == 4
+    assert ranked["pagination"]["total"] == 4
+    assert ranked["pagination"]["returned"] == 1
+    assert ranked["pagination"]["has_more"] is True
+
+    calls = len(fake.option_info_calls)
+    second = await service.enrich_page(
+        first["snapshot_id"],
+        "5269",
+        1,
+        1,
+        "market_quality",
+    )
+    assert len(fake.option_info_calls) == calls
+    assert second["enrichment"]["cache_hit"] is True
+    assert second["enrichment"]["current_call_upstream_requests"] == 0
+    assert second["pagination"]["offset"] == 1
+
+
+@pytest.mark.asyncio
 async def test_screen_options_contract_is_unstructured_and_unbounded_page_size():
     async with Client(mcp) as client:
         tools = {tool.name: tool for tool in await client.list_tools()}
@@ -259,3 +336,5 @@ async def test_screen_options_contract_is_unstructured_and_unbounded_page_size()
     assert "maximum" not in enrich_props["page_size"]
     assert enrich_props["page_size"]["default"] == 20
     assert enrich_props["snapshot_id"]["pattern"] == "^[0-9a-f]{32}$"
+    assert enrich_props["ranking"]["enum"] == ["structural", "market_quality"]
+    assert enrich_props["ranking"]["default"] == "structural"

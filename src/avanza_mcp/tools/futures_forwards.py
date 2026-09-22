@@ -146,17 +146,19 @@ async def enrich_option_snapshot(
     ctx: Context,
     snapshot_id: OptionSnapshotId,
     underlying_order_book_id: OrderBookId,
+    ranking: Literal["structural", "market_quality"] = "structural",
     offset: OptionPageOffset = 0,
     page_size: OptionPageSize = 20,
 ):
     """Batch-enrich one page from an existing screen_options snapshot.
 
-    Fetches the option-specific info endpoint only for the requested structural snapshot page
-    and preserves the snapshot's pagination. There is no fixed page-size upper bound, but each
-    returned contract causes one upstream option-info request, so narrow structurally first.
+    ranking="structural" enriches only the requested structural page and preserves its order.
+    ranking="market_quality" enriches the complete structural snapshot once, ranks globally by
+    two-way quote, lower midpoint spread and higher turnover, caches that frozen ranking, then
+    returns the requested page. Later market-quality pages reuse the cache without refetching.
 
-    Quote timestamps and is_real_time are preserved. Enrichment is non-atomic across contracts.
-    Continue with the same snapshot_id and pagination.next_offset when broader coverage is needed.
+    There is no fixed page-size upper bound. Quote timestamps and is_real_time are preserved,
+    and enrichment is explicitly non-atomic across contracts.
     """
     service = OptionsScreenService(ctx.lifespan_context["client"])
     try:
@@ -166,6 +168,7 @@ async def enrich_option_snapshot(
                 underlying_order_book_id,
                 offset,
                 page_size,
+                ranking,
             )
     except ValueError as exc:
         raise ToolError(str(exc)) from exc
