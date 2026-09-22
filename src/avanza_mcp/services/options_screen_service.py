@@ -129,28 +129,33 @@ def _compact_option_info(info: Any) -> dict[str, Any]:
             if source.get(source_key) is not None
         }
 
+    compact_quote = pick(
+        quote,
+        (
+            ("buy", "bid"),
+            ("sell", "ask"),
+            ("last", "last"),
+            ("spread", "upstream_spread_percent"),
+            ("change", "change"),
+            ("changePercent", "change_percent"),
+            ("totalValueTraded", "total_value_traded"),
+            ("totalVolumeTraded", "total_volume_traded"),
+            ("timeOfLast", "time_of_last"),
+            ("updated", "updated"),
+            ("isRealTime", "is_real_time"),
+        ),
+    )
+    spread = _quote_spread_percent(compact_quote)
+    if spread is not None:
+        compact_quote["spread_percent_from_quote_prices"] = spread
+
     return {
         key: value
         for key, value in {
             "isin": raw.get("isin"),
             "tradable": raw.get("tradable"),
             "instrument_type": raw.get("type"),
-            "quote": pick(
-                quote,
-                (
-                    ("buy", "bid"),
-                    ("sell", "ask"),
-                    ("last", "last"),
-                    ("spread", "upstream_spread_percent"),
-                    ("change", "change"),
-                    ("changePercent", "change_percent"),
-                    ("totalValueTraded", "total_value_traded"),
-                    ("totalVolumeTraded", "total_volume_traded"),
-                    ("timeOfLast", "time_of_last"),
-                    ("updated", "updated"),
-                    ("isRealTime", "is_real_time"),
-                ),
-            ),
+            "quote": compact_quote,
             "key_indicators": pick(
                 key_indicators,
                 (
@@ -176,6 +181,40 @@ def _compact_option_info(info: Any) -> dict[str, Any]:
         }.items()
         if value not in (None, {})
     }
+
+
+def _quote_spread_percent(quote: dict[str, Any]) -> float | None:
+    bid = _number(quote.get("bid"))
+    ask = _number(quote.get("ask"))
+    if bid is None or ask is None or bid <= 0 or ask <= 0 or ask < bid:
+        return None
+    midpoint = (bid + ask) / 2
+    return round((ask - bid) / midpoint * 100, 6) if midpoint else None
+
+
+def _market_rank(contract: dict[str, Any]) -> tuple[Any, ...]:
+    market_data = contract.get("market_data")
+    if not isinstance(market_data, dict):
+        market_data = {}
+    quote = market_data.get("quote")
+    if not isinstance(quote, dict):
+        quote = {}
+    bid = _number(quote.get("bid"))
+    ask = _number(quote.get("ask"))
+    two_way = bid is not None and ask is not None and bid > 0 and ask > 0
+    spread = _number(quote.get("spread_percent_from_quote_prices"))
+    turnover = _number(quote.get("total_value_traded")) or 0.0
+    strike = _number(contract.get("strike_price"))
+    return (
+        0 if two_way else 1,
+        spread if spread is not None else float("inf"),
+        -turnover,
+        str(contract.get("expiry_date") or ""),
+        strike if strike is not None else float("inf"),
+        str(contract.get("call_indicator") or ""),
+        str(contract.get("name") or ""),
+        str(contract.get("order_book_id") or ""),
+    )
 
 
 @dataclass(frozen=True)
@@ -243,6 +282,46 @@ class _OptionSnapshot:
     expires_at: datetime
 
 
+@dataclass(frozen=True)
+class _OptionMarketSnapshot:
+    source_snapshot_id: str
+    contracts: list[dict[str, Any]]
+    started_at: datetime
+    completed_at: datetime
+    duration_ms: float
+    attempted_count: int
+    enriched_count: int
+    not_found_count: int
+    retrieval_span_ms: int | None
+    expires_at: datetime
+
+
+class _MarketSnapshotStore:
+    def __init__(self) -> None:
+        self._data: dict[str, _OptionMarketSnapshot] = {}
+        self._lock = Lock()
+
+    def put(self, snapshot: _OptionMarketSnapshot) -> None:
+        now = datetime.now(timezone.utc)
+        with self._lock:
+            self._data = {
+                key: value
+                for key, value in self._data.items()
+                if value.expires_at > now
+            }
+            self._data[snapshot.source_snapshot_id] = snapshot
+
+    def get(self, source_snapshot_id: str) -> _OptionMarketSnapshot | None:
+        now = datetime.now(timezone.utc)
+        with self._lock:
+            self._data = {
+                key: value
+                for key, value in self._data.items()
+                if value.expires_at > now
+            }
+            return self._data.get(source_snapshot_id)
+
+
 class _SnapshotStore:
     def __init__(self) -> None:
         self._data: dict[str, _OptionSnapshot] = {}
@@ -271,6 +350,7 @@ class _SnapshotStore:
 
 
 _SNAPSHOTS = _SnapshotStore()
+_MARKET_SNAPSHOTS = _MarketSnapshotStore()
 
 
 def _page(snapshot: _OptionSnapshot, offset: int, page_size: int) -> dict[str, Any]:
@@ -569,26 +649,10 @@ class OptionsScreenService:
         return _page(snapshot, 0, page_size)
 
 
-    async def enrich_page(
+    async def _enrich_contracts(
         self,
-        snapshot_id: str,
-        underlying_order_book_id: str,
-        offset: int,
-        page_size: int,
-    ) -> dict[str, Any]:
-        if offset < 0 or page_size < 1:
-            raise ValueError("offset must be >= 0 and page_size must be >= 1")
-
-        snapshot = _SNAPSHOTS.get(snapshot_id)
-        if snapshot.underlying_order_book_id != underlying_order_book_id:
-            raise ValueError(
-                "snapshot_id does not match the supplied underlying_order_book_id"
-            )
-
-        total = len(snapshot.contracts)
-        selected = snapshot.contracts[offset : offset + page_size]
-        started_at = datetime.now(timezone.utc)
-        timer = perf_counter()
+        contracts: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
         semaphore = asyncio.Semaphore(_MAX_CONCURRENT_ENRICHMENT)
 
         async def enrich(contract: dict[str, Any]) -> dict[str, Any]:
@@ -607,14 +671,122 @@ class OptionsScreenService:
                     "market_data_retrieved_at": datetime.now(timezone.utc).isoformat(),
                 }
 
-        options = await asyncio.gather(*(enrich(contract) for contract in selected))
-        completed_at = datetime.now(timezone.utc)
-        returned = len(options)
-        has_more = offset + returned < total
-        enriched_count = sum("market_data" in option for option in options)
-        not_found_count = sum(
-            option.get("market_data_error") == "not_found" for option in options
-        )
+        return await asyncio.gather(*(enrich(contract) for contract in contracts))
+
+    async def enrich_page(
+        self,
+        snapshot_id: str,
+        underlying_order_book_id: str,
+        offset: int,
+        page_size: int,
+        ranking: Literal["structural", "market_quality"] = "structural",
+    ) -> dict[str, Any]:
+        if offset < 0 or page_size < 1:
+            raise ValueError("offset must be >= 0 and page_size must be >= 1")
+
+        snapshot = _SNAPSHOTS.get(snapshot_id)
+        if snapshot.underlying_order_book_id != underlying_order_book_id:
+            raise ValueError(
+                "snapshot_id does not match the supplied underlying_order_book_id"
+            )
+
+        total = len(snapshot.contracts)
+        cache_hit = False
+        current_call_upstream_requests = 0
+
+        if ranking == "market_quality":
+            market_snapshot = _MARKET_SNAPSHOTS.get(snapshot_id)
+            if market_snapshot is None:
+                started_at = datetime.now(timezone.utc)
+                timer = perf_counter()
+                options = await self._enrich_contracts(snapshot.contracts)
+                completed_at = datetime.now(timezone.utc)
+                options.sort(key=_market_rank)
+                retrieval_times = [
+                    datetime.fromisoformat(option["market_data_retrieved_at"])
+                    for option in options
+                    if option.get("market_data_retrieved_at")
+                ]
+                retrieval_span_ms = (
+                    round(
+                        (
+                            max(retrieval_times) - min(retrieval_times)
+                        ).total_seconds()
+                        * 1000
+                    )
+                    if retrieval_times
+                    else None
+                )
+                market_snapshot = _OptionMarketSnapshot(
+                    source_snapshot_id=snapshot_id,
+                    contracts=options,
+                    started_at=started_at,
+                    completed_at=completed_at,
+                    duration_ms=round((perf_counter() - timer) * 1000, 3),
+                    attempted_count=len(options),
+                    enriched_count=sum("market_data" in option for option in options),
+                    not_found_count=sum(
+                        option.get("market_data_error") == "not_found"
+                        for option in options
+                    ),
+                    retrieval_span_ms=retrieval_span_ms,
+                    expires_at=snapshot.expires_at,
+                )
+                _MARKET_SNAPSHOTS.put(market_snapshot)
+                current_call_upstream_requests = len(options)
+            else:
+                cache_hit = True
+
+            source_options = market_snapshot.contracts
+            selected = source_options[offset : offset + page_size]
+            returned = len(selected)
+            has_more = offset + returned < len(source_options)
+            enrichment = {
+                "started_at": market_snapshot.started_at.isoformat(),
+                "completed_at": market_snapshot.completed_at.isoformat(),
+                "duration_ms": market_snapshot.duration_ms,
+                "attempted_count": market_snapshot.attempted_count,
+                "enriched_count": market_snapshot.enriched_count,
+                "not_found_count": market_snapshot.not_found_count,
+                "retrieval_span_ms": market_snapshot.retrieval_span_ms,
+                "atomic": False,
+                "max_concurrency": _MAX_CONCURRENT_ENRICHMENT,
+                "source": "/_api/market-guide/option/{id}",
+                "scope": "full_structural_snapshot",
+                "ranking": "two_way_quote, spread_percent_asc, turnover_desc",
+                "cache_hit": cache_hit,
+                "current_call_upstream_requests": current_call_upstream_requests,
+            }
+            ordering = "market_quality"
+            page_total = len(source_options)
+        else:
+            selected_contracts = snapshot.contracts[offset : offset + page_size]
+            started_at = datetime.now(timezone.utc)
+            timer = perf_counter()
+            selected = await self._enrich_contracts(selected_contracts)
+            completed_at = datetime.now(timezone.utc)
+            returned = len(selected)
+            has_more = offset + returned < total
+            enrichment = {
+                "started_at": started_at.isoformat(),
+                "completed_at": completed_at.isoformat(),
+                "duration_ms": round((perf_counter() - timer) * 1000, 3),
+                "attempted_count": returned,
+                "enriched_count": sum("market_data" in option for option in selected),
+                "not_found_count": sum(
+                    option.get("market_data_error") == "not_found"
+                    for option in selected
+                ),
+                "atomic": False,
+                "max_concurrency": _MAX_CONCURRENT_ENRICHMENT,
+                "source": "/_api/market-guide/option/{id}",
+                "scope": "requested_page",
+                "ranking": "structural_snapshot_order",
+                "cache_hit": False,
+                "current_call_upstream_requests": returned,
+            }
+            ordering = "structural_snapshot_order"
+            page_total = total
 
         return {
             "snapshot_id": snapshot.snapshot_id,
@@ -624,32 +796,24 @@ class OptionsScreenService:
                 "eligible_count": total,
                 "expires_at": snapshot.expires_at.isoformat(),
             },
-            "enrichment": {
-                "started_at": started_at.isoformat(),
-                "completed_at": completed_at.isoformat(),
-                "duration_ms": round((perf_counter() - timer) * 1000, 3),
-                "attempted_count": returned,
-                "enriched_count": enriched_count,
-                "not_found_count": not_found_count,
-                "atomic": False,
-                "max_concurrency": _MAX_CONCURRENT_ENRICHMENT,
-                "source": "/_api/market-guide/option/{id}",
-            },
+            "enrichment": enrichment,
             "pagination": {
-                "total": total,
+                "total": page_total,
                 "offset": offset,
                 "page_size": page_size,
                 "returned": returned,
                 "has_more": has_more,
                 "next_offset": offset + returned if has_more else None,
             },
-            "options": options,
+            "options": selected,
             "returned": returned,
+            "ordering": ordering,
             "data_note": (
-                "Market data is fetched only for this structural snapshot page. Per-contract "
-                "quotes are non-atomic and may have different upstream updated timestamps. "
+                "Option quotes are non-atomic and may have different upstream updated timestamps. "
                 "Honor quote.is_real_time; retrieval timestamps are not source timestamps. "
-                "If pagination.has_more is true, additional structural contracts remain."
+                "market_quality enriches and ranks the complete structural snapshot once, then "
+                "reuses that cached ranking for pagination. structural enriches only the requested "
+                "page and preserves the structural snapshot order."
             ),
         }
 
