@@ -95,11 +95,13 @@ async def test_screen_aggregates_certificate_and_warrant_families():
     assert result["families"]["certificate"] == {
         "returned": 1,
         "upstream_total": 1,
+        "scanned": 1,
         "truncated": False,
     }
     assert result["families"]["warrant"] == {
         "returned": 1,
         "upstream_total": 1,
+        "scanned": 1,
         "truncated": False,
     }
     assert result["products"][0]["spread_percent_from_discovery_prices"] == 2.0
@@ -108,6 +110,63 @@ async def test_screen_aggregates_certificate_and_warrant_families():
     assert fake.warrant_calls[0].filter.underlyingInstruments == ["4478"]
     assert fake.certificate_calls[0].filter.directions == ["long"]
     assert fake.warrant_calls[0].filter.directions == ["long"]
+
+
+class PaginatedWarrantMarket:
+    def __init__(self):
+        self.warrant_calls = []
+
+    async def filter_warrants(self, request):
+        self.warrant_calls.append(request)
+        if request.offset == 0:
+            return SimpleNamespace(
+                warrants=[
+                    FakeItem(
+                        orderbookId=str(index),
+                        name=f"EARLY {index:03d}",
+                        direction="long",
+                        issuer="Issuer A",
+                        buyPrice=10.0,
+                        sellPrice=10.5,
+                        totalValueTraded=0,
+                    )
+                    for index in range(100)
+                ],
+                totalNumberOfOrderbooks=101,
+            )
+        return SimpleNamespace(
+            warrants=[
+                FakeItem(
+                    orderbookId="999",
+                    name="LATE BEST",
+                    direction="long",
+                    issuer="Issuer B",
+                    buyPrice=10.0,
+                    sellPrice=10.01,
+                    totalValueTraded=1_000_000,
+                )
+            ],
+            totalNumberOfOrderbooks=101,
+        )
+
+
+@pytest.mark.asyncio
+async def test_screen_pages_full_matching_universe_before_ranking_and_limit():
+    service = LeveragedScreenService(object())
+    fake = PaginatedWarrantMarket()
+    service._market = fake
+
+    result = await service.screen("4478", "long", ["warrant"], 1)
+
+    assert [call.offset for call in fake.warrant_calls] == [0, 100]
+    assert result["families"]["warrant"] == {
+        "returned": 1,
+        "upstream_total": 101,
+        "scanned": 101,
+        "truncated": True,
+    }
+    assert result["products"][0]["order_book_id"] == "999"
+    assert result["ranking"] == "two_way_quote, spread_percent_asc, turnover_desc"
 
 
 @pytest.mark.asyncio

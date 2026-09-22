@@ -80,6 +80,35 @@ def _normalize_candidate(item: Any, product_type: ProductType) -> dict[str, Any]
     }
 
 
+def _candidate_rank(candidate: dict[str, Any]) -> tuple[Any, ...]:
+    """Rank discovery candidates by observable liquidity quality, then stable identity.
+
+    This is a discovery ranking only. It prefers complete two-way quotes, tighter
+    displayed spreads and higher observed turnover. It does not imply trade quality.
+    """
+    bid = _number(candidate.get("discovery_bid"))
+    ask = _number(candidate.get("discovery_ask"))
+    has_two_way_quote = bid is not None and ask is not None and bid > 0 and ask > 0
+    spread = _number(candidate.get("spread_percent_from_discovery_prices"))
+    turnover = _number(candidate.get("total_value_traded")) or 0.0
+    return (
+        0 if has_two_way_quote else 1,
+        spread if spread is not None else float("inf"),
+        -turnover,
+        str(candidate.get("issuer") or ""),
+        str(candidate.get("name") or ""),
+        str(candidate.get("order_book_id") or ""),
+    )
+
+
+def _rank_and_limit(
+    items: list[Any], product_type: ProductType, max_results: int
+) -> list[dict[str, Any]]:
+    candidates = [_normalize_candidate(item, product_type) for item in items]
+    candidates.sort(key=_candidate_rank)
+    return candidates[:max_results]
+
+
 class LeveragedScreenService:
     """Aggregate bounded certificate/warrant screens inside one MCP tool call."""
 
@@ -92,8 +121,8 @@ class LeveragedScreenService:
         items: list[Any] = []
         offset = 0
         total: int | None = None
-        while len(items) < max_results:
-            limit = min(_PAGE_SIZE, max_results - len(items))
+        while True:
+            limit = _PAGE_SIZE
             response = await self._market.filter_certificates(
                 CertificateFilterRequest(
                     filter=CertificateFilter(
@@ -111,11 +140,13 @@ class LeveragedScreenService:
             offset += len(page)
             if not page or len(page) < limit or (total is not None and offset >= total):
                 break
+        products = _rank_and_limit(items, "certificate", max_results)
         return {
-            "products": [_normalize_candidate(item, "certificate") for item in items],
+            "products": products,
             "upstream_total": total,
-            "returned": len(items),
-            "truncated": total is not None and len(items) < total,
+            "scanned": len(items),
+            "returned": len(products),
+            "truncated": total is not None and len(products) < total,
         }
 
     async def _collect_warrants(
@@ -124,8 +155,8 @@ class LeveragedScreenService:
         items: list[Any] = []
         offset = 0
         total: int | None = None
-        while len(items) < max_results:
-            limit = min(_PAGE_SIZE, max_results - len(items))
+        while True:
+            limit = _PAGE_SIZE
             response = await self._market.filter_warrants(
                 WarrantFilterRequest(
                     filter=WarrantFilter(
@@ -143,11 +174,13 @@ class LeveragedScreenService:
             offset += len(page)
             if not page or len(page) < limit or (total is not None and offset >= total):
                 break
+        products = _rank_and_limit(items, "warrant", max_results)
         return {
-            "products": [_normalize_candidate(item, "warrant") for item in items],
+            "products": products,
             "upstream_total": total,
-            "returned": len(items),
-            "truncated": total is not None and len(items) < total,
+            "scanned": len(items),
+            "returned": len(products),
+            "truncated": total is not None and len(products) < total,
         }
 
     async def screen(
@@ -193,7 +226,7 @@ class LeveragedScreenService:
                 continue
             families[product_type] = {
                 key: result[key]
-                for key in ("returned", "upstream_total", "truncated")
+                for key in ("returned", "upstream_total", "scanned", "truncated")
             }
             products.extend(result["products"])
 
@@ -203,6 +236,7 @@ class LeveragedScreenService:
             "families": families,
             "products": products,
             "returned": len(products),
+            "ranking": "two_way_quote, spread_percent_asc, turnover_desc",
             "data_note": (
                 "Discovery/filter snapshot only. Prices, spread and turnover may be stale "
                 "or absent outside market hours and are not execution-verified."
