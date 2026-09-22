@@ -30,13 +30,16 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: none
-          queries: security-and-quality
+          config: |
+            threat-models: local
+            queries:
+              - uses: security-and-quality
 
       - name: Analyze without uploading to Code Scanning
         id: analyze
         uses: github/codeql-action/analyze@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
         with:
-          category: /pilot/security-and-quality/${{ matrix.language }}
+          category: /pilot/security-and-quality-local/${{ matrix.language }}
           output: codeql-results
           upload: never
           upload-database: false
@@ -87,7 +90,7 @@ jobs:
       - name: Upload SARIF artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: codeql-security-and-quality-${{ matrix.language }}
+          name: codeql-security-and-quality-local-${{ matrix.language }}
           path: codeql-results/
           if-no-files-found: error
           retention-days: 7
