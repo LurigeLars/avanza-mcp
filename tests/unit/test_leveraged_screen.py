@@ -6,10 +6,7 @@ import pytest
 from fastmcp import Client
 
 from avanza_mcp import mcp
-from avanza_mcp.services.leveraged_screen_service import (
-    LeveragedScreenService,
-    _discovery_spread_percent,
-)
+from avanza_mcp.services.leveraged_screen_service import LeveragedScreenService, _discovery_spread_percent
 
 
 class FakeItem:
@@ -28,48 +25,14 @@ class FakeMarket:
     async def filter_certificates(self, request):
         self.certificate_calls.append(request)
         return SimpleNamespace(
-            certificates=[
-                FakeItem(
-                    orderbookId="101",
-                    name="MINI L TEST",
-                    direction="long",
-                    issuer="Issuer A",
-                    leverage=4.2,
-                    buyPrice=9.9,
-                    sellPrice=10.1,
-                    spread=0.02,
-                    totalValueTraded=123456,
-                    underlyingInstrument={
-                        "orderbookId": "4478",
-                        "name": "NVIDIA",
-                        "instrumentType": "STOCK",
-                    },
-                )
-            ],
+            certificates=[FakeItem(orderbookId="101", name="MINI L TEST", direction="long", issuer="Issuer A", leverage=4.2, buyPrice=9.9, sellPrice=10.1, totalValueTraded=123456)],
             totalNumberOfOrderbooks=1,
         )
 
     async def filter_warrants(self, request):
         self.warrant_calls.append(request)
         return SimpleNamespace(
-            warrants=[
-                FakeItem(
-                    orderbookId="202",
-                    name="TURBO L TEST",
-                    direction="long",
-                    issuer="Issuer B",
-                    subType="TURBO",
-                    stopLoss=8.0,
-                    buyPrice=4.95,
-                    sellPrice=5.05,
-                    totalValueTraded=654321,
-                    underlyingInstrument={
-                        "orderbookId": "4478",
-                        "name": "NVIDIA",
-                        "instrumentType": "STOCK",
-                    },
-                )
-            ],
+            warrants=[FakeItem(orderbookId="202", name="TURBO L TEST", direction="long", issuer="Issuer B", subType="TURBO", buyPrice=4.95, sellPrice=5.05, totalValueTraded=654321)],
             totalNumberOfOrderbooks=1,
         )
 
@@ -82,43 +45,31 @@ def test_discovery_spread_percent_is_midpoint_based_and_bounded():
 
 
 @pytest.mark.asyncio
-async def test_screen_aggregates_certificate_and_warrant_families():
+async def test_snapshot_pagination_reuses_same_ranked_data_without_refetching():
     service = LeveragedScreenService(object())
     fake = FakeMarket()
     service._market = fake
 
-    result = await service.screen(
-        "4478", "long", ["certificate", "warrant"], 100
-    )
+    first = await service.screen("4478", "long", ["certificate", "warrant"], 1)
+    assert first["snapshot"]["comparison_complete"] is True
+    assert first["snapshot"]["scanned_count"] == 2
+    assert first["pagination"] == {
+        "total": 2,
+        "offset": 0,
+        "page_size": 1,
+        "returned": 1,
+        "has_more": True,
+        "next_offset": 1,
+        "complete_result_set": False,
+    }
 
-    assert result["returned"] == 2
-    assert result["families"]["certificate"] == {
-        "returned": 1,
-        "upstream_total": 1,
-        "scanned_count": 1,
-        "quote_complete_count": 1,
-        "truncated": False,
-    }
-    assert result["families"]["warrant"] == {
-        "returned": 1,
-        "upstream_total": 1,
-        "scanned_count": 1,
-        "quote_complete_count": 1,
-        "truncated": False,
-    }
-    assert result["snapshot"]["scanned_count"] == 2
-    assert result["snapshot"]["quote_complete_count"] == 2
-    assert result["snapshot"]["atomic"] is False
-    assert result["snapshot"]["duration_ms"] >= 0
-    assert result["snapshot"]["started_at"]
-    assert result["snapshot"]["completed_at"]
-    assert result["return_limit_per_type"] == 100
-    assert result["products"][0]["spread_percent_from_discovery_prices"] == 2.0
-    assert result["products"][1]["sub_type"] == "TURBO"
-    assert fake.certificate_calls[0].filter.underlyingInstruments == ["4478"]
-    assert fake.warrant_calls[0].filter.underlyingInstruments == ["4478"]
-    assert fake.certificate_calls[0].filter.directions == ["long"]
-    assert fake.warrant_calls[0].filter.directions == ["long"]
+    calls = (len(fake.certificate_calls), len(fake.warrant_calls))
+    second = service.get_page(first["snapshot_id"], "4478", "long", 1, 1)
+    assert (len(fake.certificate_calls), len(fake.warrant_calls)) == calls
+    assert second["snapshot_id"] == first["snapshot_id"]
+    assert second["snapshot"] == first["snapshot"]
+    assert second["pagination"]["has_more"] is False
+    assert {first["products"][0]["order_book_id"], second["products"][0]["order_book_id"]} == {"101", "202"}
 
 
 class PaginatedWarrantMarket:
@@ -129,65 +80,51 @@ class PaginatedWarrantMarket:
         self.warrant_calls.append(request)
         if request.offset == 0:
             return SimpleNamespace(
-                warrants=[
-                    FakeItem(
-                        orderbookId=str(index),
-                        name=f"EARLY {index:03d}",
-                        direction="long",
-                        issuer="Issuer A",
-                        buyPrice=10.0,
-                        sellPrice=10.5,
-                        totalValueTraded=0,
-                    )
-                    for index in range(100)
-                ],
+                warrants=[FakeItem(orderbookId=str(i), name=f"EARLY {i:03d}", direction="long", issuer="Issuer A", buyPrice=10.0, sellPrice=10.5, totalValueTraded=0) for i in range(100)],
                 totalNumberOfOrderbooks=101,
             )
         return SimpleNamespace(
-            warrants=[
-                FakeItem(
-                    orderbookId="999",
-                    name="LATE BEST",
-                    direction="long",
-                    issuer="Issuer B",
-                    buyPrice=10.0,
-                    sellPrice=10.01,
-                    totalValueTraded=1_000_000,
-                )
-            ],
+            warrants=[FakeItem(orderbookId="999", name="LATE BEST", direction="long", issuer="Issuer B", buyPrice=10.0, sellPrice=10.01, totalValueTraded=1_000_000)],
             totalNumberOfOrderbooks=101,
         )
 
 
 @pytest.mark.asyncio
-async def test_screen_pages_full_matching_universe_before_ranking_and_return_limit():
+async def test_full_universe_is_ranked_before_page_size_is_applied():
     service = LeveragedScreenService(object())
     fake = PaginatedWarrantMarket()
     service._market = fake
 
-    result = await service.screen("4478", "long", ["warrant"], 1)
-
+    first = await service.screen("4478", "long", ["warrant"], 1)
     assert [call.offset for call in fake.warrant_calls] == [0, 100]
-    assert result["families"]["warrant"] == {
-        "returned": 1,
-        "upstream_total": 101,
-        "scanned_count": 101,
-        "quote_complete_count": 101,
-        "truncated": True,
-    }
-    assert result["snapshot"]["scanned_count"] == 101
-    assert result["snapshot"]["quote_complete_count"] == 101
-    assert result["return_limit_per_type"] == 1
-    assert result["products"][0]["order_book_id"] == "999"
-    assert result["ranking"] == "two_way_quote, spread_percent_asc, turnover_desc"
+    assert first["families"]["warrant"]["scanned_count"] == 101
+    assert first["pagination"]["total"] == 101
+    assert first["pagination"]["has_more"] is True
+    assert first["products"][0]["order_book_id"] == "999"
+
+    before = len(fake.warrant_calls)
+    remainder = service.get_page(first["snapshot_id"], "4478", "long", 1, 1000)
+    assert len(fake.warrant_calls) == before
+    assert remainder["pagination"]["returned"] == 100
+    assert remainder["pagination"]["has_more"] is False
+
+
+def test_snapshot_identity_mismatch_is_rejected():
+    service = LeveragedScreenService(object())
+    with pytest.raises(ValueError, match="not found or has expired"):
+        service.get_page("0" * 32, "4478", "long", 0, 100)
 
 
 @pytest.mark.asyncio
-async def test_screen_tool_is_unstructured_and_has_no_output_schema():
+async def test_screen_tool_has_unbounded_page_size_and_snapshot_contract():
     async with Client(mcp) as client:
-        listed = await client.list_tools()
-    tool = next(item for item in listed if item.name == "screen_leveraged_instruments")
+        tools = {item.name: item for item in await client.list_tools()}
+    tool = tools["screen_leveraged_instruments"]
     assert tool.output_schema is None
-    max_per_type = tool.input_schema["properties"]["max_per_type"]
-    assert "return per product family" in max_per_type["description"]
-    assert "complete matching upstream universe" in max_per_type["description"]
+    props = tool.input_schema["properties"]
+    assert props["page_size"]["minimum"] == 1
+    assert "maximum" not in props["page_size"]
+    assert props["offset"]["minimum"] == 0
+    snapshot_schema = props["snapshot_id"]["anyOf"][0]
+    assert snapshot_schema["pattern"] == "^[0-9a-f]{32}$"
+    assert "max_per_type" not in props
