@@ -142,6 +142,37 @@ async def screen_options(
 
 
 @mcp.tool(annotations=READ_ONLY)
+async def enrich_option_snapshot(
+    ctx: Context,
+    snapshot_id: OptionSnapshotId,
+    underlying_order_book_id: OrderBookId,
+    offset: OptionPageOffset = 0,
+    page_size: OptionPageSize = 20,
+):
+    """Batch-enrich one page from an existing screen_options snapshot.
+
+    Fetches the option-specific info endpoint only for the requested structural snapshot page
+    and preserves the snapshot's pagination. There is no fixed page-size upper bound, but each
+    returned contract causes one upstream option-info request, so narrow structurally first.
+
+    Quote timestamps and is_real_time are preserved. Enrichment is non-atomic across contracts.
+    Continue with the same snapshot_id and pagination.next_offset when broader coverage is needed.
+    """
+    service = OptionsScreenService(ctx.lifespan_context["client"])
+    try:
+        with api_errors():
+            result = await service.enrich_page(
+                snapshot_id,
+                underlying_order_book_id,
+                offset,
+                page_size,
+            )
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
+    return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+
+
+@mcp.tool(annotations=READ_ONLY)
 async def get_future_forward_info(
     ctx: Context, order_book_id: OrderBookId
 ) -> FutureForwardInfo:
