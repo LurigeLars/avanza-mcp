@@ -18,7 +18,10 @@ MaxPerType = Annotated[
     Field(
         ge=1,
         le=200,
-        description="Maximum candidates to collect per product family.",
+        description=(
+            "Maximum ranked candidates to return per product family after the service "
+            "scans the complete matching upstream universe."
+        ),
     ),
 ]
 
@@ -31,11 +34,15 @@ async def screen_leveraged_instruments(
     product_types: list[Literal["certificate", "warrant"]] | None = None,
     max_per_type: MaxPerType = 100,
 ):
-    """Screen leveraged products for one verified underlying in one bounded call.
+    """Snapshot and rank leveraged products for one verified underlying.
 
-    Aggregates certificate and warrant filter pages server-side. Returns compact
+    The service scans every matching upstream page for the selected product families
+    before ranking and applying max_per_type as a return limit. It returns compact
     discovery facts such as leverage, spread, bid/ask, turnover, issuer and stop-loss
-    when upstream supplies them. Discovery prices are not execution-verified.
+    when upstream supplies them, plus snapshot timing and coverage metadata.
+
+    Discovery quotes are collected over a non-atomic time window and are not
+    execution-verified.
     """
     selected = product_types or ["certificate", "warrant"]
     with api_errors():
