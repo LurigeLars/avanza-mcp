@@ -14,7 +14,7 @@ on:
       - "package*.json"
       - "pyproject.toml"
       - "uv.lock"
-      - ".github/workflows/codeql-security-and-quality-pilot.yml"
+      - ".github/workflows/**"
 
 permissions:
   contents: read
@@ -28,6 +28,7 @@ jobs:
       fail-fast: false
       matrix:
         language:
+          - actions
           - python
           - javascript-typescript
 
@@ -54,7 +55,7 @@ jobs:
       - name: Summarize SARIF
         shell: bash
         run: |
-          python - <<'PY'
+          python - <<'PY2'
           import collections
           import glob
           import json
@@ -92,7 +93,7 @@ jobs:
               ],
           }
           print('CODEQL_PILOT_SUMMARY=' + json.dumps(summary, separators=(',', ':')))
-          PY
+          PY2
 
       - name: Upload SARIF artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
