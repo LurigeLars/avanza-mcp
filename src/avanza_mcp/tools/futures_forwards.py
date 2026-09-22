@@ -24,23 +24,25 @@ async def list_futures_forwards(
     ctx: Context,
     underlying_instruments: list[OrderBookId] | None = None,
     option_types: list[str] | None = None,
+    call_indicators: list[Literal["CALL", "PUT"]] | None = None,
     end_dates: list[date] | None = None,
     offset: Offset = 0,
     limit: Limit = 20,
     sort_field: str = "strikePrice",
     sort_order: Literal["asc", "desc"] = "desc",
 ) -> FutureForwardMatrixResponse:
-    """Select futures/forwards with server-side pagination and ISO YYYY-MM-DD end dates.
+    """Select futures, forwards, or options with server-side pagination.
 
-    Use get_future_forward_filter_options for current filter vocabulary. The
-    matrix response retains flexible upstream fields, not an invented flat schema.
+    Use get_future_forward_filter_options for current option types, CALL/PUT vocabulary,
+    underlyings, and ISO YYYY-MM-DD expiry dates. Option rows are returned in matchedOptions;
+    the matrix response retains flexible upstream fields rather than inventing a flat schema.
     """
     request = FutureForwardMatrixRequest(
         filter=FutureForwardMatrixFilter(
             underlyingInstruments=underlying_instruments or [],
             optionTypes=option_types or [],
             endDates=[value.isoformat() for value in end_dates or []],
-            callIndicators=[],
+            callIndicators=call_indicators or [],
         ),
         offset=offset,
         limit=limit,
@@ -76,7 +78,7 @@ async def get_future_forward_details(
 
 @mcp.tool(annotations=READ_ONLY)
 async def get_future_forward_filter_options(ctx: Context) -> dict[str, Any]:
-    """Get current upstream filter options before selecting futures/forwards.
+    """Get current upstream filter options before selecting futures/forwards/options.
 
     Option names, values and nested detail fields are intentionally flexible.
     """
