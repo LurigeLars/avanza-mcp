@@ -1,20 +1,9 @@
 name: CodeQL security-and-quality pilot
 
 on:
-  pull_request:
+  push:
     branches:
-      - main
-    paths:
-      - "**/*.py"
-      - "**/*.js"
-      - "**/*.mjs"
-      - "**/*.cjs"
-      - "**/*.ts"
-      - "**/*.tsx"
-      - "package*.json"
-      - "pyproject.toml"
-      - "uv.lock"
-      - ".github/workflows/**"
+      - security/codeql-security-and-quality-pilot
 
 permissions:
   contents: read
