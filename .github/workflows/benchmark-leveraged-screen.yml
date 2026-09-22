@@ -15,8 +15,8 @@ on:
         options:
           - long
           - short
-      max_per_type:
-        description: "Maximum products per certificate/warrant family"
+      page_size:
+        description: "Rows returned from each ranked snapshot page"
         required: true
         default: "100"
 
@@ -41,4 +41,4 @@ jobs:
           uv run --locked python scripts/benchmark_leveraged_screen_live.py
           --underlying-order-book-id "${{ inputs.underlying_order_book_id }}"
           --direction "${{ inputs.direction }}"
-          --max-per-type "${{ inputs.max_per_type }}"
+          --page-size "${{ inputs.page_size }}"
