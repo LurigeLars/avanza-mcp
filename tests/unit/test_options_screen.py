@@ -23,6 +23,7 @@ class FakeResponse:
 class FakeMarket:
     def __init__(self):
         self.calls = []
+        self.option_info_calls = []
 
     async def list_futures_forwards(self, request):
         self.calls.append(request)
@@ -99,6 +100,45 @@ class FakeMarket:
             }
         )
 
+    async def get_option_info(self, order_book_id):
+        self.option_info_calls.append(order_book_id)
+        return FakeResponse(
+            {
+                "orderbookId": order_book_id,
+                "name": f"OPTION {order_book_id}",
+                "isin": f"SE{order_book_id}",
+                "tradable": "BUYABLE_AND_SELLABLE",
+                "type": "OPTION",
+                "keyIndicators": {
+                    "callIndicator": "Köp",
+                    "endDate": "2026-10-16",
+                    "strikePrice": 100 if order_book_id in {"101", "102"} else 110,
+                    "subType": "STANDARD",
+                },
+                "quote": {
+                    "buy": 10.0,
+                    "sell": 10.5,
+                    "last": 10.2,
+                    "spread": 4.88,
+                    "totalValueTraded": 12345,
+                    "totalVolumeTraded": 100,
+                    "updated": 123456789,
+                    "isRealTime": False,
+                },
+                "underlying": {
+                    "orderbookId": "5269",
+                    "name": "Test B",
+                    "quote": {
+                        "buy": 99.0,
+                        "sell": 99.1,
+                        "last": 99.05,
+                        "updated": 123456700,
+                        "isRealTime": False,
+                    },
+                },
+            }
+        )
+
 
 @pytest.mark.asyncio
 async def test_options_screen_discovers_expiry_flattens_pairs_and_filters():
@@ -154,6 +194,53 @@ async def test_options_snapshot_pages_without_refetching():
 
 
 @pytest.mark.asyncio
+async def test_option_enrichment_pages_existing_snapshot_without_matrix_refetch():
+    service = OptionsScreenService(object())
+    fake = FakeMarket()
+    service._market = fake
+    first = await service.screen(
+        "5269",
+        1,
+        OptionScreenSpec(option_types=("STANDARD",)),
+    )
+    matrix_calls = len(fake.calls)
+
+    enriched = await service.enrich_page(
+        first["snapshot_id"],
+        "5269",
+        1,
+        2,
+    )
+
+    assert len(fake.calls) == matrix_calls
+    assert fake.option_info_calls == ["102", "103"]
+    assert enriched["pagination"] == {
+        "total": 4,
+        "offset": 1,
+        "page_size": 2,
+        "returned": 2,
+        "has_more": True,
+        "next_offset": 3,
+    }
+    assert enriched["enrichment"]["attempted_count"] == 2
+    assert enriched["enrichment"]["enriched_count"] == 2
+    assert enriched["enrichment"]["not_found_count"] == 0
+    assert enriched["enrichment"]["atomic"] is False
+    assert enriched["options"][0]["market_data"]["instrument_type"] == "OPTION"
+    assert enriched["options"][0]["market_data"]["quote"] == {
+        "bid": 10.0,
+        "ask": 10.5,
+        "last": 10.2,
+        "upstream_spread_percent": 4.88,
+        "total_value_traded": 12345,
+        "total_volume_traded": 100,
+        "updated": 123456789,
+        "is_real_time": False,
+    }
+    assert enriched["options"][0]["market_data"]["underlying_quote"]["is_real_time"] is False
+
+
+@pytest.mark.asyncio
 async def test_screen_options_contract_is_unstructured_and_unbounded_page_size():
     async with Client(mcp) as client:
         tools = {tool.name: tool for tool in await client.list_tools()}
@@ -164,3 +251,11 @@ async def test_screen_options_contract_is_unstructured_and_unbounded_page_size()
     assert "maximum" not in props["page_size"]
     assert props["call_indicators"]["anyOf"][0]["items"]["enum"] == ["CALL", "PUT"]
     assert props["end_dates"]["anyOf"][0]["items"]["format"] == "date"
+
+    enrich = tools["enrich_option_snapshot"]
+    assert enrich.output_schema is None
+    enrich_props = enrich.input_schema["properties"]
+    assert enrich_props["page_size"]["minimum"] == 1
+    assert "maximum" not in enrich_props["page_size"]
+    assert enrich_props["page_size"]["default"] == 20
+    assert enrich_props["snapshot_id"]["pattern"] == "^[0-9a-f]{32}$"

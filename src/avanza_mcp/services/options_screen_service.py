@@ -10,6 +10,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from ..client.base import AvanzaClient
+from ..client.exceptions import AvanzaNotFoundError
 from ..models.filter import SortBy
 from ..models.future_forward import FutureForwardMatrixFilter, FutureForwardMatrixRequest
 from .market_data_service import MarketDataService
@@ -17,6 +18,7 @@ from .market_data_service import MarketDataService
 CallIndicator = Literal["CALL", "PUT"]
 _MATRIX_PAGE_SIZE = 100
 _MAX_CONCURRENT_EXPIRIES = 4
+_MAX_CONCURRENT_ENRICHMENT = 8
 _SNAPSHOT_TTL = timedelta(minutes=10)
 _ORDERING = "expiry_date_asc, option_type_asc, strike_price_asc, call_indicator_asc, name_asc"
 
@@ -103,6 +105,77 @@ def _flatten_matched_options(
                 }
             )
     return contracts
+
+
+def _compact_option_info(info: Any) -> dict[str, Any]:
+    raw = _dump(info)
+    quote = raw.get("quote") if isinstance(raw.get("quote"), dict) else {}
+    key_indicators = (
+        raw.get("keyIndicators")
+        if isinstance(raw.get("keyIndicators"), dict)
+        else {}
+    )
+    underlying = raw.get("underlying") if isinstance(raw.get("underlying"), dict) else {}
+    underlying_quote = (
+        underlying.get("quote")
+        if isinstance(underlying.get("quote"), dict)
+        else {}
+    )
+
+    def pick(source: dict[str, Any], mapping: tuple[tuple[str, str], ...]) -> dict[str, Any]:
+        return {
+            target: source[source_key]
+            for source_key, target in mapping
+            if source.get(source_key) is not None
+        }
+
+    return {
+        key: value
+        for key, value in {
+            "isin": raw.get("isin"),
+            "tradable": raw.get("tradable"),
+            "instrument_type": raw.get("type"),
+            "quote": pick(
+                quote,
+                (
+                    ("buy", "bid"),
+                    ("sell", "ask"),
+                    ("last", "last"),
+                    ("spread", "upstream_spread_percent"),
+                    ("change", "change"),
+                    ("changePercent", "change_percent"),
+                    ("totalValueTraded", "total_value_traded"),
+                    ("totalVolumeTraded", "total_volume_traded"),
+                    ("timeOfLast", "time_of_last"),
+                    ("updated", "updated"),
+                    ("isRealTime", "is_real_time"),
+                ),
+            ),
+            "key_indicators": pick(
+                key_indicators,
+                (
+                    ("callIndicator", "call_indicator"),
+                    ("endDate", "expiry_date"),
+                    ("parity", "parity"),
+                    ("strikePrice", "strike_price"),
+                    ("numberOfOwners", "number_of_owners"),
+                    ("subType", "sub_type"),
+                ),
+            ),
+            "underlying_quote": pick(
+                underlying_quote,
+                (
+                    ("buy", "bid"),
+                    ("sell", "ask"),
+                    ("last", "last"),
+                    ("spread", "upstream_spread_percent"),
+                    ("updated", "updated"),
+                    ("isRealTime", "is_real_time"),
+                ),
+            ),
+        }.items()
+        if value not in (None, {})
+    }
 
 
 @dataclass(frozen=True)
@@ -494,6 +567,92 @@ class OptionsScreenService:
         )
         _SNAPSHOTS.put(snapshot)
         return _page(snapshot, 0, page_size)
+
+
+    async def enrich_page(
+        self,
+        snapshot_id: str,
+        underlying_order_book_id: str,
+        offset: int,
+        page_size: int,
+    ) -> dict[str, Any]:
+        if offset < 0 or page_size < 1:
+            raise ValueError("offset must be >= 0 and page_size must be >= 1")
+
+        snapshot = _SNAPSHOTS.get(snapshot_id)
+        if snapshot.underlying_order_book_id != underlying_order_book_id:
+            raise ValueError(
+                "snapshot_id does not match the supplied underlying_order_book_id"
+            )
+
+        total = len(snapshot.contracts)
+        selected = snapshot.contracts[offset : offset + page_size]
+        started_at = datetime.now(timezone.utc)
+        timer = perf_counter()
+        semaphore = asyncio.Semaphore(_MAX_CONCURRENT_ENRICHMENT)
+
+        async def enrich(contract: dict[str, Any]) -> dict[str, Any]:
+            async with semaphore:
+                try:
+                    info = await self._market.get_option_info(contract["order_book_id"])
+                except AvanzaNotFoundError:
+                    return {
+                        **contract,
+                        "market_data_error": "not_found",
+                        "market_data_retrieved_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                return {
+                    **contract,
+                    "market_data": _compact_option_info(info),
+                    "market_data_retrieved_at": datetime.now(timezone.utc).isoformat(),
+                }
+
+        options = await asyncio.gather(*(enrich(contract) for contract in selected))
+        completed_at = datetime.now(timezone.utc)
+        returned = len(options)
+        has_more = offset + returned < total
+        enriched_count = sum("market_data" in option for option in options)
+        not_found_count = sum(
+            option.get("market_data_error") == "not_found" for option in options
+        )
+
+        return {
+            "snapshot_id": snapshot.snapshot_id,
+            "underlying_order_book_id": snapshot.underlying_order_book_id,
+            "underlying": snapshot.underlying,
+            "structural_snapshot": {
+                "eligible_count": total,
+                "expires_at": snapshot.expires_at.isoformat(),
+            },
+            "enrichment": {
+                "started_at": started_at.isoformat(),
+                "completed_at": completed_at.isoformat(),
+                "duration_ms": round((perf_counter() - timer) * 1000, 3),
+                "attempted_count": returned,
+                "enriched_count": enriched_count,
+                "not_found_count": not_found_count,
+                "atomic": False,
+                "max_concurrency": _MAX_CONCURRENT_ENRICHMENT,
+                "source": "/_api/market-guide/option/{id}",
+            },
+            "pagination": {
+                "total": total,
+                "offset": offset,
+                "page_size": page_size,
+                "returned": returned,
+                "has_more": has_more,
+                "next_offset": offset + returned if has_more else None,
+            },
+            "options": options,
+            "returned": returned,
+            "data_note": (
+                "Market data is fetched only for this structural snapshot page. Per-contract "
+                "quotes are non-atomic and may have different upstream updated timestamps. "
+                "Honor quote.is_real_time; retrieval timestamps are not source timestamps. "
+                "If pagination.has_more is true, additional structural contracts remain."
+            ),
+        }
+
 
     def get_page(
         self,

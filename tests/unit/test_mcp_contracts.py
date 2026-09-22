@@ -23,7 +23,7 @@ def upstream(monkeypatch):
 async def test_registered_schemas_and_annotations():
     async with Client(mcp) as client:
         tools = {tool.name: tool for tool in await client.list_tools()}
-    assert len(tools) == 36
+    assert len(tools) == 37
     for tool in tools.values():
         props = tool.inputSchema["properties"]
         assert "instrument_id" not in props and "ctx" not in props
@@ -39,7 +39,7 @@ async def test_registered_schemas_and_annotations():
         assert tool.annotations.destructiveHint is False
         assert tool.annotations.idempotentHint is True
         assert tool.annotations.openWorldHint is True
-        if tool.name in {"screen_leveraged_instruments", "screen_options"}:
+        if tool.name in {"screen_leveraged_instruments", "screen_options", "enrich_option_snapshot"}:
             assert tool.outputSchema is None
         else:
             assert tool.outputSchema

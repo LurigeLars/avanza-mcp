@@ -105,3 +105,16 @@ async def test_future_forward_success_does_not_probe_option_path():
 
     assert result.orderbookId == "123"
     client.get.assert_awaited_once_with("/_api/market-guide/futureforward/123")
+
+
+@pytest.mark.asyncio
+async def test_direct_option_info_uses_option_path_without_future_probe():
+    client = AsyncMock()
+    client.get.return_value = OPTION_INFO
+    service = MarketDataService(client)
+
+    result = await service.get_option_info("2401349")
+
+    assert result.orderbookId == "2401349"
+    assert result.type == "OPTION"
+    client.get.assert_awaited_once_with("/_api/market-guide/option/2401349")
