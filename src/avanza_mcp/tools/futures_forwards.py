@@ -145,7 +145,7 @@ async def screen_options(
 async def get_future_forward_info(
     ctx: Context, order_book_id: OrderBookId
 ) -> FutureForwardInfo:
-    """Get contract identity and latest available market data, not guaranteed real-time."""
+    """Get future, forward, or option identity and latest available market data.\n\n    The service uses the future/forward market-guide path first and falls back to the\n    option-specific path only when Avanza returns not-found. Values are not guaranteed real-time.\n    """
     with api_errors():
         return await MarketDataService(
             ctx.lifespan_context["client"]
@@ -156,7 +156,7 @@ async def get_future_forward_info(
 async def get_future_forward_details(
     ctx: Context, order_book_id: OrderBookId
 ) -> FutureForwardDetails:
-    """Get extended contract details beyond info; detail fields are intentionally flexible."""
+    """Get extended future, forward, or option details.\n\n    The service falls back to the option-specific details path only on not-found;\n    detail fields are intentionally flexible.\n    """
     with api_errors():
         return await MarketDataService(
             ctx.lifespan_context["client"]
