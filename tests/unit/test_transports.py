@@ -19,7 +19,7 @@ async def test_stdio_discovery_and_prompt():
     async with Client(transport) as client:
         assert client.server_info is not None
         assert client.server_info.version == __version__
-        assert len(await client.list_tools()) == 35
+        assert len(await client.list_tools()) == 36
         assert len(await client.list_prompts()) == 3
         prompt = await client.get_prompt("compare_funds", {"fund_names": '["A", "B"]'})
         assert "order_book_id" in prompt.messages[0].content.text
@@ -32,7 +32,7 @@ async def test_http_tool_and_resource(monkeypatch):
     monkeypatch.setattr(AvanzaClient, "get", get)
     async with run_server_async(mcp) as url:
         async with Client(url) as client:
-            assert len(await client.list_tools()) == 35
+            assert len(await client.list_tools()) == 36
             result = await client.call_tool(
                 "get_stock_quote", {"order_book_id": "5269"}
             )
