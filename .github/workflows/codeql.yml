@@ -1,5 +1,6 @@
 name: CodeQL
 
+# Advanced setup: security-and-quality plus local threat modeling.
 on:
   push:
     branches:
