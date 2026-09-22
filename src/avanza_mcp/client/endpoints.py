@@ -58,6 +58,8 @@ class PublicEndpoint(Enum):
     )
     FUTURE_FORWARD_INFO = "/_api/market-guide/futureforward/{id}"
     FUTURE_FORWARD_DETAILS = "/_api/market-guide/futureforward/{id}/details"
+    OPTION_INFO = "/_api/market-guide/option/{id}"
+    OPTION_DETAILS = "/_api/market-guide/option/{id}/details"
 
     # Additional features
     NUMBER_OF_OWNERS = "/_api/market-guide/number-of-owners/{id}"
