@@ -1,4 +1,4 @@
-"""Snapshot-backed leveraged-instrument discovery and pagination."""
+"""Snapshot-backed leveraged-instrument discovery, filtering, and pagination."""
 from __future__ import annotations
 
 import asyncio
@@ -45,34 +45,137 @@ def _normalize_candidate(item: Any, product_type: ProductType) -> dict[str, Any]
     bid, ask = raw.get("buyPrice"), raw.get("sellPrice")
     underlying = raw.get("underlyingInstrument")
     if isinstance(underlying, dict):
-        underlying = {k: underlying[k] for k in ("orderbookId", "name", "instrumentType", "countryCode") if underlying.get(k) is not None}
-    return {k: v for k, v in {
-        "product_type": product_type,
-        "order_book_id": raw.get("orderbookId"),
-        "name": raw.get("name"),
-        "direction": raw.get("direction"),
-        "issuer": raw.get("issuer"),
-        "sub_type": raw.get("subType"),
-        "leverage": raw.get("leverage"),
-        "stop_loss": raw.get("stopLoss"),
-        "discovery_bid": bid,
-        "discovery_ask": ask,
-        "upstream_spread": raw.get("spread"),
-        "spread_percent_from_discovery_prices": _discovery_spread_percent(bid, ask),
-        "total_value_traded": raw.get("totalValueTraded"),
-        "underlying": underlying,
-    }.items() if v is not None}
+        underlying = {
+            key: underlying[key]
+            for key in ("orderbookId", "name", "instrumentType", "countryCode")
+            if underlying.get(key) is not None
+        }
+    return {
+        key: value
+        for key, value in {
+            "product_type": product_type,
+            "order_book_id": raw.get("orderbookId"),
+            "name": raw.get("name"),
+            "direction": raw.get("direction"),
+            "issuer": raw.get("issuer"),
+            "sub_type": raw.get("subType"),
+            "leverage": raw.get("leverage"),
+            "stop_loss": raw.get("stopLoss"),
+            "discovery_bid": bid,
+            "discovery_ask": ask,
+            "upstream_spread": raw.get("spread"),
+            "spread_percent_from_discovery_prices": _discovery_spread_percent(bid, ask),
+            "total_value_traded": raw.get("totalValueTraded"),
+            "underlying": underlying,
+        }.items()
+        if value is not None
+    }
 
 
 def _has_two_way_quote(candidate: dict[str, Any]) -> bool:
-    bid, ask = _number(candidate.get("discovery_bid")), _number(candidate.get("discovery_ask"))
+    bid = _number(candidate.get("discovery_bid"))
+    ask = _number(candidate.get("discovery_ask"))
     return bid is not None and ask is not None and bid > 0 and ask > 0
 
 
 def _candidate_rank(candidate: dict[str, Any]) -> tuple[Any, ...]:
     spread = _number(candidate.get("spread_percent_from_discovery_prices"))
     turnover = _number(candidate.get("total_value_traded")) or 0.0
-    return (0 if _has_two_way_quote(candidate) else 1, spread if spread is not None else float("inf"), -turnover, str(candidate.get("product_type") or ""), str(candidate.get("issuer") or ""), str(candidate.get("name") or ""), str(candidate.get("order_book_id") or ""))
+    return (
+        0 if _has_two_way_quote(candidate) else 1,
+        spread if spread is not None else float("inf"),
+        -turnover,
+        str(candidate.get("product_type") or ""),
+        str(candidate.get("issuer") or ""),
+        str(candidate.get("name") or ""),
+        str(candidate.get("order_book_id") or ""),
+    )
+
+
+@dataclass(frozen=True)
+class ScreenFilters:
+    issuers: tuple[str, ...] = ()
+    sub_types: tuple[str, ...] = ()
+    min_leverage: float | None = None
+    max_leverage: float | None = None
+    require_two_way_quote: bool = False
+    max_spread_percent: float | None = None
+    min_turnover: float | None = None
+
+
+def _validate_filters(filters: ScreenFilters) -> None:
+    if any(not value.strip() for value in (*filters.issuers, *filters.sub_types)):
+        raise ValueError("issuer and sub_type filters must not contain blank values")
+    if filters.min_leverage is not None and filters.min_leverage < 0:
+        raise ValueError("min_leverage must be >= 0")
+    if filters.max_leverage is not None and filters.max_leverage < 0:
+        raise ValueError("max_leverage must be >= 0")
+    if (
+        filters.min_leverage is not None
+        and filters.max_leverage is not None
+        and filters.min_leverage > filters.max_leverage
+    ):
+        raise ValueError("min_leverage must be <= max_leverage")
+    if filters.max_spread_percent is not None and filters.max_spread_percent < 0:
+        raise ValueError("max_spread_percent must be >= 0")
+    if filters.min_turnover is not None and filters.min_turnover < 0:
+        raise ValueError("min_turnover must be >= 0")
+
+
+def _filter_payload(filters: ScreenFilters) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    if filters.issuers:
+        payload["issuers"] = list(filters.issuers)
+    if filters.sub_types:
+        payload["sub_types"] = list(filters.sub_types)
+    if filters.min_leverage is not None:
+        payload["min_leverage"] = filters.min_leverage
+    if filters.max_leverage is not None:
+        payload["max_leverage"] = filters.max_leverage
+    if filters.require_two_way_quote:
+        payload["require_two_way_quote"] = True
+    if filters.max_spread_percent is not None:
+        payload["max_spread_percent"] = filters.max_spread_percent
+    if filters.min_turnover is not None:
+        payload["min_turnover"] = filters.min_turnover
+    return payload
+
+
+def _matches_filters(candidate: dict[str, Any], filters: ScreenFilters) -> bool:
+    if filters.issuers:
+        issuer = str(candidate.get("issuer") or "").strip().casefold()
+        allowed = {value.strip().casefold() for value in filters.issuers}
+        if issuer not in allowed:
+            return False
+
+    if filters.sub_types:
+        sub_type = str(candidate.get("sub_type") or "").strip().casefold()
+        allowed = {value.strip().casefold() for value in filters.sub_types}
+        if sub_type not in allowed:
+            return False
+
+    leverage = _number(candidate.get("leverage"))
+    if filters.min_leverage is not None and (leverage is None or leverage < filters.min_leverage):
+        return False
+    if filters.max_leverage is not None and (leverage is None or leverage > filters.max_leverage):
+        return False
+
+    if filters.require_two_way_quote and not _has_two_way_quote(candidate):
+        return False
+
+    spread = _number(candidate.get("spread_percent_from_discovery_prices"))
+    if filters.max_spread_percent is not None and (
+        spread is None or spread > filters.max_spread_percent
+    ):
+        return False
+
+    turnover = _number(candidate.get("total_value_traded"))
+    if filters.min_turnover is not None and (
+        turnover is None or turnover < filters.min_turnover
+    ):
+        return False
+
+    return True
 
 
 @dataclass(frozen=True)
@@ -81,6 +184,7 @@ class _Snapshot:
     underlying_order_book_id: str
     direction: Direction
     product_types: tuple[ProductType, ...]
+    filters: ScreenFilters
     families: dict[str, dict[str, Any]]
     products: list[dict[str, Any]]
     started_at: datetime
@@ -88,6 +192,7 @@ class _Snapshot:
     duration_ms: float
     scanned_count: int
     quote_complete_count: int
+    eligible_quote_complete_count: int
     expires_at: datetime
 
 
@@ -99,13 +204,13 @@ class _SnapshotStore:
     def put(self, snapshot: _Snapshot) -> None:
         now = datetime.now(timezone.utc)
         with self._lock:
-            self._data = {k: v for k, v in self._data.items() if v.expires_at > now}
+            self._data = {key: value for key, value in self._data.items() if value.expires_at > now}
             self._data[snapshot.snapshot_id] = snapshot
 
     def get(self, snapshot_id: str) -> _Snapshot:
         now = datetime.now(timezone.utc)
         with self._lock:
-            self._data = {k: v for k, v in self._data.items() if v.expires_at > now}
+            self._data = {key: value for key, value in self._data.items() if value.expires_at > now}
             snapshot = self._data.get(snapshot_id)
         if snapshot is None:
             raise ValueError("snapshot_id was not found or has expired; create a new leveraged screen snapshot")
@@ -125,13 +230,16 @@ def _page(snapshot: _Snapshot, offset: int, page_size: int) -> dict[str, Any]:
         "underlying_order_book_id": snapshot.underlying_order_book_id,
         "direction": snapshot.direction,
         "product_types": list(snapshot.product_types),
+        "filters": _filter_payload(snapshot.filters),
         "families": snapshot.families,
         "snapshot": {
             "started_at": snapshot.started_at.isoformat(),
             "completed_at": snapshot.completed_at.isoformat(),
             "duration_ms": snapshot.duration_ms,
             "scanned_count": snapshot.scanned_count,
+            "eligible_count": total,
             "quote_complete_count": snapshot.quote_complete_count,
+            "eligible_quote_complete_count": snapshot.eligible_quote_complete_count,
             "atomic": False,
             "comparison_complete": all("error" not in family for family in snapshot.families.values()),
             "expires_at": snapshot.expires_at.isoformat(),
@@ -148,10 +256,12 @@ def _page(snapshot: _Snapshot, offset: int, page_size: int) -> dict[str, Any]:
         "returned": returned,
         "ranking": _RANKING,
         "data_note": (
-            "The complete matching universe was ranked once when this snapshot was created. "
-            "Calls using snapshot_id reuse the frozen ranking and do not refetch market data. "
-            "Initial quote collection is non-atomic because upstream pages are sequential. "
-            "If pagination.has_more is true, this response is only a partial view of the snapshot."
+            "The complete underlying/direction/product-family universe was scanned once, then "
+            "the reported filters were applied before ranking. pagination.total is the eligible "
+            "filtered count; snapshot.scanned_count is the full scanned count. Calls using "
+            "snapshot_id reuse the frozen ranking and do not refetch market data. Initial quote "
+            "collection is non-atomic because upstream pages are sequential. If pagination.has_more "
+            "is true, this response is only a partial view of the snapshot."
         ),
     }
 
@@ -160,11 +270,26 @@ class LeveragedScreenService:
     def __init__(self, client: AvanzaClient) -> None:
         self._market = MarketDataService(client)
 
-    async def _collect_certificates(self, underlying_order_book_id: str, direction: Direction, _legacy_limit: int | None = None) -> dict[str, Any]:
+    async def _collect_certificates(
+        self,
+        underlying_order_book_id: str,
+        direction: Direction,
+        _legacy_limit: int | None = None,
+    ) -> dict[str, Any]:
         items: list[Any] = []
         offset, total = 0, None
         while True:
-            response = await self._market.filter_certificates(CertificateFilterRequest(filter=CertificateFilter(directions=[direction], underlyingInstruments=[underlying_order_book_id]), offset=offset, limit=_PAGE_SIZE, sortBy=SortBy(field="name", order="asc")))
+            response = await self._market.filter_certificates(
+                CertificateFilterRequest(
+                    filter=CertificateFilter(
+                        directions=[direction],
+                        underlyingInstruments=[underlying_order_book_id],
+                    ),
+                    offset=offset,
+                    limit=_PAGE_SIZE,
+                    sortBy=SortBy(field="name", order="asc"),
+                )
+            )
             page = response.certificates
             items.extend(page)
             total = response.totalNumberOfOrderbooks
@@ -172,13 +297,33 @@ class LeveragedScreenService:
             if not page or len(page) < _PAGE_SIZE or (total is not None and offset >= total):
                 break
         products = [_normalize_candidate(item, "certificate") for item in items]
-        return {"products": products, "upstream_total": total, "scanned_count": len(items), "quote_complete_count": sum(_has_two_way_quote(item) for item in products)}
+        return {
+            "products": products,
+            "upstream_total": total,
+            "scanned_count": len(items),
+            "quote_complete_count": sum(_has_two_way_quote(item) for item in products),
+        }
 
-    async def _collect_warrants(self, underlying_order_book_id: str, direction: Direction, _legacy_limit: int | None = None) -> dict[str, Any]:
+    async def _collect_warrants(
+        self,
+        underlying_order_book_id: str,
+        direction: Direction,
+        _legacy_limit: int | None = None,
+    ) -> dict[str, Any]:
         items: list[Any] = []
         offset, total = 0, None
         while True:
-            response = await self._market.filter_warrants(WarrantFilterRequest(filter=WarrantFilter(directions=[direction], underlyingInstruments=[underlying_order_book_id]), offset=offset, limit=_PAGE_SIZE, sortBy=SortBy(field="name", order="asc")))
+            response = await self._market.filter_warrants(
+                WarrantFilterRequest(
+                    filter=WarrantFilter(
+                        directions=[direction],
+                        underlyingInstruments=[underlying_order_book_id],
+                    ),
+                    offset=offset,
+                    limit=_PAGE_SIZE,
+                    sortBy=SortBy(field="name", order="asc"),
+                )
+            )
             page = response.warrants
             items.extend(page)
             total = response.totalNumberOfOrderbooks
@@ -186,40 +331,112 @@ class LeveragedScreenService:
             if not page or len(page) < _PAGE_SIZE or (total is not None and offset >= total):
                 break
         products = [_normalize_candidate(item, "warrant") for item in items]
-        return {"products": products, "upstream_total": total, "scanned_count": len(items), "quote_complete_count": sum(_has_two_way_quote(item) for item in products)}
+        return {
+            "products": products,
+            "upstream_total": total,
+            "scanned_count": len(items),
+            "quote_complete_count": sum(_has_two_way_quote(item) for item in products),
+        }
 
-    async def screen(self, underlying_order_book_id: str, direction: Direction, product_types: list[ProductType], page_size: int) -> dict[str, Any]:
+    async def screen(
+        self,
+        underlying_order_book_id: str,
+        direction: Direction,
+        product_types: list[ProductType],
+        page_size: int,
+        filters: ScreenFilters | None = None,
+    ) -> dict[str, Any]:
         if not product_types or len(set(product_types)) != len(product_types):
             raise ValueError("product_types must contain unique product types")
         if page_size < 1:
             raise ValueError("page_size must be at least 1")
 
+        selected_filters = filters or ScreenFilters()
+        _validate_filters(selected_filters)
+
         started_at, timer = datetime.now(timezone.utc), perf_counter()
-        collectors = {"certificate": self._collect_certificates, "warrant": self._collect_warrants}
-        results = await asyncio.gather(*(collectors[t](underlying_order_book_id, direction) for t in product_types), return_exceptions=True)
+        collectors = {
+            "certificate": self._collect_certificates,
+            "warrant": self._collect_warrants,
+        }
+        results = await asyncio.gather(
+            *(collectors[product_type](underlying_order_book_id, direction) for product_type in product_types),
+            return_exceptions=True,
+        )
         completed_at = datetime.now(timezone.utc)
 
         families: dict[str, dict[str, Any]] = {}
-        products: list[dict[str, Any]] = []
+        all_products: list[dict[str, Any]] = []
         scanned_count = quote_complete_count = 0
         for product_type, result in zip(product_types, results, strict=True):
             if isinstance(result, Exception):
-                families[product_type] = {"upstream_total": None, "scanned_count": 0, "quote_complete_count": 0, "error": "upstream_unavailable" if isinstance(result, AvanzaError) else "screen_failed"}
+                families[product_type] = {
+                    "upstream_total": None,
+                    "scanned_count": 0,
+                    "quote_complete_count": 0,
+                    "eligible_count": 0,
+                    "error": "upstream_unavailable" if isinstance(result, AvanzaError) else "screen_failed",
+                }
                 continue
-            families[product_type] = {k: result[k] for k in ("upstream_total", "scanned_count", "quote_complete_count")}
+            families[product_type] = {
+                key: result[key]
+                for key in ("upstream_total", "scanned_count", "quote_complete_count")
+            }
             scanned_count += result["scanned_count"]
             quote_complete_count += result["quote_complete_count"]
-            products.extend(result["products"])
+            all_products.extend(result["products"])
+
+        products = [
+            candidate
+            for candidate in all_products
+            if _matches_filters(candidate, selected_filters)
+        ]
+        for product_type in product_types:
+            families[product_type]["eligible_count"] = sum(
+                candidate.get("product_type") == product_type for candidate in products
+            )
 
         products.sort(key=_candidate_rank)
-        snapshot = _Snapshot(uuid4().hex, underlying_order_book_id, direction, tuple(product_types), families, products, started_at, completed_at, round((perf_counter() - timer) * 1000, 3), scanned_count, quote_complete_count, completed_at + _SNAPSHOT_TTL)
+        eligible_quote_complete_count = sum(_has_two_way_quote(candidate) for candidate in products)
+        snapshot = _Snapshot(
+            uuid4().hex,
+            underlying_order_book_id,
+            direction,
+            tuple(product_types),
+            selected_filters,
+            families,
+            products,
+            started_at,
+            completed_at,
+            round((perf_counter() - timer) * 1000, 3),
+            scanned_count,
+            quote_complete_count,
+            eligible_quote_complete_count,
+            completed_at + _SNAPSHOT_TTL,
+        )
         _SNAPSHOTS.put(snapshot)
         return _page(snapshot, 0, page_size)
 
-    def get_page(self, snapshot_id: str, underlying_order_book_id: str, direction: Direction, offset: int, page_size: int) -> dict[str, Any]:
+    def get_page(
+        self,
+        snapshot_id: str,
+        underlying_order_book_id: str,
+        direction: Direction,
+        offset: int,
+        page_size: int,
+        product_types: list[ProductType] | None = None,
+        filters: ScreenFilters | None = None,
+    ) -> dict[str, Any]:
         if offset < 0 or page_size < 1:
             raise ValueError("offset must be >= 0 and page_size must be >= 1")
+        if filters is not None:
+            _validate_filters(filters)
+
         snapshot = _SNAPSHOTS.get(snapshot_id)
         if snapshot.underlying_order_book_id != underlying_order_book_id or snapshot.direction != direction:
             raise ValueError("snapshot_id does not match the supplied underlying_order_book_id and direction")
+        if product_types is not None and set(product_types) != set(snapshot.product_types):
+            raise ValueError("product_types do not match the stored snapshot")
+        if filters is not None and filters != snapshot.filters:
+            raise ValueError("filters do not match the stored snapshot")
         return _page(snapshot, offset, page_size)
