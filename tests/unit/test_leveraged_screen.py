@@ -53,6 +53,7 @@ async def test_snapshot_pagination_reuses_same_ranked_data_without_refetching():
     first = await service.screen("4478", "long", ["certificate", "warrant"], 1)
     assert first["snapshot"]["comparison_complete"] is True
     assert first["snapshot"]["scanned_count"] == 2
+    assert "complete_result_set" not in first["pagination"]
     assert first["pagination"] == {
         "total": 2,
         "offset": 0,
@@ -60,7 +61,6 @@ async def test_snapshot_pagination_reuses_same_ranked_data_without_refetching():
         "returned": 1,
         "has_more": True,
         "next_offset": 1,
-        "complete_result_set": False,
     }
 
     calls = (len(fake.certificate_calls), len(fake.warrant_calls))
