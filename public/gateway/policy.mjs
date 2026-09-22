@@ -38,6 +38,7 @@ export const DEFAULT_ALLOWED_TOOLS = [
   'get_marketmaker_chart',
   'screen_leveraged_instruments',
   'screen_options',
+  'enrich_option_snapshot',
 ].join(',');
 
 export function parseAllowedTools(value) {

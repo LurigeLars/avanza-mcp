@@ -9,14 +9,15 @@ import {
   rewriteResponse,
 } from '../../public/gateway/policy.mjs';
 
-test('default public allowlist contains the current 36 read-only Avanza tools', () => {
+test('default public allowlist contains the current 37 read-only Avanza tools', () => {
   const allowed = parseAllowedTools();
-  assert.equal(allowed.size, 36);
+  assert.equal(allowed.size, 37);
   assert.equal(allowed.has('search_instruments'), true);
   assert.equal(allowed.has('get_orderbook'), true);
   assert.equal(allowed.has('get_marketmaker_chart'), true);
   assert.equal(allowed.has('screen_options'), true);
-  assert.equal(DEFAULT_ALLOWED_TOOLS.split(',').length, 36);
+  assert.equal(allowed.has('enrich_option_snapshot'), true);
+  assert.equal(DEFAULT_ALLOWED_TOOLS.split(',').length, 37);
 });
 
 test('explicit ALLOWED_TOOLS override is authoritative', () => {

@@ -22,4 +22,4 @@ async def test_public_gateway_allowlist_matches_current_read_only_tool_surface()
         server_tools = {tool.name for tool in await client.list_tools()}
 
     assert public_tools == server_tools
-    assert len(public_tools) == 36
+    assert len(public_tools) == 37
