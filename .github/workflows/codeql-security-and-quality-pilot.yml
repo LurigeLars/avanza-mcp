@@ -1,0 +1,60 @@
+name: CodeQL security-and-quality pilot
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "**/*.py"
+      - "**/*.js"
+      - "**/*.mjs"
+      - "**/*.cjs"
+      - "**/*.ts"
+      - "**/*.tsx"
+      - "package*.json"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/codeql-security-and-quality-pilot.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        language:
+          - python
+          - javascript-typescript
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          queries: security-and-quality
+
+      - name: Analyze without uploading to Code Scanning
+        id: analyze
+        uses: github/codeql-action/analyze@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
+        with:
+          category: /pilot/security-and-quality/${{ matrix.language }}
+          output: codeql-results
+          upload: never
+          upload-database: false
+
+      - name: Upload SARIF artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0 # v7.0.1
+        with:
+          name: codeql-security-and-quality-${{ matrix.language }}
+          path: codeql-results/
+          if-no-files-found: error
+          retention-days: 7
