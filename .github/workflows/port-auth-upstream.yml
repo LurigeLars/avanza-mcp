@@ -1,29 +1,241 @@
-name: Validate authenticated read-only port
+name: Finalize authenticated read-only branch
 
 on:
   push:
     branches: [feat/authenticated-readonly-v2]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  test:
-    strategy:
-      matrix:
-        python-version: ["3.12", "3.13"]
+  finalize:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
-    env:
-      UV_PYTHON: ${{ matrix.python-version }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: feat/authenticated-readonly-v2
       - uses: actions/setup-python@v7
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.12"
       - uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-      - run: uv sync --locked --all-extras
-      - run: uv run --locked pytest tests/unit -v
-      - run: node --test tests/gateway/*.test.mjs
-      - run: uv build
+      - name: Harden endpoint allowlist and align docs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          accounts = Path("src/avanza_mcp/client/accounts.py")
+          text = accounts.read_text()
+          marker = '_STOP_LOSSES = "/_api/trading/stoploss"\n'
+          block = r'''
+
+          _ALLOWED_ACCOUNT_EXACT = {
+              ("GET", _ACCOUNTS),
+              ("GET", _POSITIONS),
+              ("GET", _TRANSACTIONS),
+              ("GET", _WATCHLISTS),
+              ("GET", _OFFERS),
+              ("GET", _DEALS),
+              ("GET", _ORDERS),
+              ("GET", _STOP_LOSSES),
+              ("POST", _INSIGHTS),
+          }
+
+
+          def _account_request_allowed(method: str, path: str) -> bool:
+              method = method.upper()
+              if (method, path) in _ALLOWED_ACCOUNT_EXACT:
+                  return True
+              if method != "GET":
+                  return False
+
+              credit_prefix = _CREDIT_INFO.split("{", 1)[0]
+              if path.startswith(credit_prefix):
+                  return path[len(credit_prefix):] in {"credited", "uncredited"}
+
+              for template in (_PRICE_ALERTS, _NEWS, _FORUM, _INSIDER_TRANSACTIONS):
+                  prefix = template.split("{", 1)[0]
+                  if path.startswith(prefix):
+                      suffix = path[len(prefix):]
+                      return suffix.isascii() and suffix.isdecimal() and bool(suffix)
+              return False
+          '''
+          if "_ALLOWED_ACCOUNT_EXACT" not in text:
+              if marker not in text:
+                  raise SystemExit("account endpoint marker missing")
+              text = text.replace(marker, marker + block, 1)
+
+          request_marker = '    async def _request(self, method: str, path: str, **kwargs) -> Any:\n'
+          guard = (
+              '        if not _account_request_allowed(method, path):\n'
+              '            raise AccountReadError("request_not_allowed")\n'
+          )
+          if guard not in text:
+              if request_marker not in text:
+                  raise SystemExit("account request marker missing")
+              text = text.replace(request_marker, request_marker + guard, 1)
+          accounts.write_text(text)
+
+          tests = Path("tests/unit/test_account_tools.py")
+          text = tests.read_text()
+          text = text.replace(
+              "from avanza_mcp.client.accounts import AccountAuthExpired, AccountClient",
+              "from avanza_mcp.client.accounts import AccountAuthExpired, AccountClient, AccountReadError",
+          )
+          test_block = r'''
+
+
+          async def test_unapproved_account_request_is_rejected_before_network():
+              class NoNetwork:
+                  async def request_authenticated(self, method, path, **kwargs):
+                      raise AssertionError("network must not be reached")
+
+              account_client = AccountClient(NoNetwork())  # type: ignore[arg-type]
+              for method, path in (
+                  ("DELETE", "/_api/trading/rest/orders"),
+                  ("POST", "/_api/trading/rest/orders"),
+                  ("GET", "/_api/trading/rest/orders/123"),
+                  ("GET", "/_api/market-guide/news/not-a-number"),
+              ):
+                  with pytest.raises(AccountReadError, match="request_not_allowed"):
+                      await account_client._request(method, path)
+          '''
+          if "test_unapproved_account_request_is_rejected_before_network" not in text:
+              text += test_block
+          tests.write_text(text)
+
+          readme = Path("README.md")
+          text = readme.read_text()
+          text = text.replace(
+              "modes restrict calls to the explicit current 35-tool read-only allowlist,",
+              "modes restrict calls to the explicit current 37-tool read-only allowlist,",
+          )
+          old = (
+              "This project does not provide a hosted endpoint. The current tool surface has no\n"
+              "Avanza account access and cannot place orders.\n"
+          )
+          new = (
+              "This project does not provide a hosted endpoint. The public connector remains\n"
+              "credential-free and cannot access Avanza accounts or place orders.\n\n"
+              "Optional authenticated read-only access is available locally with `AVANZA_MCP_AUTH=1`.\n"
+              "It uses a loopback BankID flow, stores the verified session in the native OS credential\n"
+              "store, and reuses that session for market-data requests plus selected portfolio/activity\n"
+              "reads. It has no order-placement, order-edit, cancellation, transfer, or withdrawal tools.\n"
+              "The public Cloudflare gateway does not expose authenticated account tools.\n\n"
+              "Intentionally not exposed by the authenticated MCP surface: `get_credit_info`,\n"
+              "`get_current_offers`, and `get_forum_posts`. Their client implementations are retained\n"
+              "for future reviewed activation if a concrete workflow requires them.\n"
+          )
+          if old in text:
+              text = text.replace(old, new, 1)
+          elif "Optional authenticated read-only access is available locally" not in text:
+              raise SystemExit("README account-access paragraph not found")
+          readme.write_text(text)
+
+          architecture = """# Avanza Authenticated Read-Only — Security Architecture
+
+          Status: implemented candidate on `feat/authenticated-readonly-v2`; offline verification complete, real BankID/live-account validation still required before remote enablement.
+
+          ## Boundary
+
+          The default/public Avanza MCP remains credential-free. Authentication is opt-in with `AVANZA_MCP_AUTH=1` and starts a separate authenticated server composition. The authenticated process mounts the existing market tools so a verified Avanza session can be reused for realtime-capable market requests, and adds a bounded read-only account/activity surface.
+
+          Authentication uses Avanza's BankID web-session flow. The temporary consent/QR listener binds only to `127.0.0.1`; credentials are never accepted as MCP arguments. Verified cookies and `X-SecurityToken` are persisted only through the native OS credential store. On Windows this is Windows Credential Manager.
+
+          ## Exposed authenticated tools
+
+          - session: `connect_avanza`, `disconnect_avanza`, `get_auth_status`
+          - portfolio: `get_accounts`, `get_holdings`, `get_transactions`, `get_portfolio_insights`
+          - saved data/research: `get_watchlists`, `get_price_alerts`, `get_instrument_news`, `get_insider_transactions`
+          - trading state, read-only: `get_active_orders`, `get_deals`, `get_stop_loss_orders`
+
+          Supported in the internal client but intentionally not exposed: `get_credit_info`, `get_current_offers`, `get_forum_posts`. This keeps the model tool catalog and attack surface smaller; activate only after a concrete need and review.
+
+          ## Hard security properties
+
+          - No order placement, modification, cancellation, transfer, withdrawal, or settings mutation is implemented.
+          - The account client enforces an explicit HTTP method/path allowlist before network execution.
+          - Authenticated market requests fail closed on expired authentication; they never silently retry anonymously and return delayed data as if it were authenticated.
+          - Flexible authenticated market payloads are recursively stripped of credential/identity-like fields before model validation/output.
+          - Account outputs use explicit Pydantic projections with `extra="forbid"`; raw authenticated responses are not returned.
+          - Session material has redacted representations and sanitized errors.
+          - The public gateway keeps its independent public-tool allowlist and does not expose account tools.
+          - BankID UI never starts automatically on server startup or auth expiry; `connect_avanza` is an explicit user action.
+
+          ## Out of scope
+
+          Trading writes are YAGNI. If needed later, build them as a separately reviewed capability with an explicit human authorization boundary; do not extend the present read-only request allowlist.
+
+          ## Validation gates
+
+          Completed offline: Python 3.12/3.13 unit tests, gateway tests, package build, BankID protocol tests, native-keyring failure tests, public/auth surface tests, auth-expiry fail-closed tests, secret-redaction tests, and account request-allowlist negative tests.
+
+          Before remote authenticated access is enabled:
+          1. Run bounded local BankID login with the owner present.
+          2. Verify session persistence/revocation in Windows Credential Manager.
+          3. Compare authenticated vs anonymous quote/order-book freshness and `isRealTime` behavior during market hours.
+          4. Verify account/holding/order/deal/stop-loss projections against live responses.
+          5. Review the exact remote gateway allowlist; authenticated account tools must not be added to the existing public connector by accident.
+          """
+          Path("docs/security/account-read-architecture.md").write_text(
+              "\n".join(line[10:] if line.startswith("          ") else line for line in architecture.splitlines()) + "\n"
+          )
+
+          provenance = """# Avanza authentication protocol provenance
+
+          Status: current provenance record for the authenticated read-only implementation.
+
+          ## Current implementation source
+
+          The BankID implementation is selectively ported from `AnteWall/avanza-mcp`:
+          - feature commit: `e03009672e9c18e8575497768c2755c2fd20a279`
+          - CI/keyring fix: `4a26a8d4ff7b20f5878865780ac7221b5beb765b`
+          - upstream license: MIT
+
+          Relevant protocol endpoints:
+          - `POST /_api/authentication/v2/sessions/bankid`
+          - `POST /_api/authentication/v2/sessions/bankid/restart`
+          - `POST /_api/authentication/v2/sessions/bankid/collect`
+          - `POST /_api/authentication/v2/sessions/bankid/cancel`
+          - `GET /_api/authentication/session/info/session`
+          - `DELETE /_api/authentication/sessions/webtoken`
+
+          The implementation keeps an isolated cookie jar, verifies the resulting Avanza session, captures `X-SecurityToken`, and stores only the verified session material in the native OS credential store.
+
+          ## Historical reference
+
+          The older `LurigeLars/avanza-market-scan` authentication path used Avanza username/password plus optional TOTP and was derived from `Qluxzz/avanza`. That historical flow remains useful protocol provenance but is not the credential model used here. In particular, this implementation does not accept or store an Avanza password or TOTP secret.
+
+          Independent historical corroboration also existed in `AnteWall/avanza-rs` and `Eitraz/avanza-api`. Those repositories are references only and are not runtime dependencies.
+
+          ## Local modifications to upstream auth
+
+          This fork deliberately differs from upstream by:
+          - preserving the fork's FastMCP 4/public market contracts;
+          - disabling automatic BankID browser launch;
+          - failing closed instead of silently falling back to anonymous market data after auth expiry;
+          - adding authenticated-payload redaction;
+          - enforcing a fixed account HTTP method/path allowlist;
+          - hiding `get_credit_info`, `get_current_offers`, and `get_forum_posts` from the MCP catalog;
+          - retaining the existing public gateway as credential-free.
+
+          No real account credential or session material is committed to the repository or used in offline tests.
+          """
+          Path("docs/security/avanza-auth-provenance.md").write_text(
+              "\n".join(line[10:] if line.startswith("          ") else line for line in provenance.splitlines()) + "\n"
+          )
+          PY
+
+          uv sync --locked --all-extras
+          uv run --locked pytest tests/unit -q
+          node --test tests/gateway/*.test.mjs
+          uv build
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/port-auth-upstream.yml
+          git add README.md docs/security src/avanza_mcp/client/accounts.py tests/unit/test_account_tools.py
+          git commit -m "docs(auth): finalize read-only security boundary"
+          git push origin HEAD:feat/authenticated-readonly-v2
