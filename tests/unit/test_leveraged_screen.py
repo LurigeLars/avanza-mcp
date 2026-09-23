@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -169,6 +170,68 @@ async def test_invalid_filter_range_is_rejected():
             100,
             ScreenFilters(min_leverage=6, max_leverage=5),
         )
+
+
+class ConcurrentPaginatedWarrantMarket:
+    def __init__(self):
+        self.warrant_calls = []
+        self.in_flight = 0
+        self.max_in_flight = 0
+
+    async def filter_warrants(self, request):
+        self.warrant_calls.append(request)
+        if request.offset == 0:
+            return SimpleNamespace(
+                warrants=[
+                    FakeItem(
+                        orderbookId=str(index),
+                        name=f"FIRST {index:03d}",
+                        direction="long",
+                        issuer="Issuer A",
+                        buyPrice=10.0,
+                        sellPrice=10.1,
+                    )
+                    for index in range(100)
+                ],
+                totalNumberOfOrderbooks=401,
+            )
+
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        try:
+            await asyncio.sleep(0.01)
+            remaining = min(100, 401 - request.offset)
+            return SimpleNamespace(
+                warrants=[
+                    FakeItem(
+                        orderbookId=str(request.offset + index),
+                        name=f"PAGE {request.offset + index:03d}",
+                        direction="long",
+                        issuer="Issuer A",
+                        buyPrice=10.0,
+                        sellPrice=10.1,
+                    )
+                    for index in range(remaining)
+                ],
+                totalNumberOfOrderbooks=401,
+            )
+        finally:
+            self.in_flight -= 1
+
+
+@pytest.mark.asyncio
+async def test_remaining_warrant_pages_use_bounded_concurrency_after_first_page():
+    service = LeveragedScreenService(object())
+    fake = ConcurrentPaginatedWarrantMarket()
+    service._market = fake
+
+    result = await service.screen("4478", "long", ["warrant"], 1)
+
+    assert {call.offset for call in fake.warrant_calls} == {0, 100, 200, 300, 400}
+    assert fake.max_in_flight == 4
+    assert result["snapshot"]["scanned_count"] == 401
+    assert result["families"]["warrant"]["scanned_count"] == 401
+    assert result["pagination"]["total"] == 401
 
 
 class PaginatedWarrantMarket:
