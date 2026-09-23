@@ -1,143 +1,44 @@
-# Avanza Account Read — Security Architecture
+# Avanza Authenticated Read-Only — Security Architecture
 
-Status: design only. No account authentication or private-account code is implemented on this branch.
+Status: implemented candidate on `feat/authenticated-readonly-v2`; offline verification complete, real BankID/live-account validation still required before remote enablement.
 
-## Objective
+## Boundary
 
-Add future read-only account access without weakening the existing public-market-data MCP boundary.
+The default/public Avanza MCP remains credential-free. Authentication is opt-in with `AVANZA_MCP_AUTH=1` and starts a separate authenticated server composition. The authenticated process mounts the existing market tools so a verified Avanza session can be reused for realtime-capable market requests, and adds a bounded read-only account/activity surface.
 
-The design must assume that account credentials and authenticated sessions are highly sensitive even when the account capability is read-only. Protocol provenance and the pinned upstream comparison are documented in [`avanza-auth-provenance.md`](avanza-auth-provenance.md).
+Authentication uses Avanza's BankID web-session flow. The temporary consent/QR listener binds only to `127.0.0.1`; credentials are never accepted as MCP arguments. Verified cookies and `X-SecurityToken` are persisted only through the native OS credential store. On Windows this is Windows Credential Manager.
 
-## Non-negotiable security requirements
+## Exposed authenticated tools
 
-1. **No plaintext account credentials at rest.**
-   - Never store username, password, recovery data, session secrets or equivalent authentication material in Git, `.env`, JSON/YAML/TOML config, shell history, batch files, logs, test fixtures, crash reports or temporary files.
-   - Do not accept account credentials as MCP tool arguments.
-   - Do not pass account credentials through Cloudflare, the public gateway, ChatGPT, Codex or Claude Code.
+- session: `connect_avanza`, `disconnect_avanza`, `get_auth_status`
+- portfolio: `get_accounts`, `get_holdings`, `get_transactions`, `get_portfolio_insights`
+- saved data/research: `get_watchlists`, `get_price_alerts`, `get_instrument_news`, `get_insider_transactions`
+- trading state, read-only: `get_active_orders`, `get_deals`, `get_stop_loss_orders`
 
-2. **Use an OS-protected secret store.**
-   - On Windows, credentials must be stored using an operating-system protected facility such as Windows Credential Manager / DPAPI-backed storage.
-   - The implementation must not invent its own encryption format or persist an application-managed decryption key beside encrypted data.
-   - Secret retrieval must occur only inside the local account process.
+Supported in the internal client but intentionally not exposed: `get_credit_info`, `get_current_offers`, `get_forum_posts`. This keeps the model tool catalog and attack surface smaller; activate only after a concrete need and review.
 
-3. **Separate trust boundary from public market data.**
-   - Existing public Avanza MCP remains read-only public market data.
-   - Account access runs as a separate local process/profile, proposed loopback endpoint: `127.0.0.1:8768/mcp`.
-   - Account tools are not added to the existing public 34-tool allowlist.
-   - No order, transfer, withdrawal, settings-change or other write capability is permitted in the account-read process.
+## Hard security properties
 
-4. **Fail closed.**
-   - If the OS secret store is unavailable, authentication fails.
-   - If a requested operation is not on the explicit account-read allowlist, deny it.
-   - Do not fall back to environment variables, plaintext files, command-line credentials or interactive credential prompts through MCP.
+- No order placement, modification, cancellation, transfer, withdrawal, or settings mutation is implemented.
+- The account client enforces an explicit HTTP method/path allowlist before network execution.
+- Authenticated market requests fail closed on expired authentication; they never silently retry anonymously and return delayed data as if it were authenticated.
+- Flexible authenticated market payloads are recursively stripped of credential/identity-like fields before model validation/output.
+- Account outputs use explicit Pydantic projections with `extra="forbid"`; raw authenticated responses are not returned.
+- Session material has redacted representations and sanitized errors.
+- The public gateway keeps its independent public-tool allowlist and does not expose account tools.
+- BankID UI never starts automatically on server startup or auth expiry; `connect_avanza` is an explicit user action.
 
-5. **Minimize session exposure.**
-   - Prefer short-lived authenticated sessions.
-   - Keep session material in process memory where feasible.
-   - If session persistence is required, store it only through the same OS-protected secret mechanism and document the exact lifetime/revocation behavior.
-   - Never log cookies, bearer tokens, session IDs, authentication responses or full request/response headers.
+## Out of scope
 
-6. **Redact observability by construction.**
-   - Structured logs may contain tool name, duration, success/failure class and non-sensitive request IDs.
-   - Logs must not contain credentials, session material, portfolio payloads, account numbers, personal identifiers or raw authenticated responses.
-   - Error handling must map sensitive upstream errors to sanitized internal error classes.
+Trading writes are YAGNI. If needed later, build them as a separately reviewed capability with an explicit human authorization boundary; do not extend the present read-only request allowlist.
 
-7. **Authentication secrets are the protected boundary.**
-   - Username, password, recovery material, session cookies/tokens and any second-factor material must never leave the local account process.
-   - Read-only portfolio/account data returned by approved account tools may be sent through MCP to approved remote clients such as ChatGPT.
-   - Tool responses must still exclude authentication material and raw authenticated headers/cookies by construction.
+## Validation gates
 
-## Proposed topology
+Completed offline: Python 3.12/3.13 unit tests, gateway tests, package build, BankID protocol tests, native-keyring failure tests, public/auth surface tests, auth-expiry fail-closed tests, secret-redaction tests, and account request-allowlist negative tests.
 
-```text
-Public market data
-------------------
-ChatGPT / local agents
-        |
-existing public gateway / local HTTP
-        |
-Avanza public MCP :8767
-        |
-public Avanza endpoints
-
-
-Private account read
---------------------
-local client initially
-        |
-Avanza Account Read MCP :8768
-        |
-account-read service boundary
-        |---- OS-protected secret store
-        |
-authenticated Avanza session
-        |
-explicit read-only account endpoints
-```
-
-The account service must not share credential state with the public MCP process.
-
-## Tool metadata
-
-Public market-data tools:
-
-```text
-readOnlyHint: true
-destructiveHint: false
-openWorldHint: true
-```
-
-Private account-read tools are expected to be:
-
-```text
-readOnlyHint: true
-destructiveHint: false
-openWorldHint: false
-```
-
-Metadata is descriptive only; enforcement must exist in code and tests.
-
-## Remote access
-
-Read-only portfolio/account data may be exposed to ChatGPT through MCP. Authentication material may not.
-
-Use a separate Cloudflare Access application/AUD and preferably a separate hostname/gateway policy from the public market-data connector. The remote account surface must expose only explicit account-read tools, and the local account process must be the only component capable of retrieving credentials or session secrets.
-
-## Explicitly out of scope
-
-- Order placement
-- Order modification/cancellation
-- Money transfers or withdrawals
-- Account/profile/settings changes
-- Credential reset/recovery automation
-- Storing or automating a second factor or BankID secret
-- Reusing account credentials in test fixtures
-- Sending credentials to any model or remote MCP client
-
-Any future write or trading capability requires a separate trust boundary, a fresh security/code review of that capability, and explicit human authorization before activation.
-
-## Implementation gates
-
-Before account authentication code is allowed to move beyond design:
-
-1. Verify the provider authentication flow and supported session lifecycle without exposing real credentials.
-2. Select and threat-model the OS secret-storage mechanism.
-3. Define the exact read-only endpoint/tool allowlist.
-4. Add secret-redaction and negative tests before live-account testing.
-5. Run the repository's security/code review checklist against the exact candidate diff, including secret handling, network allowlists and negative tests.
-6. Perform bounded local live validation before enabling remote access.
-7. Verify that remote MCP responses contain portfolio/account data only and never authentication material or raw authenticated headers.
-
-## Testing requirements
-
-At minimum:
-
-- credential values never appear in process arguments, environment, logs or MCP messages;
-- unapproved account operations are rejected before network execution;
-- secret-store failure is fail-closed;
-- logs are verified free of secrets and private payloads;
-- session invalidation/revocation is tested;
-- process restart behavior does not create plaintext persistence;
-- public gateway cannot enumerate or call account-read tools;
-- public MCP continues functioning without access to account credentials.
-
+Before remote authenticated access is enabled:
+1. Run bounded local BankID login with the owner present.
+2. Verify session persistence/revocation in Windows Credential Manager.
+3. Compare authenticated vs anonymous quote/order-book freshness and `isRealTime` behavior during market hours.
+4. Verify account/holding/order/deal/stop-loss projections against live responses.
+5. Review the exact remote gateway allowlist; authenticated account tools must not be added to the existing public connector by accident.
