@@ -1,0 +1,348 @@
+name: Apply authenticated read-only implementation
+
+on:
+  push:
+    branches: [feat/authenticated-readonly-v2]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: feat/authenticated-readonly-v2
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Harden runtime and add isolated authenticated deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          python - <<'PY'
+          from pathlib import Path
+
+          server = Path("src/avanza_mcp/auth/server.py")
+          text = server.read_text()
+
+          start = text.index("        async def initialize_auth() -> None:\n")
+          end = text.index("        auth_task = asyncio.create_task(initialize_auth())\n", start)
+          replacement = (
+              "        async def initialize_auth() -> None:\n"
+              "            # Restore silently. BankID UI starts only via connect_avanza.\n"
+              "            await auth.restore()\n\n"
+          )
+          text = text[:start] + replacement + text[end:]
+
+          old_expired = (
+              "    async def expired() -> None:\n"
+              "        await auth.invalidate_session()\n"
+              "        await auth.open_browser()\n"
+          )
+          new_expired = (
+              "    async def expired() -> None:\n"
+              "        # Fail closed. Reauthentication is an explicit user action.\n"
+              "        await auth.invalidate_session()\n"
+          )
+          if old_expired not in text:
+              raise SystemExit("expired() block not found")
+          text = text.replace(old_expired, new_expired, 1)
+          text = text.replace(
+              "AVANZA_AUTH_EXPIRED: The local BankID flow was opened. Authenticate and retry.",
+              "AVANZA_AUTH_EXPIRED: Call connect_avanza, complete BankID locally, then retry.",
+          )
+          server.write_text(text)
+
+          base = Path("src/avanza_mcp/client/base.py")
+          text = base.read_text()
+          old = (
+              "                if (\n"
+              "                    authenticated\n"
+              "                    and response.status_code == 401\n"
+              "                    and self._session_invalidated is not None\n"
+              "                ):\n"
+              "                    await self._session_invalidated()\n"
+              "                    if self._client is None:\n"
+              "                        raise RuntimeError(\n"
+              "                            \"Client not initialized. Use async context manager.\"\n"
+              "                        )\n"
+              "                    response = await self._client.request(\n"
+              "                        method, path, params=params, json=json\n"
+              "                    )\n"
+          )
+          new = (
+              "                if (\n"
+              "                    authenticated\n"
+              "                    and response.status_code == 401\n"
+              "                    and self._session_invalidated is not None\n"
+              "                ):\n"
+              "                    # Never replace expired authenticated data with anonymous/delayed data.\n"
+              "                    await self._session_invalidated()\n"
+          )
+          if old not in text:
+              raise SystemExit("authenticated 401 fallback block not found")
+          base.write_text(text.replace(old, new, 1))
+
+          test_client = Path("tests/unit/test_client.py")
+          text = test_client.read_text()
+          start = text.index(
+              "    @respx.mock\n"
+              "    async def test_expired_session_falls_back_to_anonymous_request"
+          )
+          end = text.index("    @respx.mock\n", start + 20)
+          replacement = (
+              "    @respx.mock\n"
+              "    async def test_expired_authenticated_session_fails_closed(self, method):\n"
+              "        active = SessionMaterial((), \"sentinel-token\")\n"
+              "        invalidated = 0\n\n"
+              "        async def invalidate():\n"
+              "            nonlocal active, invalidated\n"
+              "            active = None\n"
+              "            invalidated += 1\n\n"
+              "        route = respx.route(\n"
+              "            method=method.upper(), url=\"https://www.avanza.se/test\"\n"
+              "        ).mock(return_value=httpx.Response(401, json={\"error\": \"expired\"}))\n"
+              "        client = AvanzaClient(\n"
+              "            session_provider=lambda: active,\n"
+              "            session_invalidated=invalidate,\n"
+              "            max_retries=1,\n"
+              "        )\n\n"
+              "        async with client:\n"
+              "            with pytest.raises(AvanzaAuthError):\n"
+              "                await getattr(client, method)(\"/test\")\n\n"
+              "        assert route.call_count == 1\n"
+              "        assert invalidated == 1\n"
+              "        assert route.calls.last.request.headers[\"x-securitytoken\"] == \"sentinel-token\"\n\n"
+          )
+          test_client.write_text(text[:start] + replacement + text[end:])
+
+          readme = Path("README.md")
+          text = readme.read_text()
+          section = """## Authenticated read-only access (experimental)
+
+Authenticated access is intentionally separate from the public server. The public MCP remains on
+`127.0.0.1:8767`; the authenticated server uses `127.0.0.1:8768` and stores verified Avanza
+session cookies plus the security token only in the operating system's native credential store.
+
+The authenticated surface is read-only. It adds account/portfolio state and lets the existing
+market-data tools reuse the authenticated session. No tool can place, edit, or cancel orders.
+
+Exposed authenticated tools: `connect_avanza`, `disconnect_avanza`, `get_auth_status`,
+`get_accounts`, `get_holdings`, `get_transactions`, `get_watchlists`, `get_price_alerts`,
+`get_portfolio_insights`, `get_instrument_news`, `get_insider_transactions`,
+`get_active_orders`, `get_deals`, and `get_stop_loss_orders`.
+
+Supported upstream but intentionally not exposed: `get_credit_info`, `get_current_offers`,
+and `get_forum_posts`. Re-evaluate them only when a concrete workflow requires them.
+
+On Windows, after `uv sync --locked`, install the separate loopback service with:
+
+```powershell
+pwsh -File .\\scripts\\windows\\install-auth-http-task.ps1
+```
+
+Remote ChatGPT access must use a separate Cloudflare Access application/tunnel and the explicit
+allowlist in `authenticated/gateway.env.example`. Do not reuse the public hostname/AUD for this
+privileged surface. Real BankID/session activation is a separate security gate.
+
+"""
+          marker = "## Tools\n"
+          if "## Authenticated read-only access (experimental)" not in text:
+              if marker not in text:
+                  raise SystemExit("README Tools marker missing")
+              text = text.replace(marker, section + marker, 1)
+          readme.write_text(text)
+          PY
+
+          rm -f docs/security/account-read-architecture.md docs/security/avanza-auth-provenance.md
+          mkdir -p docs/security authenticated scripts/windows
+
+          cat > docs/security/authenticated-readonly.md <<'DOC'
+          # Authenticated Avanza read-only architecture
+
+          Status: implementation candidate; real credentials not yet activated.
+
+          ## Boundary
+
+          - Public FastMCP stays on 127.0.0.1:8767 with no Avanza credentials.
+          - Authenticated FastMCP runs separately on 127.0.0.1:8768.
+          - BankID authentication uses the reviewed upstream implementation from AnteWall/avanza-mcp
+            (auth commit e0300967 plus fix 4a26a8d4), adapted to this fork.
+          - Session cookies and X-SecurityToken are persisted only in the native OS credential store.
+          - The remote gateway never receives Avanza session material; it forwards MCP calls/results only.
+          - Authenticated session expiry fails closed. A failed authenticated request is not retried anonymously.
+          - Reauthentication requires an explicit connect_avanza call; background startup/expiry never opens BankID UI.
+          - No order placement, modification, or cancellation capability is implemented.
+
+          ## Exposed authenticated capabilities
+
+          Session: connect_avanza, disconnect_avanza, get_auth_status.
+
+          Portfolio/account: get_accounts, get_holdings, get_transactions, get_portfolio_insights.
+
+          Read-only trading state: get_active_orders, get_deals, get_stop_loss_orders.
+
+          Saved/research: get_watchlists, get_price_alerts, get_instrument_news, get_insider_transactions.
+
+          The mounted public market-data tools may reuse the authenticated session for fresher/realtime data where
+          Avanza actually provides it. Realtime status must be verified from returned source fields; authentication
+          alone is not proof that a value is realtime.
+
+          ## Intentionally not exposed
+
+          Upstream implements get_credit_info, get_current_offers, and get_forum_posts. They remain unavailable
+          through this fork's authenticated MCP surface until a concrete workflow justifies the extra tool/context
+          and privacy or prompt-injection surface.
+
+          ## Activation gate
+
+          The implementation can be built and tested with mocked/synthetic sessions. Before real BankID/session
+          material is used, the integration requires an independent security review of the actual PR/diff and
+          explicit human approval after that review. Production activation must use a separate Cloudflare Access
+          application/hostname/AUD from the public MCP.
+          DOC
+
+          cat > scripts/windows/run-auth-http-hidden.py <<'PY'
+          import os
+          import sys
+          from contextlib import redirect_stderr, redirect_stdout
+          from pathlib import Path
+
+          PORT = int(os.environ.get("AVANZA_MCP_AUTH_PORT", "8768"))
+          LOG_DIR = Path(os.environ["LOCALAPPDATA"]) / "avanza-mcp"
+          LOG_FILE = LOG_DIR / "authenticated-http.log"
+          OLD_LOG_FILE = LOG_DIR / "authenticated-http.log.1"
+
+
+          def rotate_log() -> None:
+              LOG_DIR.mkdir(parents=True, exist_ok=True)
+              if LOG_FILE.exists() and LOG_FILE.stat().st_size >= 5 * 1024 * 1024:
+                  if OLD_LOG_FILE.exists():
+                      OLD_LOG_FILE.unlink()
+                  LOG_FILE.replace(OLD_LOG_FILE)
+
+
+          def main() -> int:
+              rotate_log()
+              with LOG_FILE.open("a", encoding="utf-8") as log:
+                  with redirect_stdout(log), redirect_stderr(log):
+                      from avanza_mcp.auth.server import create_auth_server
+
+                      create_auth_server().run(
+                          transport="http", host="127.0.0.1", port=PORT
+                      )
+              return 0
+
+
+          if __name__ == "__main__":
+              sys.exit(main())
+          PY
+
+          cat > scripts/windows/install-auth-http-task.ps1 <<'PS1'
+          param([string]$TaskName = "AvanzaMcpAuthenticatedHttpServer")
+
+          $ErrorActionPreference = "Stop"
+          $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+          $launcher = Join-Path $PSScriptRoot "run-auth-http-hidden.py"
+          $pythonw = Join-Path $repoRoot ".venv\Scripts\pythonw.exe"
+          if (-not (Test-Path $pythonw)) { throw "Project virtualenv is missing. Run: uv sync --locked" }
+
+          $userId = "$env:USERDOMAIN\$env:USERNAME"
+          $action = New-ScheduledTaskAction -Execute $pythonw -Argument "`"$launcher`"" -WorkingDirectory $repoRoot
+          $logonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $userId
+          $watchdogTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650)
+          $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited
+          $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
+          Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger @($logonTrigger, $watchdogTrigger) -Principal $principal -Settings $settings -Description "Loopback-only authenticated Avanza FastMCP HTTP server." -Force | Out-Null
+
+          $listener = Get-NetTCPConnection -LocalPort 8768 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($listener) {
+              Write-Host "Task registered; port 8768 already used by PID $($listener.OwningProcess)."
+              exit 0
+          }
+          Start-ScheduledTask -TaskName $TaskName
+          Start-Sleep -Seconds 2
+          Write-Host "Task '$TaskName' installed. Log: $env:LOCALAPPDATA\avanza-mcp\authenticated-http.log"
+          PS1
+
+          cat > scripts/windows/uninstall-auth-http-task.ps1 <<'PS1'
+          param([string]$TaskName = "AvanzaMcpAuthenticatedHttpServer")
+          $ErrorActionPreference = "Stop"
+          $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+          if (-not $task) { Write-Host "Task '$TaskName' is not installed."; exit 0 }
+          if ($task.State -eq "Running") { Stop-ScheduledTask -TaskName $TaskName }
+          Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+          Write-Host "Task '$TaskName' removed."
+          PS1
+
+          cat > compose.authenticated.yaml <<'YAML'
+          name: avanza-mcp-authenticated
+          services:
+            gateway:
+              image: node:24.21.0-alpine
+              container_name: avanza-mcp-authenticated-gateway
+              command: ["node", "/app/gateway.mjs"]
+              user: node
+              env_file: authenticated/gateway.env
+              environment:
+                GATEWAY_MODE: cloudflare
+                BIND_HOST: 0.0.0.0
+                UPSTREAM_HOST: host.docker.internal
+                UPSTREAM_PORT: "8768"
+                UPSTREAM_PATH: /mcp
+                UPSTREAM_HOST_HEADER: localhost
+              extra_hosts:
+                - "host.docker.internal:host-gateway"
+              volumes:
+                - ./public/gateway:/app:ro
+              networks: [edge]
+              read_only: true
+              cap_drop: [ALL]
+              security_opt:
+                - no-new-privileges:true
+              restart: unless-stopped
+            cloudflared:
+              image: cloudflare/cloudflared:2026.9.1
+              container_name: avanza-mcp-authenticated-cloudflared
+              command: ["tunnel", "--no-autoupdate", "run"]
+              env_file: authenticated/tunnel.env
+              networks: [edge]
+              depends_on: [gateway]
+              restart: unless-stopped
+          networks:
+            edge:
+              driver: bridge
+          YAML
+
+          cat > authenticated/gateway.env.example <<'ENV'
+          ACCESS_TEAM_DOMAIN=your-team.cloudflareaccess.com
+          ACCESS_AUD=replace-with-authenticated-app-aud
+          ACCESS_ALLOWED_EMAILS=you@example.com
+          RATE_PER_MIN=120
+          MAX_BODY_BYTES=2097152
+          ALLOWED_TOOLS=search_instruments,get_instrument_by_order_book_id,get_stock_info,get_stock_quote,get_stock_chart,get_stock_analysis,get_dividends,get_company_financials,get_orderbook,get_marketplace_info,get_recent_trades,get_broker_trade_summary,get_fund_info,get_fund_sustainability,get_fund_chart,get_fund_chart_periods,get_fund_description,get_fund_holdings,filter_certificates,get_certificate_info,get_certificate_details,filter_warrants,get_warrant_info,get_warrant_details,filter_etfs,get_etf_info,get_etf_details,list_futures_forwards,get_future_forward_filter_options,get_future_forward_info,get_future_forward_details,get_number_of_owners,get_short_selling,get_marketmaker_chart,screen_leveraged_instruments,screen_options,enrich_option_snapshot,connect_avanza,disconnect_avanza,get_auth_status,get_accounts,get_holdings,get_transactions,get_watchlists,get_price_alerts,get_portfolio_insights,get_instrument_news,get_insider_transactions,get_active_orders,get_deals,get_stop_loss_orders
+          ENV
+
+          cat > authenticated/tunnel.env.example <<'ENV'
+          TUNNEL_TOKEN=replace-with-authenticated-tunnel-token
+          ENV
+
+          if ! grep -q '^authenticated/gateway.env$' .gitignore; then
+            printf '\n# Authenticated Avanza remote deployment secrets\nauthenticated/gateway.env\nauthenticated/tunnel.env\n' >> .gitignore
+          fi
+
+          uv sync --locked
+          uv run python -m compileall -q src
+          uv run pytest -q
+          node --test tests/gateway/*.test.mjs
+
+          git add -A
+          git commit -m "feat(auth): add isolated authenticated read-only runtime [auth-apply-done]"
+          git push origin HEAD:feat/authenticated-readonly-v2
