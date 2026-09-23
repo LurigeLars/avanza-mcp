@@ -27,34 +27,35 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
-          server = Path("src/avanza_mcp/auth/server.py")
-          text = server.read_text()
-          old = '''        async def initialize_auth() -> None:
-              status = await auth.restore()
-              if status.state != "connected":
-                  await auth.open_browser()
-          '''
-          new = '''        async def initialize_auth() -> None:
-              # Background/HTTP servers must never pop a BankID window on startup.
-              # Restore silently; the explicit connect_avanza tool starts BankID.
-              await auth.restore()
-          '''
-          if old not in text:
-              raise SystemExit("initialize_auth block not found")
-          text = text.replace(old, new, 1)
+          def replace_slice(path: Path, start_marker: str, end_marker: str, replacement: str) -> None:
+              text = path.read_text()
+              start = text.index(start_marker)
+              end = text.index(end_marker, start)
+              path.write_text(text[:start] + replacement + text[end:])
 
-          old = '''    async def expired() -> None:
+          server = Path("src/avanza_mcp/auth/server.py")
+          replace_slice(
+              server,
+              "        async def initialize_auth() -> None:\n",
+              "        auth_task = asyncio.create_task(initialize_auth())\n",
+              '''        async def initialize_auth() -> None:
+              # Restore silently. BankID UI is opened only by an explicit connect_avanza call.
+              await auth.restore()
+
+          ''',
+          )
+          text = server.read_text()
+          text = text.replace(
+              '''    async def expired() -> None:
               await auth.invalidate_session()
               await auth.open_browser()
-          '''
-          new = '''    async def expired() -> None:
-              # Fail closed on expiry. Reauthentication requires an explicit
-              # connect_avanza call instead of opening local UI as a side effect.
+          ''',
+              '''    async def expired() -> None:
+              # Fail closed. Reauthentication is an explicit user action.
               await auth.invalidate_session()
-          '''
-          if old not in text:
-              raise SystemExit("expired block not found")
-          text = text.replace(old, new, 1)
+          ''',
+              1,
+          )
           text = text.replace(
               "AVANZA_AUTH_EXPIRED: The local BankID flow was opened. Authenticate and retry.",
               "AVANZA_AUTH_EXPIRED: Call connect_avanza, complete BankID locally, then retry.",
@@ -82,41 +83,51 @@ jobs:
                       and response.status_code == 401
                       and self._session_invalidated is not None
                   ):
-                      # Never silently substitute anonymous/delayed market data
-                      # after an authenticated request has failed.
+                      # Do not silently substitute anonymous/delayed data after auth expiry.
                       await self._session_invalidated()
           '''
           if old not in text:
-              raise SystemExit("authenticated 401 fallback block not found")
-          text = text.replace(old, new, 1)
-          base.write_text(text)
+              raise SystemExit("authenticated 401 block not found")
+          base.write_text(text.replace(old, new, 1))
 
           test_client = Path("tests/unit/test_client.py")
           text = test_client.read_text()
-          text = text.replace(
-              "async def test_expired_session_falls_back_to_anonymous_request(self, method):",
-              "async def test_expired_authenticated_session_fails_closed(self, method):",
-              1,
+          start = text.index(
+              "    @respx.mock\n    async def test_expired_session_falls_back_to_anonymous_request"
           )
-          old = '''        async with client:
-              assert await getattr(client, method)("/test") == {"ok": True}
+          end = text.index("    @respx.mock\n", start + 20)
+          replacement = '''    @respx.mock
+              async def test_expired_authenticated_session_fails_closed(self, method):
+                  active = SessionMaterial((), "sentinel-token")
+                  invalidated = 0
 
-          assert route.call_count == 2
-          assert invalidated == 1
-          assert "x-securitytoken" not in route.calls.last.request.headers
-          '''
-          new = '''        async with client:
-              with pytest.raises(AvanzaAuthError):
-                  await getattr(client, method)("/test")
+                  async def invalidate():
+                      nonlocal active, invalidated
+                      active = None
+                      invalidated += 1
 
-          assert route.call_count == 1
-          assert invalidated == 1
-          assert route.calls.last.request.headers["x-securitytoken"] == "sentinel-token"
+                  def response(request):
+                      return httpx.Response(401, json={"error": "expired"})
+
+                  route = respx.route(
+                      method=method.upper(), url="https://www.avanza.se/test"
+                  ).mock(side_effect=response)
+                  client = AvanzaClient(
+                      session_provider=lambda: active,
+                      session_invalidated=invalidate,
+                      max_retries=1,
+                  )
+
+                  async with client:
+                      with pytest.raises(AvanzaAuthError):
+                          await getattr(client, method)("/test")
+
+                  assert route.call_count == 1
+                  assert invalidated == 1
+                  assert route.calls.last.request.headers["x-securitytoken"] == "sentinel-token"
+
           '''
-          if old not in text:
-              raise SystemExit("expired-session test block not found")
-          text = text.replace(old, new, 1)
-          test_client.write_text(text)
+          test_client.write_text(text[:start] + replacement + text[end:])
           PY
 
           mkdir -p authenticated scripts/windows
@@ -146,6 +157,7 @@ jobs:
               with LOG_FILE.open("a", encoding="utf-8") as log:
                   with redirect_stdout(log), redirect_stderr(log):
                       from avanza_mcp.auth.server import create_auth_server
+
                       mcp = create_auth_server()
                       mcp.run(transport="http", host="127.0.0.1", port=PORT)
               return 0
@@ -208,9 +220,6 @@ jobs:
           PS1
 
           cat > compose.authenticated.yaml <<'YAML'
-          # Separate authenticated ChatGPT path.
-          # Avanza credentials/session material remain in the host-side process on 127.0.0.1:8768.
-          # The gateway sees MCP requests/results only and never receives Avanza cookies/security tokens.
           name: avanza-mcp-authenticated
 
           services:
@@ -267,12 +276,14 @@ jobs:
           TUNNEL_TOKEN=replace-with-authenticated-tunnel-token
           ENV
 
-          cat >> .gitignore <<'EOF'
+          if ! grep -q '^authenticated/gateway.env$' .gitignore; then
+            cat >> .gitignore <<'EOF'
 
           # Authenticated Avanza remote deployment secrets
           authenticated/gateway.env
           authenticated/tunnel.env
           EOF
+          fi
 
           git add -A
           git commit -m "feat(auth): harden expiry and add isolated authenticated deployment [auth-harden-done]"
