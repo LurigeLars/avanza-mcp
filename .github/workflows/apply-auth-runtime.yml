@@ -1,0 +1,123 @@
+name: Apply auth runtime hardening
+
+on:
+  push:
+    branches: [feat/authenticated-readonly-v2]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: feat/authenticated-readonly-v2
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v7
+      - name: Patch and test
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path("src/avanza_mcp/auth/server.py")
+          s = p.read_text()
+          a = s.index("        async def initialize_auth() -> None:\n")
+          b = s.index("        auth_task = asyncio.create_task(initialize_auth())\n", a)
+          s = s[:a] + (
+              "        async def initialize_auth() -> None:\n"
+              "            # Restore silently. BankID UI starts only via connect_avanza.\n"
+              "            await auth.restore()\n\n"
+          ) + s[b:]
+          old = (
+              "    async def expired() -> None:\n"
+              "        await auth.invalidate_session()\n"
+              "        await auth.open_browser()\n"
+          )
+          new = (
+              "    async def expired() -> None:\n"
+              "        # Fail closed. Reauthentication is an explicit user action.\n"
+              "        await auth.invalidate_session()\n"
+          )
+          if old not in s:
+              raise SystemExit("expired block missing")
+          s = s.replace(old, new, 1)
+          s = s.replace(
+              "AVANZA_AUTH_EXPIRED: The local BankID flow was opened. Authenticate and retry.",
+              "AVANZA_AUTH_EXPIRED: Call connect_avanza, complete BankID locally, then retry.",
+          )
+          p.write_text(s)
+
+          p = Path("src/avanza_mcp/client/base.py")
+          s = p.read_text()
+          old = (
+              "                if (\n"
+              "                    authenticated\n"
+              "                    and response.status_code == 401\n"
+              "                    and self._session_invalidated is not None\n"
+              "                ):\n"
+              "                    await self._session_invalidated()\n"
+              "                    if self._client is None:\n"
+              "                        raise RuntimeError(\n"
+              "                            \"Client not initialized. Use async context manager.\"\n"
+              "                        )\n"
+              "                    response = await self._client.request(\n"
+              "                        method, path, params=params, json=json\n"
+              "                    )\n"
+          )
+          new = (
+              "                if (\n"
+              "                    authenticated\n"
+              "                    and response.status_code == 401\n"
+              "                    and self._session_invalidated is not None\n"
+              "                ):\n"
+              "                    # Never replace expired authenticated data with anonymous/delayed data.\n"
+              "                    await self._session_invalidated()\n"
+          )
+          if old not in s:
+              raise SystemExit("401 fallback block missing")
+          p.write_text(s.replace(old, new, 1))
+
+          p = Path("tests/unit/test_client.py")
+          s = p.read_text()
+          a = s.index("    @respx.mock\n    async def test_expired_session_falls_back_to_anonymous_request")
+          b = s.index("    @respx.mock\n", a + 20)
+          replacement = (
+              "    @respx.mock\n"
+              "    async def test_expired_authenticated_session_fails_closed(self, method):\n"
+              "        active = SessionMaterial((), \"sentinel-token\")\n"
+              "        invalidated = 0\n\n"
+              "        async def invalidate():\n"
+              "            nonlocal active, invalidated\n"
+              "            active = None\n"
+              "            invalidated += 1\n\n"
+              "        route = respx.route(\n"
+              "            method=method.upper(), url=\"https://www.avanza.se/test\"\n"
+              "        ).mock(return_value=httpx.Response(401, json={\"error\": \"expired\"}))\n"
+              "        client = AvanzaClient(\n"
+              "            session_provider=lambda: active,\n"
+              "            session_invalidated=invalidate,\n"
+              "            max_retries=1,\n"
+              "        )\n\n"
+              "        async with client:\n"
+              "            with pytest.raises(AvanzaAuthError):\n"
+              "                await getattr(client, method)(\"/test\")\n\n"
+              "        assert route.call_count == 1\n"
+              "        assert invalidated == 1\n"
+              "        assert route.calls.last.request.headers[\"x-securitytoken\"] == \"sentinel-token\"\n\n"
+          )
+          p.write_text(s[:a] + replacement + s[b:])
+          PY
+          uv sync --locked
+          uv run python -m compileall -q src
+          uv run pytest -q
+          node --test tests/gateway/*.test.mjs
+          git add src/avanza_mcp/auth/server.py src/avanza_mcp/client/base.py tests/unit/test_client.py
+          git commit -m "fix(auth): fail closed on expired authenticated sessions [auth-runtime-done]"
+          git push origin HEAD:feat/authenticated-readonly-v2
