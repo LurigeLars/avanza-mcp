@@ -19,6 +19,7 @@ from .market_data_service import MarketDataService
 ProductType = Literal["certificate", "warrant"]
 Direction = Literal["long", "short"]
 _PAGE_SIZE = 100
+_MAX_CONCURRENT_PAGES = 4
 _SNAPSHOT_TTL = timedelta(minutes=10)
 _RANKING = "two_way_quote, spread_percent_asc, turnover_desc"
 
@@ -316,8 +317,9 @@ def _page(snapshot: _Snapshot, offset: int, page_size: int) -> dict[str, Any]:
             "filtered count; snapshot.scanned_count is the full scanned count. "
             "available_filter_values comes from the full scanned universe. Calls using "
             "snapshot_id reuse the frozen ranking and do not refetch market data. Initial quote "
-            "collection is non-atomic because upstream pages are sequential. If pagination.has_more "
-            "is true, this response is only a partial view of the snapshot."
+            "collection is non-atomic because upstream pages are fetched over time; after the first "
+            "page establishes the total, remaining pages may be fetched concurrently. If "
+            "pagination.has_more is true, this response is only a partial view of the snapshot."
         ),
     }
 
@@ -332,10 +334,8 @@ class LeveragedScreenService:
         direction: Direction,
         _legacy_limit: int | None = None,
     ) -> dict[str, Any]:
-        items: list[Any] = []
-        offset, total = 0, None
-        while True:
-            response = await self._market.filter_certificates(
+        async def fetch(offset: int):
+            return await self._market.filter_certificates(
                 CertificateFilterRequest(
                     filter=CertificateFilter(
                         directions=[direction],
@@ -346,14 +346,38 @@ class LeveragedScreenService:
                     sortBy=SortBy(field="name", order="asc"),
                 )
             )
-            page = response.certificates
-            items.extend(page)
-            total = response.totalNumberOfOrderbooks
-            offset += len(page)
-            if not page or len(page) < _PAGE_SIZE or (
-                total is not None and offset >= total
-            ):
-                break
+
+        first = await fetch(0)
+        items: list[Any] = list(first.certificates)
+        total = first.totalNumberOfOrderbooks
+
+        if total is not None and len(first.certificates) == _PAGE_SIZE:
+            semaphore = asyncio.Semaphore(_MAX_CONCURRENT_PAGES)
+
+            async def fetch_bounded(offset: int):
+                async with semaphore:
+                    return await fetch(offset)
+
+            offsets = list(range(_PAGE_SIZE, total, _PAGE_SIZE))
+            if offsets:
+                responses = await asyncio.gather(
+                    *(fetch_bounded(offset) for offset in offsets)
+                )
+                for response in responses:
+                    items.extend(response.certificates)
+        else:
+            offset = len(first.certificates)
+            while first.certificates and (total is None or offset < total):
+                response = await fetch(offset)
+                page = response.certificates
+                if not page:
+                    break
+                items.extend(page)
+                if response.totalNumberOfOrderbooks is not None:
+                    total = response.totalNumberOfOrderbooks
+                offset += len(page)
+                if len(page) < _PAGE_SIZE:
+                    break
         products = [_normalize_candidate(item, "certificate") for item in items]
         return {
             "products": products,
@@ -370,10 +394,8 @@ class LeveragedScreenService:
         direction: Direction,
         _legacy_limit: int | None = None,
     ) -> dict[str, Any]:
-        items: list[Any] = []
-        offset, total = 0, None
-        while True:
-            response = await self._market.filter_warrants(
+        async def fetch(offset: int):
+            return await self._market.filter_warrants(
                 WarrantFilterRequest(
                     filter=WarrantFilter(
                         directions=[direction],
@@ -384,14 +406,38 @@ class LeveragedScreenService:
                     sortBy=SortBy(field="name", order="asc"),
                 )
             )
-            page = response.warrants
-            items.extend(page)
-            total = response.totalNumberOfOrderbooks
-            offset += len(page)
-            if not page or len(page) < _PAGE_SIZE or (
-                total is not None and offset >= total
-            ):
-                break
+
+        first = await fetch(0)
+        items: list[Any] = list(first.warrants)
+        total = first.totalNumberOfOrderbooks
+
+        if total is not None and len(first.warrants) == _PAGE_SIZE:
+            semaphore = asyncio.Semaphore(_MAX_CONCURRENT_PAGES)
+
+            async def fetch_bounded(offset: int):
+                async with semaphore:
+                    return await fetch(offset)
+
+            offsets = list(range(_PAGE_SIZE, total, _PAGE_SIZE))
+            if offsets:
+                responses = await asyncio.gather(
+                    *(fetch_bounded(offset) for offset in offsets)
+                )
+                for response in responses:
+                    items.extend(response.warrants)
+        else:
+            offset = len(first.warrants)
+            while first.warrants and (total is None or offset < total):
+                response = await fetch(offset)
+                page = response.warrants
+                if not page:
+                    break
+                items.extend(page)
+                if response.totalNumberOfOrderbooks is not None:
+                    total = response.totalNumberOfOrderbooks
+                offset += len(page)
+                if len(page) < _PAGE_SIZE:
+                    break
         products = [_normalize_candidate(item, "warrant") for item in items]
         return {
             "products": products,
