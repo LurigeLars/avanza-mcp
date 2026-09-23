@@ -77,7 +77,7 @@ async def get_certificate_info(
 async def get_certificate_details(
     ctx: Context, order_book_id: OrderBookId
 ) -> CertificateDetails:
-    """Get recognized extended certificate details beyond info."""
+    """Get extended certificate details beyond info; detail fields are intentionally flexible."""
     with api_errors():
         return await MarketDataService(
             ctx.lifespan_context["client"]

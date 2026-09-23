@@ -33,6 +33,33 @@ from .exceptions import (
 logger = logging.getLogger(__name__)
 
 
+_PRIVATE_AUTH_MARKET_KEYS = {
+    "accountid", "accountnumber", "customerid", "userid",
+    "personalnumber", "ssn", "email", "phone",
+    "mobilenumber", "username",
+}
+
+
+def _sanitize_authenticated_market_payload(value: Any) -> Any:
+    """Remove credential/identity fields from flexible authenticated market payloads."""
+    if isinstance(value, dict):
+        cleaned = {}
+        for key, item in value.items():
+            normalized = "".join(ch for ch in str(key).lower() if ch.isalnum())
+            if (
+                normalized in _PRIVATE_AUTH_MARKET_KEYS
+                or normalized.endswith("token")
+                or "cookie" in normalized
+                or "password" in normalized
+            ):
+                continue
+            cleaned[key] = _sanitize_authenticated_market_payload(item)
+        return cleaned
+    if isinstance(value, list):
+        return [_sanitize_authenticated_market_payload(item) for item in value]
+    return value
+
+
 class AuthenticatedSession(Protocol):
     _cookies: tuple[Cookie, ...]
     _security_token: str | None
@@ -358,14 +385,8 @@ class AvanzaClient:
                     and response.status_code == 401
                     and self._session_invalidated is not None
                 ):
+                    # Never replace expired authenticated data with anonymous/delayed data.
                     await self._session_invalidated()
-                    if self._client is None:
-                        raise RuntimeError(
-                            "Client not initialized. Use async context manager."
-                        )
-                    response = await self._client.request(
-                        method, path, params=params, json=json
-                    )
             except httpx.TimeoutException as e:
                 logger.warning(
                     "POST timeout [%s] %s: %s"
@@ -405,6 +426,8 @@ class AvanzaClient:
                 data = response.json()
                 if not isinstance(data, (dict, list)):
                     raise ValueError("Expected a JSON object or array")
+                if authenticated:
+                    data = _sanitize_authenticated_market_payload(data)
                 return data
             except ValueError as e:
                 logger.error(
