@@ -57,11 +57,6 @@ class ChartDataPoint(AvanzaModel):
 
     name: str | None = None
     y: float | None = None
-    type: str | None = None
-    currency: str | None = None
-    countryCode: str | None = None
-    isin: str | None = None
-    orderbookId: str | None = None
 
 
 class FundAdminCompany(AvanzaModel):
@@ -83,10 +78,10 @@ class FundInfo(AvanzaModel):
 
     # Price and NAV
     nav: Decimal | None = Field(None, description="Net Asset Value")
-    nav_date: str | None = Field(
+    nav_date: date | datetime | None = Field(
         None,
         alias="navDate",
-        description="Source NAV date or timestamp preserved without timezone inference",
+        description="Source NAV date or timestamp; no timezone inferred",
     )
     currency: str | None = Field(
         default=None, description="Fund currency, when supplied"
@@ -192,8 +187,9 @@ class FundInfo(AvanzaModel):
     @field_validator("nav_date", mode="before")
     @classmethod
     def preserve_nav_timestamp(cls, value: object) -> object:
-        if isinstance(value, (date, datetime)):
-            return value.isoformat()
+        # A midnight timestamp must not be coerced into a date by the union.
+        if isinstance(value, str) and "T" in value:
+            return datetime.fromisoformat(value)
         return value
 
 
@@ -218,11 +214,6 @@ class SustainabilityGoal(AvanzaModel):
     status: str
 
 
-class SustainabilityArticleType(AvanzaModel):
-    value: str
-    name: str
-
-
 class FundSustainability(AvanzaModel):
     """Fund sustainability and ESG metrics."""
 
@@ -245,7 +236,9 @@ class FundSustainability(AvanzaModel):
     socialRating: int | None = None
     governanceRating: int | None = None
     svanen: bool | None = None
-    euArticleType: SustainabilityArticleType | str | None = None
+    euArticleType: dict | str | None = (
+        None  # Can be dict with 'value' and 'name' or string
+    )
     aumCoveredCarbon: float | None = None
     fossilFuelInvolvement: float | None = None
     carbonRiskScore: float | None = None
