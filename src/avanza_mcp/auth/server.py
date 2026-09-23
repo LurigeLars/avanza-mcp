@@ -45,9 +45,8 @@ def create_auth_server(auth: BrowserAuth | None = None) -> FastMCP:
         _configure_authenticated_requests(lambda: auth.session, auth.invalidate_session)
 
         async def initialize_auth() -> None:
-            status = await auth.restore()
-            if status.state != "connected":
-                await auth.open_browser()
+            # Restore silently. BankID UI starts only via connect_avanza.
+            await auth.restore()
 
         auth_task = asyncio.create_task(initialize_auth())
         async with AvanzaClient(session_provider=lambda: auth.session) as client:
@@ -117,8 +116,8 @@ def create_auth_server(auth: BrowserAuth | None = None) -> FastMCP:
         return auth.session
 
     async def expired() -> None:
+        # Fail closed. Reauthentication is an explicit user action.
         await auth.invalidate_session()
-        await auth.open_browser()
 
     @server.tool(
         annotations={
@@ -136,7 +135,7 @@ def create_auth_server(auth: BrowserAuth | None = None) -> FastMCP:
         except AccountAuthExpired:
             await expired()
             raise ToolError(
-                "AVANZA_AUTH_EXPIRED: The local BankID flow was opened. Authenticate and retry."
+                "AVANZA_AUTH_EXPIRED: Call connect_avanza, complete BankID locally, then retry."
             ) from None
         except AccountReadError:
             raise ToolError(
@@ -159,7 +158,7 @@ def create_auth_server(auth: BrowserAuth | None = None) -> FastMCP:
         except AccountAuthExpired:
             await expired()
             raise ToolError(
-                "AVANZA_AUTH_EXPIRED: The local BankID flow was opened. Authenticate and retry."
+                "AVANZA_AUTH_EXPIRED: Call connect_avanza, complete BankID locally, then retry."
             ) from None
         except AccountReadError:
             raise ToolError("Avanza could not provide holdings. Retry later.") from None
@@ -189,7 +188,7 @@ def create_auth_server(auth: BrowserAuth | None = None) -> FastMCP:
         except AccountAuthExpired:
             await expired()
             raise ToolError(
-                "AVANZA_AUTH_EXPIRED: The local BankID flow was opened. Authenticate and retry."
+                "AVANZA_AUTH_EXPIRED: Call connect_avanza, complete BankID locally, then retry."
             ) from None
         except AccountReadError:
             raise ToolError(
@@ -217,7 +216,7 @@ def create_auth_server(auth: BrowserAuth | None = None) -> FastMCP:
         except AccountAuthExpired:
             await expired()
             raise ToolError(
-                "AVANZA_AUTH_EXPIRED: The local BankID flow was opened. Authenticate and retry."
+                "AVANZA_AUTH_EXPIRED: Call connect_avanza, complete BankID locally, then retry."
             ) from None
         except AccountReadError:
             raise ToolError(
@@ -240,7 +239,7 @@ def create_auth_server(auth: BrowserAuth | None = None) -> FastMCP:
         except AccountAuthExpired:
             await expired()
             raise ToolError(
-                "AVANZA_AUTH_EXPIRED: The local BankID flow was opened. Authenticate and retry."
+                "AVANZA_AUTH_EXPIRED: Call connect_avanza, complete BankID locally, then retry."
             ) from None
         except AccountReadError:
             raise ToolError(
@@ -268,7 +267,7 @@ def create_auth_server(auth: BrowserAuth | None = None) -> FastMCP:
         except AccountAuthExpired:
             await expired()
             raise ToolError(
-                "AVANZA_AUTH_EXPIRED: The local BankID flow was opened. Authenticate and retry."
+                "AVANZA_AUTH_EXPIRED: Call connect_avanza, complete BankID locally, then retry."
             ) from None
         except (AccountReadError, ValueError):
             raise ToolError(
@@ -291,7 +290,7 @@ def create_auth_server(auth: BrowserAuth | None = None) -> FastMCP:
         except AccountAuthExpired:
             await expired()
             raise ToolError(
-                "AVANZA_AUTH_EXPIRED: The local BankID flow was opened. Authenticate and retry."
+                "AVANZA_AUTH_EXPIRED: Call connect_avanza, complete BankID locally, then retry."
             ) from None
         except AccountReadError:
             raise ToolError("Avanza could not provide offers. Retry later.") from None
@@ -321,7 +320,7 @@ def create_auth_server(auth: BrowserAuth | None = None) -> FastMCP:
         except AccountAuthExpired:
             await expired()
             raise ToolError(
-                "AVANZA_AUTH_EXPIRED: The local BankID flow was opened. Authenticate and retry."
+                "AVANZA_AUTH_EXPIRED: Call connect_avanza, complete BankID locally, then retry."
             ) from None
         except AccountReadError:
             raise ToolError(
@@ -350,7 +349,7 @@ def create_auth_server(auth: BrowserAuth | None = None) -> FastMCP:
         except AccountAuthExpired:
             await expired()
             raise ToolError(
-                "AVANZA_AUTH_EXPIRED: The local BankID flow was opened. Authenticate and retry."
+                "AVANZA_AUTH_EXPIRED: Call connect_avanza, complete BankID locally, then retry."
             ) from None
         except (AccountReadError, ValueError):
             raise ToolError(
@@ -379,7 +378,7 @@ def create_auth_server(auth: BrowserAuth | None = None) -> FastMCP:
         except AccountAuthExpired:
             await expired()
             raise ToolError(
-                "AVANZA_AUTH_EXPIRED: The local BankID flow was opened. Authenticate and retry."
+                "AVANZA_AUTH_EXPIRED: Call connect_avanza, complete BankID locally, then retry."
             ) from None
         except (AccountReadError, ValueError):
             raise ToolError(
@@ -408,7 +407,7 @@ def create_auth_server(auth: BrowserAuth | None = None) -> FastMCP:
         except AccountAuthExpired:
             await expired()
             raise ToolError(
-                "AVANZA_AUTH_EXPIRED: The local BankID flow was opened. Authenticate and retry."
+                "AVANZA_AUTH_EXPIRED: Call connect_avanza, complete BankID locally, then retry."
             ) from None
         except (AccountReadError, ValueError):
             raise ToolError(
@@ -436,7 +435,7 @@ def create_auth_server(auth: BrowserAuth | None = None) -> FastMCP:
         except AccountAuthExpired:
             await expired()
             raise ToolError(
-                "AVANZA_AUTH_EXPIRED: The local BankID flow was opened. Authenticate and retry."
+                "AVANZA_AUTH_EXPIRED: Call connect_avanza, complete BankID locally, then retry."
             ) from None
         except AccountReadError:
             raise ToolError(
@@ -462,7 +461,7 @@ def create_auth_server(auth: BrowserAuth | None = None) -> FastMCP:
         except AccountAuthExpired:
             await expired()
             raise ToolError(
-                "AVANZA_AUTH_EXPIRED: The local BankID flow was opened. Authenticate and retry."
+                "AVANZA_AUTH_EXPIRED: Call connect_avanza, complete BankID locally, then retry."
             ) from None
         except AccountReadError:
             raise ToolError("Avanza could not provide deals. Retry later.") from None
@@ -488,7 +487,7 @@ def create_auth_server(auth: BrowserAuth | None = None) -> FastMCP:
         except AccountAuthExpired:
             await expired()
             raise ToolError(
-                "AVANZA_AUTH_EXPIRED: The local BankID flow was opened. Authenticate and retry."
+                "AVANZA_AUTH_EXPIRED: Call connect_avanza, complete BankID locally, then retry."
             ) from None
         except AccountReadError:
             raise ToolError(

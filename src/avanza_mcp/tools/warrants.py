@@ -71,7 +71,7 @@ async def get_warrant_info(ctx: Context, order_book_id: OrderBookId) -> WarrantI
 async def get_warrant_details(
     ctx: Context, order_book_id: OrderBookId
 ) -> WarrantDetails:
-    """Get recognized extended warrant details beyond info."""
+    """Get extended warrant details beyond info; detail fields are intentionally flexible."""
     with api_errors():
         return await MarketDataService(
             ctx.lifespan_context["client"]

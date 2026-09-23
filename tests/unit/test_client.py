@@ -190,7 +190,7 @@ class TestAvanzaClientRequests:
             assert "cookie" not in route.calls.last.request.headers
 
     @respx.mock
-    async def test_expired_session_falls_back_to_anonymous_request(self, method):
+    async def test_expired_authenticated_session_fails_closed(self, method):
         active = SessionMaterial((), "sentinel-token")
         invalidated = 0
 
@@ -199,14 +199,9 @@ class TestAvanzaClientRequests:
             active = None
             invalidated += 1
 
-        def response(request):
-            if "x-securitytoken" in request.headers:
-                return httpx.Response(401, json={"error": "expired"})
-            return httpx.Response(200, json={"ok": True})
-
         route = respx.route(
             method=method.upper(), url="https://www.avanza.se/test"
-        ).mock(side_effect=response)
+        ).mock(return_value=httpx.Response(401, json={"error": "expired"}))
         client = AvanzaClient(
             session_provider=lambda: active,
             session_invalidated=invalidate,
@@ -214,11 +209,32 @@ class TestAvanzaClientRequests:
         )
 
         async with client:
-            assert await getattr(client, method)("/test") == {"ok": True}
+            with pytest.raises(AvanzaAuthError):
+                await getattr(client, method)("/test")
 
-        assert route.call_count == 2
+        assert route.call_count == 1
         assert invalidated == 1
-        assert "x-securitytoken" not in route.calls.last.request.headers
+        assert route.calls.last.request.headers["x-securitytoken"] == "sentinel-token"
+
+    @respx.mock
+    async def test_authenticated_market_payload_redacts_private_fields(self, method):
+        active = SessionMaterial((), "sentinel-token")
+        route = respx.get("https://www.avanza.se/test").mock(
+            return_value=httpx.Response(200, json={
+                "safe": 1,
+                "securityToken": "secret",
+                "nested": {
+                    "personalNumber": "secret",
+                    "value": 2,
+                    "cookieJar": "secret",
+                },
+            })
+        )
+        client = AvanzaClient(session_provider=lambda: active, max_retries=1)
+        async with client:
+            result = await client.get("/test")
+        assert result == {"safe": 1, "nested": {"value": 2}}
+        assert route.call_count == 1
 
     @respx.mock
     async def test_429_raises_rate_limit(self, mock_client, method):
