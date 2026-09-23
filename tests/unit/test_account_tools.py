@@ -9,7 +9,7 @@ import pytest
 import respx
 
 from avanza_mcp.client import AvanzaClient
-from avanza_mcp.client.accounts import AccountAuthExpired, AccountClient
+from avanza_mcp.client.accounts import AccountAuthExpired, AccountClient, AccountReadError
 from avanza_mcp.client.bankid import SessionMaterial
 
 
@@ -358,3 +358,20 @@ async def test_additional_private_reads_use_fixed_routes_and_explicit_projection
     assert "customerId" not in output
     assert "externalAccount" not in output
     assert "modifiable" not in output and "editable" not in output
+
+
+
+async def test_unapproved_account_request_is_rejected_before_network():
+    class NoNetwork:
+        async def request_authenticated(self, method, path, **kwargs):
+            raise AssertionError("network must not be reached")
+
+    account_client = AccountClient(NoNetwork())  # type: ignore[arg-type]
+    for method, path in (
+        ("DELETE", "/_api/trading/rest/orders"),
+        ("POST", "/_api/trading/rest/orders"),
+        ("GET", "/_api/trading/rest/orders/123"),
+        ("GET", "/_api/market-guide/news/not-a-number"),
+    ):
+        with pytest.raises(AccountReadError, match="request_not_allowed"):
+            await account_client._request(method, path)

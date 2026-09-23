@@ -213,14 +213,24 @@ docker compose -f compose.public.yaml up -d
 ```
 
 The public gateway requires a valid Cloudflare Access JWT. Both model-facing gateway
-modes restrict calls to the explicit current 35-tool read-only allowlist, strip client
+modes restrict calls to the explicit current 37-tool read-only allowlist, strip client
 credentials before forwarding, compact tool schemas to reduce model-context overhead,
 and remove duplicate structured tool-result payloads when an equivalent text result is
 already present. New MCP tools are not exposed through either model-facing gateway
 until the allowlist is reviewed.
 
-This project does not provide a hosted endpoint. The current tool surface has no
-Avanza account access and cannot place orders.
+This project does not provide a hosted endpoint. The public connector remains
+credential-free and cannot access Avanza accounts or place orders.
+
+Optional authenticated read-only access is available locally with `AVANZA_MCP_AUTH=1`.
+It uses a loopback BankID flow, stores the verified session in the native OS credential
+store, and reuses that session for market-data requests plus selected portfolio/activity
+reads. It has no order-placement, order-edit, cancellation, transfer, or withdrawal tools.
+The public Cloudflare gateway does not expose authenticated account tools.
+
+Intentionally not exposed by the authenticated MCP surface: `get_credit_info`,
+`get_current_offers`, and `get_forum_posts`. Their client implementations are retained
+for future reviewed activation if a concrete workflow requires them.
 
 </details>
 

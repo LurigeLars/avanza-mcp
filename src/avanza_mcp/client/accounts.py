@@ -57,6 +57,38 @@ _ORDERS = "/_api/trading/rest/orders"
 _STOP_LOSSES = "/_api/trading/stoploss"
 
 
+_ALLOWED_ACCOUNT_EXACT = {
+    ("GET", _ACCOUNTS),
+    ("GET", _POSITIONS),
+    ("GET", _TRANSACTIONS),
+    ("GET", _WATCHLISTS),
+    ("GET", _OFFERS),
+    ("GET", _DEALS),
+    ("GET", _ORDERS),
+    ("GET", _STOP_LOSSES),
+    ("POST", _INSIGHTS),
+}
+
+
+def _account_request_allowed(method: str, path: str) -> bool:
+    method = method.upper()
+    if (method, path) in _ALLOWED_ACCOUNT_EXACT:
+        return True
+    if method != "GET":
+        return False
+
+    credit_prefix = _CREDIT_INFO.split("{", 1)[0]
+    if path.startswith(credit_prefix):
+        return path[len(credit_prefix):] in {"credited", "uncredited"}
+
+    for template in (_PRICE_ALERTS, _NEWS, _FORUM, _INSIDER_TRANSACTIONS):
+        prefix = template.split("{", 1)[0]
+        if path.startswith(prefix):
+            suffix = path[len(prefix):]
+            return suffix.isascii() and suffix.isdecimal() and bool(suffix)
+    return False
+
+
 class AccountAuthExpired(RuntimeError):
     pass
 
@@ -343,6 +375,8 @@ class AccountClient:
         return body
 
     async def _request(self, method: str, path: str, **kwargs) -> Any:
+        if not _account_request_allowed(method, path):
+            raise AccountReadError("request_not_allowed")
         try:
             response = await self._client.request_authenticated(method, path, **kwargs)
         except AvanzaAuthError:
