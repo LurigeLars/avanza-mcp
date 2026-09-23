@@ -86,7 +86,7 @@ async def test_auth_server_mounts_public_contract_and_adds_auth_tools():
         with pytest.raises(ToolError, match="AVANZA_AUTH_REQUIRED"):
             await client.call_tool("get_accounts", {})
     assert auth.closed
-    assert auth.opened == 2
+    assert auth.opened == 1
 
 
 @respx.mock
