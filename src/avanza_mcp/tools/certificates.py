@@ -15,7 +15,7 @@ from ..models.certificate import (
 from ..models.common import Limit, Offset, OrderBookId
 from ..models.filter import SortBy
 from ..services import MarketDataService
-from ._helpers import READ_ONLY, api_errors
+from ._helpers import FilterOptionsMode, READ_ONLY, api_errors, shape_filter_options
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -29,13 +29,18 @@ async def filter_certificates(
     categories: list[str] | None = None,
     exposures: list[str] | None = None,
     underlying_instruments: list[OrderBookId] | None = None,
+    filter_options_mode: FilterOptionsMode = "compact",
     sort_field: str = "name",
     sort_order: Literal["asc", "desc"] = "asc",
 ) -> CertificateFilterResponse:
     """Select certificates by upstream filters with server-side pagination.
 
-    Filter labels are upstream-defined, not a fixed vocabulary. Select an
-    orderbookId from results before requesting info or extended details.
+    Filter labels are upstream-defined, not a fixed vocabulary. By default,
+    filterOptions are compacted: small vocabularies remain, underlyingInstruments
+    are omitted in favor of search_instruments, and recursive categories are
+    reduced to top-level entries. Set filter_options_mode="full" only when the
+    complete upstream metadata is explicitly required, or "none" for minimal output.
+    Select an orderbookId from results before requesting info or extended details.
     """
     request = CertificateFilterRequest(
         filter=CertificateFilter(
@@ -51,9 +56,10 @@ async def filter_certificates(
         sortBy=SortBy(field=sort_field, order=sort_order),
     )
     with api_errors():
-        return await MarketDataService(
+        response = await MarketDataService(
             ctx.lifespan_context["client"]
         ).filter_certificates(request)
+    return shape_filter_options(response, filter_options_mode)
 
 
 @mcp.tool(annotations=READ_ONLY)

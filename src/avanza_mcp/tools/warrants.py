@@ -15,7 +15,7 @@ from ..models.warrant import (
     WarrantInfo,
 )
 from ..services import MarketDataService
-from ._helpers import READ_ONLY, api_errors
+from ._helpers import FilterOptionsMode, READ_ONLY, api_errors, shape_filter_options
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -27,13 +27,18 @@ async def filter_warrants(
     sub_types: list[str] | None = None,
     issuers: list[str] | None = None,
     underlying_instruments: list[OrderBookId] | None = None,
+    filter_options_mode: FilterOptionsMode = "compact",
     sort_field: str = "name",
     sort_order: Literal["asc", "desc"] = "asc",
 ) -> WarrantFilterResponse:
     """Select warrants by upstream filters with server-side pagination.
 
-    Sub-type, direction and issuer vocabulary is upstream-defined. Select an
-    orderbookId from results before requesting info or extended details.
+    Sub-type, direction and issuer vocabulary is upstream-defined. By default,
+    filterOptions are compacted: small vocabularies remain, underlyingInstruments
+    are omitted in favor of search_instruments, and recursive categories are
+    reduced to top-level entries. Set filter_options_mode="full" only when the
+    complete upstream metadata is explicitly required, or "none" for minimal output.
+    Select an orderbookId from results before requesting info or extended details.
     """
     request = WarrantFilterRequest(
         filter=WarrantFilter(
@@ -47,9 +52,10 @@ async def filter_warrants(
         sortBy=SortBy(field=sort_field, order=sort_order),
     )
     with api_errors():
-        return await MarketDataService(ctx.lifespan_context["client"]).filter_warrants(
-            request
-        )
+        response = await MarketDataService(
+            ctx.lifespan_context["client"]
+        ).filter_warrants(request)
+    return shape_filter_options(response, filter_options_mode)
 
 
 @mcp.tool(annotations=READ_ONLY)
