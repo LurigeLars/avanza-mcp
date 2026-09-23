@@ -1,0 +1,32 @@
+name: Retry auth runtime hardening
+
+on:
+  push:
+    branches: [feat/authenticated-readonly-v2]
+
+permissions:
+  contents: write
+
+jobs:
+  retry:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: feat/authenticated-readonly-v2
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v7
+      - name: Re-run reviewed patch with dev dependencies
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import yaml
+          data = yaml.safe_load(Path(".github/workflows/apply-auth-runtime.yml").read_text())
+          steps = data["jobs"]["apply"]["steps"]
+          script = next(step["run"] for step in steps if step.get("name") == "Patch and test")
+          script = script.replace("uv sync --locked\n", "uv sync --locked --all-extras\n")
+          Path("/tmp/apply-auth-runtime.sh").write_text(script)
+          PY
+          bash /tmp/apply-auth-runtime.sh
