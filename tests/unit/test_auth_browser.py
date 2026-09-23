@@ -2,13 +2,17 @@
 
 import json
 import re
+import asyncio
 from urllib.parse import urlsplit
+from unittest.mock import AsyncMock
 
 import httpx
 
 from avanza_mcp.auth.browser import BrowserAuth, render_qr_svg
 from avanza_mcp.auth.store import AuthStoreError
 from avanza_mcp.client.bankid import (
+    BankIDError,
+    BankIDErrorCode,
     CollectResult,
     CollectStatus,
     SessionMaterial,
@@ -27,6 +31,9 @@ class FakeAttempt:
         self.cancelled = False
         self.closed = False
         self.started = 0
+        self.logout_error = False
+        self.validate_started: asyncio.Event | None = None
+        self.validate_release: asyncio.Event | None = None
 
     async def start(self):
         self.started += 1
@@ -43,8 +50,14 @@ class FakeAttempt:
 
     async def logout(self, session=None):
         self.cancelled = True
+        if self.logout_error:
+            raise BankIDError(BankIDErrorCode.NETWORK)
 
     async def validate_session(self, session):
+        if self.validate_started is not None:
+            self.validate_started.set()
+        if self.validate_release is not None:
+            await self.validate_release.wait()
         return session
 
     async def aclose(self):
@@ -197,5 +210,56 @@ async def test_disconnect_requires_browser_confirmation_and_deletes_local_sessio
         assert store.session is None
         assert attempt.cancelled
         assert (await auth.disconnect()).state == "disconnected"
+    finally:
+        await auth.aclose()
+
+
+async def test_restore_is_serialized_with_disconnect_and_disconnect_wins():
+    session = SessionMaterial((), "synthetic-token")
+    store = FakeStore(session)
+    attempt = FakeAttempt()
+    attempt.validate_started = asyncio.Event()
+    attempt.validate_release = asyncio.Event()
+    auth = BrowserAuth(client_factory=lambda: attempt, store=store)
+
+    try:
+        restoring = asyncio.create_task(auth.restore())
+        await attempt.validate_started.wait()
+
+        disconnecting = asyncio.create_task(auth.disconnect())
+        await asyncio.sleep(0)
+        assert not disconnecting.done()
+
+        attempt.validate_release.set()
+        assert (await restoring).state == "connected"
+        assert (await disconnecting).state == "disconnected"
+        assert auth.session is None
+        assert store.session is None
+    finally:
+        await auth.aclose()
+
+
+async def test_disconnect_clears_cached_http_session_and_reports_unconfirmed_revocation():
+    session = SessionMaterial((), "synthetic-token")
+    store = FakeStore(session)
+    attempt = FakeAttempt()
+    cleared = AsyncMock()
+    auth = BrowserAuth(
+        client_factory=lambda: attempt,
+        store=store,
+        session_cleared=cleared,
+    )
+
+    try:
+        assert (await auth.restore()).state == "connected"
+        attempt.logout_error = True
+
+        status = await auth.disconnect()
+
+        assert status.state == "disconnected"
+        assert status.error_code == "revocation_unconfirmed"
+        assert auth.session is None
+        assert store.session is None
+        cleared.assert_awaited_once()
     finally:
         await auth.aclose()

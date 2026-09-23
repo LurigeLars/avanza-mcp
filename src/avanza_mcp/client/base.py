@@ -3,9 +3,11 @@
 import asyncio
 import copy
 import logging
+import re
 import math
 import uuid
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from http.cookiejar import Cookie
@@ -33,31 +35,77 @@ from .exceptions import (
 logger = logging.getLogger(__name__)
 
 
-_PRIVATE_AUTH_MARKET_KEYS = {
-    "accountid", "accountnumber", "customerid", "userid",
-    "personalnumber", "ssn", "email", "phone",
-    "mobilenumber", "username",
-}
+_AUTHENTICATED_STOCK_MARKET_PATH = re.compile(
+    r"^/_api/market-guide/stock/[0-9]+/(?P<kind>quote|orderdepth|trades)$"
+)
+
+_AUTH_QUOTE_FIELDS = frozenset(
+    {
+        "buy",
+        "sell",
+        "last",
+        "highest",
+        "lowest",
+        "change",
+        "changePercent",
+        "spread",
+        "timeOfLast",
+        "totalValueTraded",
+        "totalVolumeTraded",
+        "updated",
+        "volumeWeightedAveragePrice",
+        "isRealTime",
+    }
+)
+_AUTH_TRADE_FIELDS = frozenset(
+    {"buyer", "seller", "dealTime", "price", "volume", "matchedOnMarket", "cancelled"}
+)
+_AUTH_ORDER_SIDE_FIELDS = frozenset({"price", "volume", "priceString"})
 
 
-def _sanitize_authenticated_market_payload(value: Any) -> Any:
-    """Remove credential/identity fields from flexible authenticated market payloads."""
-    if isinstance(value, dict):
-        cleaned = {}
-        for key, item in value.items():
-            normalized = "".join(ch for ch in str(key).lower() if ch.isalnum())
-            if (
-                normalized in _PRIVATE_AUTH_MARKET_KEYS
-                or normalized.endswith("token")
-                or "cookie" in normalized
-                or "password" in normalized
-            ):
-                continue
-            cleaned[key] = _sanitize_authenticated_market_payload(item)
-        return cleaned
-    if isinstance(value, list):
-        return [_sanitize_authenticated_market_payload(item) for item in value]
-    return value
+def _authenticated_market_kind(method: str, path: str) -> str | None:
+    """Return the narrowly approved realtime market shape for this request."""
+    if method.upper() != "GET":
+        return None
+    match = _AUTHENTICATED_STOCK_MARKET_PATH.fullmatch(path)
+    return match.group("kind") if match else None
+
+
+def _project_mapping(value: Any, fields: frozenset[str]) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError("Expected authenticated market object")
+    return {key: value[key] for key in fields if key in value}
+
+
+def _project_authenticated_market_payload(kind: str, value: Any) -> Any:
+    """Strictly project authenticated market responses to known public fields."""
+    if kind == "quote":
+        return _project_mapping(value, _AUTH_QUOTE_FIELDS)
+
+    if kind == "trades":
+        if not isinstance(value, list):
+            raise ValueError("Expected authenticated trades array")
+        return [_project_mapping(item, _AUTH_TRADE_FIELDS) for item in value]
+
+    if kind == "orderdepth":
+        root = _project_mapping(value, frozenset({"receivedTime", "levels"}))
+        levels = root.get("levels", [])
+        if not isinstance(levels, list):
+            raise ValueError("Expected authenticated order-depth levels")
+        projected_levels: list[dict[str, Any]] = []
+        for level in levels:
+            projected = _project_mapping(level, frozenset({"buySide", "sellSide"}))
+            for side in ("buySide", "sellSide"):
+                if side in projected and projected[side] is not None:
+                    projected[side] = _project_mapping(
+                        projected[side], _AUTH_ORDER_SIDE_FIELDS
+                    )
+            projected_levels.append(projected)
+        root["levels"] = projected_levels
+        return root
+
+    raise ValueError("Unapproved authenticated market response")
+
 
 
 class AuthenticatedSession(Protocol):
@@ -113,7 +161,6 @@ class AvanzaClient:
         self._client: httpx.AsyncClient | None = None
         self._authenticated_client: httpx.AsyncClient | None = None
         self._authenticated_session: AuthenticatedSession | None = None
-        self._retired_clients: list[httpx.AsyncClient] = []
         self._client_lock = asyncio.Lock()
 
     async def __aenter__(self) -> "AvanzaClient":
@@ -162,26 +209,41 @@ class AvanzaClient:
         """
         if self._client:
             await self._client.aclose()
-        if self._authenticated_client:
-            await self._authenticated_client.aclose()
-        for client in self._retired_clients:
-            await client.aclose()
+        await self.clear_authenticated_session()
+
+    async def clear_authenticated_session(self) -> None:
+        """Drop any client object carrying copied authenticated cookies/token."""
+        async with self._client_lock:
+            client = self._authenticated_client
+            self._authenticated_client = None
+            self._authenticated_session = None
+        if client is not None:
+            # References are already cleared even if transport cleanup itself fails.
+            with suppress(Exception):
+                await client.aclose()
 
     async def _request_client(
-        self,
+        self, *, allow_authenticated: bool = True
     ) -> tuple[httpx.AsyncClient, bool]:
         client = self._client
         if client is None:
             raise RuntimeError("Client not initialized. Use async context manager.")
 
         session = self._session_provider() if self._session_provider else None
-        if session is None or self._base_url.rstrip("/") != self.DEFAULT_BASE_URL:
+        if (
+            not allow_authenticated
+            or session is None
+            or self._base_url.rstrip("/") != self.DEFAULT_BASE_URL
+        ):
             return client, False
 
         async with self._client_lock:
             if session is not self._authenticated_session:
-                if self._authenticated_client is not None:
-                    self._retired_clients.append(self._authenticated_client)
+                previous = self._authenticated_client
+                self._authenticated_client = None
+                self._authenticated_session = None
+                if previous is not None:
+                    await previous.aclose()
                 cookies = httpx.Cookies()
                 for cookie in session._cookies:
                     cookies.jar.set_cookie(copy.copy(cookie))
@@ -213,7 +275,7 @@ class AvanzaClient:
         **kwargs: Any,
     ) -> httpx.Response:
         """Send one request through the current authenticated session."""
-        client, authenticated = await self._request_client()
+        client, authenticated = await self._request_client(allow_authenticated=True)
         if not authenticated:
             raise AvanzaAuthError("No authenticated Avanza session is available")
         return await client.request(method, path, **kwargs)
@@ -224,6 +286,8 @@ class AvanzaClient:
         path: str,
         request_id: str,
         params: dict[str, Any] | None = None,
+        *,
+        authenticated: bool = False,
     ) -> None:
         """Handle HTTP error responses with enhanced context.
 
@@ -241,31 +305,42 @@ class AvanzaClient:
         """
         status_code = response.status_code
 
-        # Try to extract error message from response
-        try:
-            error_data = response.json()
-        except ValueError:
+        if authenticated:
+            # Never inspect or log authenticated upstream error bodies: Avanza may
+            # include account/session metadata in failure responses.
             error_data = None
-        message = (
-            error_data.get("message", response.text)
-            if isinstance(error_data, dict)
-            else response.text
-        )
-        message = str(message if message is not None else f"HTTP {status_code}")
-        message = message[:500] or f"HTTP {status_code}"
+            message = f"HTTP {status_code}"
+            context = f"[{request_id}] {path}"
+            logger.warning(
+                "Authenticated API error: status=%d path=%s request_id=%s",
+                status_code,
+                path,
+                request_id,
+            )
+        else:
+            try:
+                error_data = response.json()
+            except ValueError:
+                error_data = None
+            message = (
+                error_data.get("message", response.text)
+                if isinstance(error_data, dict)
+                else response.text
+            )
+            message = str(message if message is not None else f"HTTP {status_code}")
+            message = message[:500] or f"HTTP {status_code}"
 
-        # Add request context to error message
-        context = f"[{request_id}] {path}"
-        if params:
-            context += f" params={params}"
+            context = f"[{request_id}] {path}"
+            if params:
+                context += f" params={params}"
 
-        logger.warning(
-            "API error: status=%d path=%s request_id=%s message=%s",
-            status_code,
-            path,
-            request_id,
-            message[:200],  # Truncate long messages
-        )
+            logger.warning(
+                "API error: status=%d path=%s request_id=%s message=%s",
+                status_code,
+                path,
+                request_id,
+                message[:200],
+            )
 
         # Handle specific error types
         if status_code == 404:
@@ -353,6 +428,8 @@ class AvanzaClient:
         request_id = str(uuid.uuid4())[:8]
         post_prefix = "POST " if method == "POST" else ""
 
+        auth_market_kind = _authenticated_market_kind(method, path)
+
         @retry(
             retry=retry_if_exception(
                 lambda exc: (
@@ -378,7 +455,9 @@ class AvanzaClient:
         )
         async def _request_with_retry() -> dict[str, Any] | list[Any]:
             try:
-                client, authenticated = await self._request_client()
+                client, authenticated = await self._request_client(
+                    allow_authenticated=auth_market_kind is not None
+                )
                 response = await client.request(method, path, params=params, json=json)
                 if (
                     authenticated
@@ -413,7 +492,9 @@ class AvanzaClient:
                 ) from e
 
             if not response.is_success:
-                self._handle_error(response, path, request_id, params)
+                self._handle_error(
+                    response, path, request_id, params, authenticated=authenticated
+                )
 
             # Handle empty responses
             if not response.content:
@@ -427,7 +508,9 @@ class AvanzaClient:
                 if not isinstance(data, (dict, list)):
                     raise ValueError("Expected a JSON object or array")
                 if authenticated:
-                    data = _sanitize_authenticated_market_payload(data)
+                    if auth_market_kind is None:
+                        raise ValueError("Authenticated market path is not approved")
+                    data = _project_authenticated_market_payload(auth_market_kind, data)
                 return data
             except ValueError as e:
                 logger.error(
