@@ -13,6 +13,7 @@ from ..models.common import Limit, Offset, OrderBookId
 from ..models.filter import SortBy
 from ..models.future_forward import (
     FutureForwardDetails,
+    FutureForwardFilterOptions,
     FutureForwardInfo,
     FutureForwardMatrixFilter,
     FutureForwardMatrixRequest,
@@ -190,7 +191,7 @@ async def get_future_forward_info(
 async def get_future_forward_details(
     ctx: Context, order_book_id: OrderBookId
 ) -> FutureForwardDetails:
-    """Get extended future, forward, or option details.\n\n    The service falls back to the option-specific details path only on not-found;\n    detail fields are intentionally flexible.\n    """
+    """Get extended future, forward, or option details.\n\n    The service falls back to the option-specific details path only on not-found;\n    recognized detail fields.\n    """
     with api_errors():
         return await MarketDataService(
             ctx.lifespan_context["client"]
@@ -198,10 +199,10 @@ async def get_future_forward_details(
 
 
 @mcp.tool(annotations=READ_ONLY)
-async def get_future_forward_filter_options(ctx: Context) -> dict[str, Any]:
+async def get_future_forward_filter_options(ctx: Context) -> FutureForwardFilterOptions:
     """Get current upstream filter options before selecting futures/forwards/options.
 
-    Option names, values and nested detail fields are intentionally flexible.
+    Option names, values and nested recognized detail fields.
     """
     with api_errors():
         return await MarketDataService(
