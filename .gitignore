@@ -15,3 +15,5 @@ wheels/
 # Local deployment secrets
 public/gateway.env
 public/tunnel.env
+authenticated/gateway.env
+authenticated/tunnel.env

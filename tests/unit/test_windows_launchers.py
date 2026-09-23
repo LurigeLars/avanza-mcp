@@ -18,6 +18,17 @@ def test_public_http_launcher_runs_fastmcp_in_process() -> None:
     assert "fastmcp.exe" not in source
 
 
+def test_authenticated_http_launcher_uses_separate_loopback_port() -> None:
+    source = (WINDOWS / "run-auth-http-hidden.py").read_text(encoding="utf-8")
+    installer = (WINDOWS / "install-auth-http-task.ps1").read_text(encoding="utf-8")
+
+    assert 'AVANZA_MCP_AUTH_PORT", "8768"' in source
+    assert 'host="127.0.0.1"' in source
+    assert "create_auth_server" in source
+    assert "Get-NetTCPConnection -LocalPort 8768" in installer
+    assert "AvanzaMcpAuthenticatedHttpServer" in installer
+
+
 def test_local_gateway_uses_dedicated_port_and_kill_on_close_job() -> None:
     source = (WINDOWS / "run-local-gateway-hidden.py").read_text(encoding="utf-8")
     helper = (WINDOWS / "_job_process.py").read_text(encoding="utf-8")

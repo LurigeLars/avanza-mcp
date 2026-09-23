@@ -1,0 +1,41 @@
+# Separate authenticated ChatGPT path.
+# The Avanza session remains in the host-side process on 127.0.0.1:8768.
+name: avanza-mcp-authenticated
+
+services:
+  gateway:
+    image: node:24.21.0-alpine
+    container_name: avanza-mcp-authenticated-gateway
+    command: ["node", "/app/gateway.mjs"]
+    user: node
+    env_file: authenticated/gateway.env
+    environment:
+      GATEWAY_MODE: cloudflare
+      BIND_HOST: 0.0.0.0
+      UPSTREAM_HOST: host.docker.internal
+      UPSTREAM_PORT: "8768"
+      UPSTREAM_PATH: /mcp
+      UPSTREAM_HOST_HEADER: localhost
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./public/gateway:/app:ro
+    networks: [edge]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  cloudflared:
+    image: cloudflare/cloudflared:2026.9.1
+    container_name: avanza-mcp-authenticated-cloudflared
+    command: ["tunnel", "--no-autoupdate", "run"]
+    env_file: authenticated/tunnel.env
+    networks: [edge]
+    depends_on: [gateway]
+    restart: unless-stopped
+
+networks:
+  edge:
+    driver: bridge
