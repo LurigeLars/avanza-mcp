@@ -1,0 +1,223 @@
+name: Finalize authenticated read-only port
+
+on:
+  push:
+    branches: [feat/authenticated-readonly-v2]
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: feat/authenticated-readonly-v2
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v7
+      - name: Restore public contracts, harden auth boundary, and test
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+
+          git checkout origin/main -- \
+            src/avanza_mcp/models/certificate.py \
+            src/avanza_mcp/models/chart.py \
+            src/avanza_mcp/models/common.py \
+            src/avanza_mcp/models/etf.py \
+            src/avanza_mcp/models/filter.py \
+            src/avanza_mcp/models/fund.py \
+            src/avanza_mcp/models/future_forward.py \
+            src/avanza_mcp/models/stock.py \
+            src/avanza_mcp/models/warrant.py \
+            src/avanza_mcp/services/market_data_service.py \
+            src/avanza_mcp/tools/certificates.py \
+            src/avanza_mcp/tools/futures_forwards.py \
+            src/avanza_mcp/tools/market_data.py \
+            src/avanza_mcp/tools/warrants.py \
+            tests/unit/test_certificate_models.py \
+            tests/unit/test_fund_contracts.py \
+            tests/unit/test_mcp_contracts.py \
+            tests/unit/test_models.py \
+            tests/unit/test_tool_helpers.py
+
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path("src/avanza_mcp/auth/server.py")
+          s = p.read_text()
+          a = s.index("        async def initialize_auth() -> None:\n")
+          b = s.index("        auth_task = asyncio.create_task(initialize_auth())\n", a)
+          s = s[:a] + (
+              "        async def initialize_auth() -> None:\n"
+              "            # Restore silently. BankID UI starts only via connect_avanza.\n"
+              "            await auth.restore()\n\n"
+          ) + s[b:]
+          old = (
+              "    async def expired() -> None:\n"
+              "        await auth.invalidate_session()\n"
+              "        await auth.open_browser()\n"
+          )
+          new = (
+              "    async def expired() -> None:\n"
+              "        # Fail closed. Reauthentication is an explicit user action.\n"
+              "        await auth.invalidate_session()\n"
+          )
+          if old not in s:
+              raise SystemExit("expired block missing")
+          s = s.replace(old, new, 1)
+          s = s.replace(
+              "AVANZA_AUTH_EXPIRED: The local BankID flow was opened. Authenticate and retry.",
+              "AVANZA_AUTH_EXPIRED: Call connect_avanza, complete BankID locally, then retry.",
+          )
+          p.write_text(s)
+
+          p = Path("src/avanza_mcp/client/base.py")
+          s = p.read_text()
+          marker = "logger = logging.getLogger(__name__)\n\n\n"
+          helper = (
+              "logger = logging.getLogger(__name__)\n\n\n"
+              "_PRIVATE_AUTH_MARKET_KEYS = {\n"
+              "    \"accountid\", \"accountnumber\", \"customerid\", \"userid\",\n"
+              "    \"personalnumber\", \"ssn\", \"email\", \"phone\",\n"
+              "    \"mobilenumber\", \"username\",\n"
+              "}\n\n\n"
+              "def _sanitize_authenticated_market_payload(value: Any) -> Any:\n"
+              "    \"\"\"Remove credential/identity fields from flexible authenticated market payloads.\"\"\"\n"
+              "    if isinstance(value, dict):\n"
+              "        cleaned = {}\n"
+              "        for key, item in value.items():\n"
+              "            normalized = \"\".join(ch for ch in str(key).lower() if ch.isalnum())\n"
+              "            if (\n"
+              "                normalized in _PRIVATE_AUTH_MARKET_KEYS\n"
+              "                or normalized.endswith(\"token\")\n"
+              "                or \"cookie\" in normalized\n"
+              "                or \"password\" in normalized\n"
+              "            ):\n"
+              "                continue\n"
+              "            cleaned[key] = _sanitize_authenticated_market_payload(item)\n"
+              "        return cleaned\n"
+              "    if isinstance(value, list):\n"
+              "        return [_sanitize_authenticated_market_payload(item) for item in value]\n"
+              "    return value\n\n\n"
+          )
+          if "_sanitize_authenticated_market_payload" not in s:
+              if marker not in s:
+                  raise SystemExit("logger marker missing")
+              s = s.replace(marker, helper, 1)
+
+          old = (
+              "                if (\n"
+              "                    authenticated\n"
+              "                    and response.status_code == 401\n"
+              "                    and self._session_invalidated is not None\n"
+              "                ):\n"
+              "                    await self._session_invalidated()\n"
+              "                    if self._client is None:\n"
+              "                        raise RuntimeError(\n"
+              "                            \"Client not initialized. Use async context manager.\"\n"
+              "                        )\n"
+              "                    response = await self._client.request(\n"
+              "                        method, path, params=params, json=json\n"
+              "                    )\n"
+          )
+          new = (
+              "                if (\n"
+              "                    authenticated\n"
+              "                    and response.status_code == 401\n"
+              "                    and self._session_invalidated is not None\n"
+              "                ):\n"
+              "                    # Never replace expired authenticated data with anonymous/delayed data.\n"
+              "                    await self._session_invalidated()\n"
+          )
+          if old not in s:
+              raise SystemExit("401 fallback block missing")
+          s = s.replace(old, new, 1)
+
+          old_return = (
+              "                data = response.json()\n"
+              "                if not isinstance(data, (dict, list)):\n"
+              "                    raise ValueError(\"Expected a JSON object or array\")\n"
+              "                return data\n"
+          )
+          new_return = (
+              "                data = response.json()\n"
+              "                if not isinstance(data, (dict, list)):\n"
+              "                    raise ValueError(\"Expected a JSON object or array\")\n"
+              "                if authenticated:\n"
+              "                    data = _sanitize_authenticated_market_payload(data)\n"
+              "                return data\n"
+          )
+          if old_return not in s:
+              raise SystemExit("JSON return block missing")
+          p.write_text(s.replace(old_return, new_return, 1))
+
+          p = Path("tests/unit/test_client.py")
+          s = p.read_text()
+          a = s.index("    @respx.mock\n    async def test_expired_session_falls_back_to_anonymous_request")
+          b = s.index("    @respx.mock\n", a + 20)
+          replacement = (
+              "    @respx.mock\n"
+              "    async def test_expired_authenticated_session_fails_closed(self, method):\n"
+              "        active = SessionMaterial((), \"sentinel-token\")\n"
+              "        invalidated = 0\n\n"
+              "        async def invalidate():\n"
+              "            nonlocal active, invalidated\n"
+              "            active = None\n"
+              "            invalidated += 1\n\n"
+              "        route = respx.route(\n"
+              "            method=method.upper(), url=\"https://www.avanza.se/test\"\n"
+              "        ).mock(return_value=httpx.Response(401, json={\"error\": \"expired\"}))\n"
+              "        client = AvanzaClient(\n"
+              "            session_provider=lambda: active,\n"
+              "            session_invalidated=invalidate,\n"
+              "            max_retries=1,\n"
+              "        )\n\n"
+              "        async with client:\n"
+              "            with pytest.raises(AvanzaAuthError):\n"
+              "                await getattr(client, method)(\"/test\")\n\n"
+              "        assert route.call_count == 1\n"
+              "        assert invalidated == 1\n"
+              "        assert route.calls.last.request.headers[\"x-securitytoken\"] == \"sentinel-token\"\n\n"
+              "    @respx.mock\n"
+              "    async def test_authenticated_market_payload_redacts_private_fields(self):\n"
+              "        active = SessionMaterial((), \"sentinel-token\")\n"
+              "        route = respx.get(\"https://www.avanza.se/test\").mock(\n"
+              "            return_value=httpx.Response(200, json={\n"
+              "                \"safe\": 1,\n"
+              "                \"securityToken\": \"secret\",\n"
+              "                \"nested\": {\n"
+              "                    \"personalNumber\": \"secret\",\n"
+              "                    \"value\": 2,\n"
+              "                    \"cookieJar\": \"secret\",\n"
+              "                },\n"
+              "            })\n"
+              "        )\n"
+              "        client = AvanzaClient(session_provider=lambda: active, max_retries=1)\n"
+              "        async with client:\n"
+              "            result = await client.get(\"/test\")\n"
+              "        assert result == {\"safe\": 1, \"nested\": {\"value\": 2}}\n"
+              "        assert route.call_count == 1\n\n"
+          )
+          p.write_text(s[:a] + replacement + s[b:])
+
+          p = Path("tests/unit/test_auth_server.py")
+          s = p.read_text()
+          if "assert auth.opened == 2" not in s:
+              raise SystemExit("auth.opened assertion missing")
+          p.write_text(s.replace("assert auth.opened == 2", "assert auth.opened == 1", 1))
+          PY
+
+          uv sync --locked --all-extras
+          uv run python -m compileall -q src
+          uv run --locked pytest -q
+          node --test tests/gateway/*.test.mjs
+
+          git add -A
+          git commit -m "fix(auth): preserve public contracts and harden authenticated boundary [auth-finalize-done]"
+          git push origin HEAD:feat/authenticated-readonly-v2
