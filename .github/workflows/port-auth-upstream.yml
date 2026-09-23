@@ -1,0 +1,29 @@
+name: Validate authenticated read-only port
+
+on:
+  push:
+    branches: [feat/authenticated-readonly-v2]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
+    runs-on: ubuntu-latest
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv sync --locked --all-extras
+      - run: uv run --locked pytest tests/unit -v
+      - run: node --test tests/gateway/*.test.mjs
+      - run: uv build
