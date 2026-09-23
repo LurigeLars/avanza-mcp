@@ -22,6 +22,10 @@ class FakeAuth:
         self.closed = False
         self.opened = 0
         self._session = None
+        self.session_cleared = None
+
+    def set_session_cleared_callback(self, callback):
+        self.session_cleared = callback
 
     async def open_browser(self):
         self.opened += 1
@@ -48,6 +52,8 @@ class FakeAuth:
 
     async def invalidate_session(self):
         self._session = None
+        if self.session_cleared is not None:
+            await self.session_cleared()
         return None
 
 

@@ -8,7 +8,7 @@ import secrets
 import socket
 import time
 import webbrowser
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from typing import Literal, Protocol
 from urllib.parse import urlsplit
@@ -110,6 +110,7 @@ class BrowserAuth:
         store: SessionStore | None = None,
         poll_interval: float = 1.5,
         attempt_timeout: float = 120.0,
+        session_cleared: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._client_factory = client_factory
         self._qr_renderer = qr_renderer
@@ -131,6 +132,18 @@ class BrowserAuth:
         self._origin: str | None = None
         self._path_token: str | None = None
         self._csrf_token: str | None = None
+        self._session_cleared = session_cleared
+
+    def set_session_cleared_callback(
+        self, callback: Callable[[], Awaitable[None]] | None
+    ) -> None:
+        """Register the local HTTP-client cleanup hook owned by the server lifespan."""
+        self._session_cleared = callback
+
+    async def _clear_cached_session(self) -> None:
+        callback = self._session_cleared
+        if callback is not None:
+            await callback()
 
     @property
     def session(self) -> SessionMaterial | None:
@@ -147,56 +160,63 @@ class BrowserAuth:
         )
 
     async def invalidate_session(self) -> None:
-        self._session = None
-        self._state = "disconnected"
-        self._error_code = "avanza_auth_expired"
-        if self._store is not None:
-            try:
-                await self._store.delete()
-            except AuthStoreError:
-                self._state = "error"
-                self._error_code = "credential_store"
+        async with self._lock:
+            self._session = None
+            self._state = "disconnected"
+            self._error_code = "avanza_auth_expired"
+            if self._store is not None:
+                try:
+                    await self._store.delete()
+                except AuthStoreError:
+                    self._state = "error"
+                    self._error_code = "credential_store"
+        await self._clear_cached_session()
 
     async def restore(self) -> AuthStatus:
-        if self._store is None:
-            return self.status()
-        try:
-            saved = await self._store.load()
-        except AuthStoreError:
-            self._state = "error"
-            self._error_code = "credential_store"
-            return self.status()
-        if saved is None:
-            return self.status()
-
-        attempt = self._client_factory()
-        try:
-            validated = await attempt.validate_session(saved)
-        except BankIDError as error:
-            self._state = "error"
-            self._error_code = self._diagnostic_code(error)
-            return self.status()
-        finally:
-            await attempt.aclose()
-        if validated is None:
+        # Serialize restore with connect/disconnect. Holding the lock across the
+        # validation request is deliberate: startup restore must finish or fail
+        # before a later explicit user action can change authentication state.
+        async with self._lock:
+            if self._store is None:
+                return self.status()
             try:
-                await self._store.delete()
+                saved = await self._store.load()
             except AuthStoreError:
                 self._state = "error"
                 self._error_code = "credential_store"
                 return self.status()
-            self._state = "disconnected"
+            if saved is None:
+                return self.status()
+
+            attempt = self._client_factory()
+            try:
+                validated = await attempt.validate_session(saved)
+            except BankIDError as error:
+                self._state = "error"
+                self._error_code = self._diagnostic_code(error)
+                return self.status()
+            finally:
+                await attempt.aclose()
+            if validated is None:
+                try:
+                    await self._store.delete()
+                except AuthStoreError:
+                    self._state = "error"
+                    self._error_code = "credential_store"
+                    return self.status()
+                self._state = "disconnected"
+                self._error_code = None
+                return self.status()
+            try:
+                await self._store.save(validated)
+            except AuthStoreError:
+                self._state = "error"
+                self._error_code = "credential_store"
+                return self.status()
+            self._session = validated
+            self._state = "connected"
+            self._error_code = None
             return self.status()
-        try:
-            await self._store.save(validated)
-        except AuthStoreError:
-            self._state = "error"
-            self._error_code = "credential_store"
-            return self.status()
-        self._session = validated
-        self._state = "connected"
-        self._error_code = None
-        return self.status()
 
     async def open_browser(self) -> AuthStatus:
         await self._cancel_scheduled_stop()
@@ -353,17 +373,31 @@ class BrowserAuth:
                     self._state = "error"
                     self._error_code = "credential_store"
 
+        # Drop copied cookies/tokens from the HTTP client immediately after local
+        # disconnection, independently of whether upstream logout can be confirmed.
+        await self._clear_cached_session()
+
         if attempt is not None:
             with suppress(BankIDError):
                 await attempt.cancel()
             await attempt.aclose()
+
+        revocation_unconfirmed = False
         if session is not None:
             logout = self._client_factory()
             try:
-                with suppress(BankIDError):
+                try:
                     await logout.logout(session)
+                except BankIDError:
+                    revocation_unconfirmed = True
             finally:
                 await logout.aclose()
+
+        if revocation_unconfirmed:
+            async with self._lock:
+                if self._state == "disconnected" and self._error_code is None:
+                    self._error_code = "revocation_unconfirmed"
+
         self._schedule_listener_stop()
         return self.status()
 
