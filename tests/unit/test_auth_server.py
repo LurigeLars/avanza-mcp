@@ -12,7 +12,6 @@ from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
 import avanza_mcp
-from avanza_mcp import main
 from avanza_mcp.auth.browser import AuthStatus
 from avanza_mcp.auth.server import create_auth_server, run_auth_server
 from avanza_mcp.client.bankid import SessionMaterial
@@ -142,7 +141,7 @@ def test_cli_preserves_public_default(monkeypatch):
     run = Mock()
     monkeypatch.delenv("AVANZA_MCP_AUTH", raising=False)
     monkeypatch.setattr("avanza_mcp.mcp.run", run)
-    main()
+    avanza_mcp.main()
     run.assert_called_once_with()
 
 
@@ -150,14 +149,14 @@ def test_cli_selects_auth_stdio_from_environment(monkeypatch):
     run = Mock()
     monkeypatch.setenv("AVANZA_MCP_AUTH", "1")
     monkeypatch.setattr("avanza_mcp.auth.server.run_auth_server", run)
-    main()
+    avanza_mcp.main()
     run.assert_called_once_with()
 
 
 def test_cli_rejects_ambiguous_auth_environment(monkeypatch):
     monkeypatch.setenv("AVANZA_MCP_AUTH", "true")
     with pytest.raises(SystemExit):
-        main()
+        avanza_mcp.main()
 
 
 def test_public_startup_does_not_import_account_modules():
