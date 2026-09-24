@@ -14,6 +14,7 @@ import respx
 from tenacity import retry
 from unittest.mock import AsyncMock
 from avanza_mcp.client.endpoints import PublicEndpoint
+from avanza_mcp.client.bankid import SessionMaterial
 from avanza_mcp.client.exceptions import (
     AvanzaAuthError,
     AvanzaNetworkError,
@@ -142,6 +143,232 @@ class TestAvanzaClientRequests:
         else:
             assert json.loads(request.content) == {"foo": "bar"}
             assert not request.url.params
+
+    @respx.mock
+    async def test_authentication_is_used_only_for_explicit_realtime_market_paths(self, method):
+        active = SessionMaterial((), "sentinel-token")
+        if method == "get":
+            path = "/_api/market-guide/stock/123/quote"
+            payload = {"last": 10, "isRealTime": True, "sessionId": "must-not-leak"}
+            expect_authenticated = True
+        else:
+            path = "/_api/search/filtered-search"
+            payload = {"ok": True}
+            expect_authenticated = False
+
+        route = respx.route(
+            method=method.upper(), url=f"https://www.avanza.se{path}"
+        ).mock(return_value=httpx.Response(200, json=payload))
+        client = AvanzaClient(session_provider=lambda: active, max_retries=1)
+
+        async with client:
+            result = await getattr(client, method)(path)
+
+        headers = route.calls.last.request.headers
+        if expect_authenticated:
+            assert headers["x-securitytoken"] == "sentinel-token"
+            assert result == {"last": 10, "isRealTime": True}
+        else:
+            assert "x-securitytoken" not in headers
+            assert "cookie" not in headers
+            assert result == {"ok": True}
+
+    @respx.mock
+    async def test_expired_authenticated_session_fails_closed(self, method):
+        active = SessionMaterial((), "sentinel-token")
+        invalidated = 0
+
+        async def invalidate():
+            nonlocal active, invalidated
+            active = None
+            invalidated += 1
+
+        path = "/_api/market-guide/stock/123/quote"
+        route = respx.route(
+            method=method.upper(), url=f"https://www.avanza.se{path}"
+        ).mock(return_value=httpx.Response(401, json={"error": "expired"}))
+        client = AvanzaClient(
+            session_provider=lambda: active,
+            session_invalidated=invalidate,
+            max_retries=1,
+        )
+
+        async with client:
+            with pytest.raises(AvanzaAuthError):
+                await getattr(client, method)(path)
+
+        assert route.call_count == 1
+        if method == "get":
+            assert invalidated == 1
+            assert route.calls.last.request.headers["x-securitytoken"] == "sentinel-token"
+        else:
+            assert invalidated == 0
+            assert "x-securitytoken" not in route.calls.last.request.headers
+
+    @respx.mock
+    async def test_authenticated_market_payload_is_strictly_projected(self, method):
+        _ = method
+        active = SessionMaterial((), "sentinel-token")
+        path = "/_api/market-guide/stock/123/quote"
+        route = respx.get(f"https://www.avanza.se{path}").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "last": 10,
+                    "isRealTime": True,
+                    "securityToken": "secret",
+                    "sessionId": "secret",
+                    "personalIdentityNumber": "secret",
+                    "futureUnknownField": {"secret": True},
+                },
+            )
+        )
+        client = AvanzaClient(session_provider=lambda: active, max_retries=1)
+        async with client:
+            result = await client.get(path)
+        assert result == {"last": 10, "isRealTime": True}
+        assert route.call_count == 1
+
+    @respx.mock
+    async def test_authenticated_order_depth_projection_strips_nested_unknowns(self, method):
+        _ = method
+        active = SessionMaterial((), "sentinel-token")
+        path = "/_api/market-guide/stock/123/orderdepth"
+        route = respx.get(f"https://www.avanza.se{path}").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "receivedTime": 1,
+                    "accountId": "secret",
+                    "levels": [
+                        {
+                            "buySide": {
+                                "price": 10,
+                                "volume": 2,
+                                "priceString": "10",
+                                "authorization": "secret",
+                            },
+                            "sellSide": None,
+                            "sessionId": "secret",
+                        }
+                    ],
+                },
+            )
+        )
+        client = AvanzaClient(session_provider=lambda: active, max_retries=1)
+        async with client:
+            result = await client.get(path)
+        assert result == {
+            "receivedTime": 1,
+            "levels": [
+                {
+                    "buySide": {"price": 10, "volume": 2, "priceString": "10"},
+                    "sellSide": None,
+                }
+            ],
+        }
+        assert route.call_count == 1
+
+    @respx.mock
+    async def test_authenticated_error_body_is_never_logged_or_exposed(self, method, caplog):
+        if method != "get":
+            return
+        caplog.set_level(logging.WARNING, logger="avanza_mcp.client.base")
+        active = SessionMaterial((), "sentinel-token")
+        path = "/_api/market-guide/stock/123/quote"
+        secret = "sentinel-private-upstream-body"
+        respx.get(f"https://www.avanza.se{path}").mock(
+            return_value=httpx.Response(403, json={"message": secret})
+        )
+        client = AvanzaClient(session_provider=lambda: active, max_retries=1)
+
+        async with client:
+            with pytest.raises(AvanzaAuthError) as exc:
+                await client.get(path)
+
+        assert secret not in str(exc.value)
+        assert secret not in caplog.text
+
+    @respx.mock
+    async def test_clear_authenticated_session_closes_and_dereferences_cached_client(self, method):
+        if method != "get":
+            return
+        active = SessionMaterial((), "sentinel-token")
+        path = "/_api/market-guide/stock/123/quote"
+        respx.get(f"https://www.avanza.se{path}").mock(
+            return_value=httpx.Response(200, json={"last": 10, "isRealTime": True})
+        )
+        client = AvanzaClient(session_provider=lambda: active, max_retries=1)
+
+        async with client:
+            await client.get(path)
+            cached = client._authenticated_client
+            assert cached is not None and not cached.is_closed
+
+            await client.clear_authenticated_session()
+
+            assert cached.is_closed
+            assert client._authenticated_client is None
+            assert client._authenticated_session is None
+
+    @respx.mock
+    async def test_concurrent_disconnect_cannot_resurrect_stale_authenticated_client(self, method):
+        if method != "get":
+            return
+        active = SessionMaterial((), "sentinel-token")
+        path = "/_api/market-guide/stock/123/quote"
+        first_entered = asyncio.Event()
+        release_first = asyncio.Event()
+        seen_tokens: list[str | None] = []
+        calls = 0
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            seen_tokens.append(request.headers.get("x-securitytoken"))
+            if calls == 1:
+                first_entered.set()
+                await release_first.wait()
+            return httpx.Response(200, json={"last": calls, "isRealTime": calls == 1})
+
+        respx.get(f"https://www.avanza.se{path}").mock(side_effect=handler)
+        client = AvanzaClient(session_provider=lambda: active, max_retries=1)
+
+        async with client:
+            first = asyncio.create_task(client.get(path))
+            await first_entered.wait()
+
+            active = None
+            queued = asyncio.create_task(client.get(path))
+            clearing = asyncio.create_task(client.clear_authenticated_session())
+            await asyncio.sleep(0)
+            assert not clearing.done()
+
+            release_first.set()
+            await first
+            await queued
+            await clearing
+
+            assert seen_tokens == ["sentinel-token", None]
+            assert client._authenticated_client is None
+            assert client._authenticated_session is None
+
+    async def test_request_authenticated_rejects_non_relative_same_origin_paths(self, method):
+        if method != "get":
+            return
+        active = SessionMaterial((), "sentinel-token")
+        client = AvanzaClient(session_provider=lambda: active, max_retries=1)
+        invalid = (
+            "https://evil.example/_api/account",
+            "//evil.example/_api/account",
+            "/_api/account?next=https://evil.example",
+            "/_api/account#fragment",
+        )
+
+        async with client:
+            for path in invalid:
+                with pytest.raises(AvanzaAuthError, match="relative same-origin"):
+                    await client.request_authenticated("GET", path)
 
     @respx.mock
     async def test_429_raises_rate_limit(self, mock_client, method):
