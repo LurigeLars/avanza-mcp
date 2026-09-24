@@ -135,8 +135,7 @@ export function createAccessVerifier(config, fetchImpl = fetch) {
 
     if (stale || missingAndRefreshable) {
       // ACCESS_TEAM_DOMAIN is constrained to one *.cloudflareaccess.com team label.
-      // codeql[js/request-forgery]
-      const response = await fetchImpl(`${config.accessIssuer}/cdn-cgi/access/certs`, {
+      const response = await fetchImpl(`${config.accessIssuer}/cdn-cgi/access/certs`, { // codeql[js/request-forgery]
         signal: AbortSignal.timeout(5000),
       });
       if (!response.ok) throw new Error(`certs HTTP ${response.status}`);
