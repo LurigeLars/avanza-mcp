@@ -30,7 +30,7 @@ export function loadConfig(env = process.env) {
     throw new Error('GATEWAY_MODE must be cloudflare or local');
   }
 
-  const accessTeamDomain = String(env.ACCESS_TEAM_DOMAIN ?? '').trim();
+  const accessTeamDomain = String(env.ACCESS_TEAM_DOMAIN ?? '').trim().toLowerCase();
   const accessAud = String(env.ACCESS_AUD ?? '').trim();
   const allowedEmails = new Set(
     String(env.ACCESS_ALLOWED_EMAILS ?? '')
@@ -41,6 +41,9 @@ export function loadConfig(env = process.env) {
 
   if (mode === 'cloudflare') {
     if (!accessTeamDomain) throw new Error('ACCESS_TEAM_DOMAIN is required');
+    if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.cloudflareaccess\.com$/.test(accessTeamDomain)) {
+      throw new Error('ACCESS_TEAM_DOMAIN must be a single Cloudflare Access team domain');
+    }
     if (!accessAud) throw new Error('ACCESS_AUD is required');
     if (allowedEmails.size === 0) throw new Error('ACCESS_ALLOWED_EMAILS must contain at least one address');
   }
@@ -291,7 +294,7 @@ function forward(req, res, body, config, ctx = null) {
   );
 
   upstream.on('error', error => {
-    console.warn(`upstream error: ${error.code ?? error.message}`);
+    console.warn('upstream error', JSON.stringify(String(error.code ?? error.message)));
     if (!res.headersSent) send(res, 502, 'upstream unavailable');
     else res.destroy();
   });
@@ -340,14 +343,14 @@ export function createGatewayServer(env = process.env, dependencies = {}) {
       let identity;
       if (config.mode === 'local') {
         if (!isLoopbackAddress(req.socket.remoteAddress)) {
-          console.warn(`local gateway denied non-loopback client ${clientIp(req)}`);
+          console.warn('local gateway denied non-loopback client', JSON.stringify(clientIp(req)));
           return send(res, 403, 'forbidden');
         }
         identity = { ok: true, email: 'local' };
       } else {
         identity = await verifyAccessJwt(req.headers['cf-access-jwt-assertion']);
         if (!identity.ok) {
-          console.warn(`access denied from ${clientIp(req)}: ${identity.reason}`);
+          console.warn('access denied', JSON.stringify({ client: clientIp(req), reason: identity.reason }));
           return send(res, 403, 'forbidden');
         }
       }
@@ -382,7 +385,7 @@ export function createGatewayServer(env = process.env, dependencies = {}) {
         }
       }
 
-      console.log(`${new Date().toISOString()} ${identity.email} ${req.method} /mcp`);
+      console.log(new Date().toISOString(), JSON.stringify(identity.email), req.method, '/mcp');
       forward(req, res, body, config, ctx);
     } catch (error) {
       const status = Number(error?.status) || 500;
