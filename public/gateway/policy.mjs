@@ -41,8 +41,31 @@ export const DEFAULT_ALLOWED_TOOLS = [
   'enrich_option_snapshot',
 ].join(',');
 
+export const AUTHENTICATED_EXTRA_TOOLS = [
+  'connect_avanza',
+  'disconnect_avanza',
+  'get_auth_status',
+  'get_accounts',
+  'get_holdings',
+  'get_transactions',
+  'get_watchlists',
+  'get_price_alerts',
+  'get_portfolio_insights',
+  'get_instrument_news',
+  'get_insider_transactions',
+  'get_active_orders',
+  'get_deals',
+  'get_stop_loss_orders',
+].join(',');
+
+export const AUTHENTICATED_ALLOWED_TOOLS =
+  `${DEFAULT_ALLOWED_TOOLS},${AUTHENTICATED_EXTRA_TOOLS}`;
+
 export function parseAllowedTools(value) {
-  return new Set((value || DEFAULT_ALLOWED_TOOLS).split(',').map(item => item.trim()).filter(Boolean));
+  const selected = value === '@authenticated'
+    ? AUTHENTICATED_ALLOWED_TOOLS
+    : (value || DEFAULT_ALLOWED_TOOLS);
+  return new Set(selected.split(',').map(item => item.trim()).filter(Boolean));
 }
 
 export function loadInstructions() {
@@ -129,7 +152,7 @@ export function rewriteResponse(message, { allowedTools, compactToolResults = fa
 export function checkRequest(message, allowedTools) {
   if (message?.method !== 'tools/call') return {};
   if (!allowedTools.has(message.params?.name)) {
-    return { error: `Tool not available on the public Avanza connector: ${message.params?.name}` };
+    return { error: `Tool not available on the Avanza connector: ${message.params?.name}` };
   }
   return {};
 }
