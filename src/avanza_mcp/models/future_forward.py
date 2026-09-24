@@ -4,8 +4,7 @@ from datetime import date
 
 from pydantic import field_validator
 
-# Compatibility re-export for callers that import MODEL_CONFIG from model modules.
-from .common import MODEL_CONFIG as MODEL_CONFIG, AvanzaModel, OrderBookId  # codeql[py/unused-import]
+from .common import AvanzaModel, OrderBookId
 from .filter import SortBy, PaginationRequest
 from .stock import HistoricalClosingPrices, Listing, Quote
 
