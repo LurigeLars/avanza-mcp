@@ -56,10 +56,10 @@ async def _run(
         for index in range(repeats):
             if index % 2 == 0:
                 start = time.perf_counter()
-                certificate = await service._collect_certificates(
+                await service._collect_certificates(
                     underlying_order_book_id, direction
                 )
-                warrant = await service._collect_warrants(
+                await service._collect_warrants(
                     underlying_order_book_id, direction
                 )
                 sequential_ms.append((time.perf_counter() - start) * 1000)
@@ -83,10 +83,10 @@ async def _run(
                 aggregate_ms.append((time.perf_counter() - start) * 1000)
 
                 start = time.perf_counter()
-                certificate = await service._collect_certificates(
+                await service._collect_certificates(
                     underlying_order_book_id, direction
                 )
-                warrant = await service._collect_warrants(
+                await service._collect_warrants(
                     underlying_order_book_id, direction
                 )
                 sequential_ms.append((time.perf_counter() - start) * 1000)

@@ -306,7 +306,7 @@ async def test_cancel_drains_stale_collect_without_leaking_into_replacement():
         await old.cancel()
         await cancel_seen.wait()
         with pytest.raises(BankIDError) as caught:
-            await stale_collect
+            _ = await stale_collect
         assert caught.value.code is BankIDErrorCode.CANCELLED
 
         async with BankIDClient(

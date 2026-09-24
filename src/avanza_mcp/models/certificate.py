@@ -1,6 +1,8 @@
 """Certificate-related Pydantic models."""
 
 from pydantic import Field
+# Compatibility re-export for callers that import MODEL_CONFIG from model modules.
+# codeql[py/unused-import]
 from .common import MODEL_CONFIG as MODEL_CONFIG, AvanzaModel, OrderBookId
 from .stock import Quote, Listing, HistoricalClosingPrices, KeyIndicators
 from .filter import UnderlyingInstrument, SortBy, FilterResponse, PaginationRequest
