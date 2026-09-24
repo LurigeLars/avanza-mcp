@@ -1,10 +1,11 @@
 import os
 import sys
 from contextlib import redirect_stderr, redirect_stdout
-from pathlib import Path
+
+from _runtime_paths import local_appdata_dir
 
 PORT = int(os.environ.get("AVANZA_MCP_PORT", "8767"))
-LOG_DIR = Path(os.environ["LOCALAPPDATA"]) / "avanza-mcp"
+LOG_DIR = local_appdata_dir() / "avanza-mcp"
 LOG_FILE = LOG_DIR / "public-http.log"
 OLD_LOG_FILE = LOG_DIR / "public-http.log.1"
 
