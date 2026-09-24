@@ -98,6 +98,7 @@ export function buildUpstreamHeaders(headers, config, bodyLength = null) {
   for (const name of [
     'authorization',
     'cookie',
+    'x-securitytoken',
     'cf-access-jwt-assertion',
     'cf-authorization-token',
     'cf-connecting-ip',

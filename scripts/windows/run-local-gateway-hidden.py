@@ -41,6 +41,7 @@ def main() -> int:
             "UPSTREAM_PORT": "8767",
             "UPSTREAM_PATH": "/mcp",
             "UPSTREAM_HOST_HEADER": "localhost",
+            "ALLOWED_TOOLS": "@authenticated",
         }
     )
 

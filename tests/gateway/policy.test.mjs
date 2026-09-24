@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  AUTHENTICATED_ALLOWED_TOOLS,
+  AUTHENTICATED_EXTRA_TOOLS,
   DEFAULT_ALLOWED_TOOLS,
   checkRequest,
   compactSchema,
@@ -20,6 +22,21 @@ test('default public allowlist contains the current 37 read-only Avanza tools', 
   assert.equal(DEFAULT_ALLOWED_TOOLS.split(',').length, 37);
 });
 
+test('authenticated profile adds exactly the 14 approved account/session tools', () => {
+  const allowed = parseAllowedTools('@authenticated');
+  assert.equal(AUTHENTICATED_EXTRA_TOOLS.split(',').length, 14);
+  assert.equal(AUTHENTICATED_ALLOWED_TOOLS.split(',').length, 51);
+  assert.equal(allowed.size, 51);
+  assert.equal(allowed.has('connect_avanza'), true);
+  assert.equal(allowed.has('get_accounts'), true);
+  assert.equal(allowed.has('get_active_orders'), true);
+  assert.equal(allowed.has('get_stop_loss_orders'), true);
+  assert.equal(allowed.has('get_credit_info'), false);
+  assert.equal(allowed.has('get_current_offers'), false);
+  assert.equal(allowed.has('get_forum_posts'), false);
+  assert.equal(allowed.has('future_place_order'), false);
+});
+
 test('explicit ALLOWED_TOOLS override is authoritative', () => {
   const allowed = parseAllowedTools('search_instruments, get_stock_quote');
   assert.deepEqual([...allowed], ['search_instruments', 'get_stock_quote']);
@@ -31,7 +48,7 @@ test('non-allowlisted tool calls are blocked', () => {
     method: 'tools/call',
     params: { name: 'future_place_order' },
   }, allowed), {
-    error: 'Tool not available on the public Avanza connector: future_place_order',
+    error: 'Tool not available on the Avanza connector: future_place_order',
   });
 });
 
