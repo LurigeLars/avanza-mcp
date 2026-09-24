@@ -9,12 +9,11 @@ const bytes = value => Buffer.byteLength(JSON.stringify(value));
 function stripSchemaDescriptions(value) {
   if (Array.isArray(value)) return value.map(stripSchemaDescriptions);
   if (!value || typeof value !== 'object') return value;
-  const out = {};
-  for (const [key, item] of Object.entries(value)) {
-    if (key === 'description') continue;
-    out[key] = stripSchemaDescriptions(item);
-  }
-  return out;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => key !== 'description')
+      .map(([key, item]) => [key, stripSchemaDescriptions(item)]),
+  );
 }
 
 const descriptionless = compacted.map(tool => ({
