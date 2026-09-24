@@ -3,8 +3,7 @@
 from pydantic import Field
 
 # Compatibility re-export for callers that import MODEL_CONFIG from model modules.
-# codeql[py/unused-import]
-from .common import MODEL_CONFIG as MODEL_CONFIG, AvanzaModel
+from .common import MODEL_CONFIG as MODEL_CONFIG, AvanzaModel  # codeql[py/unused-import]
 
 
 class Quote(AvanzaModel):
