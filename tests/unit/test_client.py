@@ -7,7 +7,6 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
 from functools import partial
-from http.cookiejar import Cookie
 
 import pytest
 import httpx
@@ -311,6 +310,65 @@ class TestAvanzaClientRequests:
             assert cached.is_closed
             assert client._authenticated_client is None
             assert client._authenticated_session is None
+
+    @respx.mock
+    async def test_concurrent_disconnect_cannot_resurrect_stale_authenticated_client(self, method):
+        if method != "get":
+            return
+        active = SessionMaterial((), "sentinel-token")
+        path = "/_api/market-guide/stock/123/quote"
+        first_entered = asyncio.Event()
+        release_first = asyncio.Event()
+        seen_tokens: list[str | None] = []
+        calls = 0
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            seen_tokens.append(request.headers.get("x-securitytoken"))
+            if calls == 1:
+                first_entered.set()
+                await release_first.wait()
+            return httpx.Response(200, json={"last": calls, "isRealTime": calls == 1})
+
+        respx.get(f"https://www.avanza.se{path}").mock(side_effect=handler)
+        client = AvanzaClient(session_provider=lambda: active, max_retries=1)
+
+        async with client:
+            first = asyncio.create_task(client.get(path))
+            await first_entered.wait()
+
+            active = None
+            queued = asyncio.create_task(client.get(path))
+            clearing = asyncio.create_task(client.clear_authenticated_session())
+            await asyncio.sleep(0)
+            assert not clearing.done()
+
+            release_first.set()
+            await first
+            await queued
+            await clearing
+
+            assert seen_tokens == ["sentinel-token", None]
+            assert client._authenticated_client is None
+            assert client._authenticated_session is None
+
+    async def test_request_authenticated_rejects_non_relative_same_origin_paths(self, method):
+        if method != "get":
+            return
+        active = SessionMaterial((), "sentinel-token")
+        client = AvanzaClient(session_provider=lambda: active, max_retries=1)
+        invalid = (
+            "https://evil.example/_api/account",
+            "//evil.example/_api/account",
+            "/_api/account?next=https://evil.example",
+            "/_api/account#fragment",
+        )
+
+        async with client:
+            for path in invalid:
+                with pytest.raises(AvanzaAuthError, match="relative same-origin"):
+                    await client.request_authenticated("GET", path)
 
     @respx.mock
     async def test_429_raises_rate_limit(self, mock_client, method):

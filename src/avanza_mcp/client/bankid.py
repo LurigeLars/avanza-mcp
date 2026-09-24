@@ -222,13 +222,22 @@ class BankIDClient:
             raise remote_error
 
     async def logout(self, session: SessionMaterial | None = None) -> None:
-        """End the remote web session and always discard local cookies."""
+        """End one verified remote web session and always discard local cookies.
+
+        A disconnect may use a fresh BankIDClient instance, so the saved session
+        cookies must be restored explicitly before the logout request. A 401 is
+        not treated as proof of revocation; callers surface it as unconfirmed.
+        """
         self._ensure_open()
         stale = set(self._inflight)
         self._cancelled = True
         headers: dict[str, str] = {}
-        if session is not None and session._security_token is not None:
-            headers["X-SecurityToken"] = session._security_token
+        if session is not None:
+            self._client.cookies.clear()
+            for cookie in session._cookies:
+                self._client.cookies.jar.set_cookie(copy.copy(cookie))
+            if session._security_token is not None:
+                headers["X-SecurityToken"] = session._security_token
 
         remote_error: BankIDError | None = None
         try:
@@ -238,7 +247,6 @@ class BankIDClient:
                 headers=headers,
                 cleanup=True,
                 attempt_deadline=False,
-                allowed_statuses={401},
             )
         except BankIDError as error:
             remote_error = error

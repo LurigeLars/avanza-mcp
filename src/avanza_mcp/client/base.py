@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from http.cookiejar import Cookie
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 import httpx
 from tenacity import (
@@ -222,51 +223,108 @@ class AvanzaClient:
             with suppress(Exception):
                 await client.aclose()
 
-    async def _request_client(
-        self, *, allow_authenticated: bool = True
-    ) -> tuple[httpx.AsyncClient, bool]:
+    def _public_client(self) -> httpx.AsyncClient:
         client = self._client
         if client is None:
             raise RuntimeError("Client not initialized. Use async context manager.")
+        return client
 
-        session = self._session_provider() if self._session_provider else None
+    async def _ensure_authenticated_client_locked(
+        self, session: AuthenticatedSession
+    ) -> httpx.AsyncClient:
+        """Return the cached auth client. Caller must hold ``_client_lock``."""
+        if session is not self._authenticated_session:
+            previous = self._authenticated_client
+            self._authenticated_client = None
+            self._authenticated_session = None
+            if previous is not None:
+                await previous.aclose()
+
+            cookies = httpx.Cookies()
+            for cookie in session._cookies:
+                cookies.jar.set_cookie(copy.copy(cookie))
+            headers = {
+                "User-Agent": f"avanza-mcp/{__version__}",
+                "Accept": "application/json",
+            }
+            if session._security_token is not None:
+                headers["X-SecurityToken"] = session._security_token
+            self._authenticated_client = httpx.AsyncClient(
+                base_url=self._base_url,
+                cookies=cookies,
+                headers=headers,
+                timeout=httpx.Timeout(self._timeout, connect=self._connect_timeout),
+                limits=httpx.Limits(
+                    max_connections=self._max_connections,
+                    max_keepalive_connections=self._max_keepalive_connections,
+                ),
+                follow_redirects=False,
+                trust_env=False,
+            )
+            self._authenticated_session = session
+
+        client = self._authenticated_client
+        if client is None:
+            raise AvanzaAuthError("No authenticated Avanza session is available")
+        return client
+
+    @staticmethod
+    def _require_same_origin_authenticated_path(path: str) -> None:
+        """Reject absolute, protocol-relative, query-bearing, or fragment paths."""
+        parsed = urlsplit(path)
         if (
-            not allow_authenticated
-            or session is None
-            or self._base_url.rstrip("/") != self.DEFAULT_BASE_URL
+            not path.startswith("/")
+            or path.startswith("//")
+            or parsed.scheme
+            or parsed.netloc
+            or parsed.query
+            or parsed.fragment
+            or parsed.path != path
         ):
-            return client, False
+            raise AvanzaAuthError(
+                "Authenticated Avanza requests require a relative same-origin path"
+            )
+
+    async def _send_request(
+        self,
+        method: str,
+        path: str,
+        *,
+        allow_authenticated: bool,
+        require_authenticated: bool = False,
+        **kwargs: Any,
+    ) -> tuple[httpx.Response, bool]:
+        """Send one request while serializing auth selection through completion.
+
+        The client lock intentionally spans an authenticated network request. This
+        makes disconnect/clear wait for already-started requests, while any request
+        queued behind disconnect observes the cleared session and cannot resurrect
+        a stale authenticated client.
+        """
+        public_client = self._public_client()
+        auth_possible = (
+            allow_authenticated
+            and self._session_provider is not None
+            and self._base_url.rstrip("/") == self.DEFAULT_BASE_URL
+        )
+        if not auth_possible:
+            if require_authenticated:
+                raise AvanzaAuthError("No authenticated Avanza session is available")
+            return await public_client.request(method, path, **kwargs), False
 
         async with self._client_lock:
-            if session is not self._authenticated_session:
-                previous = self._authenticated_client
-                self._authenticated_client = None
-                self._authenticated_session = None
-                if previous is not None:
-                    await previous.aclose()
-                cookies = httpx.Cookies()
-                for cookie in session._cookies:
-                    cookies.jar.set_cookie(copy.copy(cookie))
-                headers = {
-                    "User-Agent": f"avanza-mcp/{__version__}",
-                    "Accept": "application/json",
-                }
-                if session._security_token is not None:
-                    headers["X-SecurityToken"] = session._security_token
-                self._authenticated_client = httpx.AsyncClient(
-                    base_url=self._base_url,
-                    cookies=cookies,
-                    headers=headers,
-                    timeout=httpx.Timeout(self._timeout, connect=self._connect_timeout),
-                    limits=httpx.Limits(
-                        max_connections=self._max_connections,
-                        max_keepalive_connections=self._max_keepalive_connections,
-                    ),
-                    follow_redirects=False,
-                    trust_env=False,
-                )
-                self._authenticated_session = session
-            return self._authenticated_client, True
+            session = self._session_provider()
+            if session is None:
+                if require_authenticated:
+                    raise AvanzaAuthError("No authenticated Avanza session is available")
+            else:
+                auth_client = await self._ensure_authenticated_client_locked(session)
+                response = await auth_client.request(method, path, **kwargs)
+                return response, True
+
+        # No authenticated session exists. Public market requests may continue
+        # anonymously; privileged account requests use require_authenticated=True.
+        return await public_client.request(method, path, **kwargs), False
 
     async def request_authenticated(
         self,
@@ -274,11 +332,18 @@ class AvanzaClient:
         path: str,
         **kwargs: Any,
     ) -> httpx.Response:
-        """Send one request through the current authenticated session."""
-        client, authenticated = await self._request_client(allow_authenticated=True)
-        if not authenticated:
+        """Send one same-origin request through the current authenticated session."""
+        self._require_same_origin_authenticated_path(path)
+        response, authenticated = await self._send_request(
+            method,
+            path,
+            allow_authenticated=True,
+            require_authenticated=True,
+            **kwargs,
+        )
+        if not authenticated:  # Defensive; require_authenticated already enforces this.
             raise AvanzaAuthError("No authenticated Avanza session is available")
-        return await client.request(method, path, **kwargs)
+        return response
 
     def _handle_error(
         self,
@@ -455,10 +520,13 @@ class AvanzaClient:
         )
         async def _request_with_retry() -> dict[str, Any] | list[Any]:
             try:
-                client, authenticated = await self._request_client(
-                    allow_authenticated=auth_market_kind is not None
+                response, authenticated = await self._send_request(
+                    method,
+                    path,
+                    allow_authenticated=auth_market_kind is not None,
+                    params=params,
+                    json=json,
                 )
-                response = await client.request(method, path, params=params, json=json)
                 if (
                     authenticated
                     and response.status_code == 401

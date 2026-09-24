@@ -42,18 +42,20 @@ def create_auth_server(auth: BrowserAuth | None = None) -> FastMCP:
     @asynccontextmanager
     async def lifespan(server: FastMCP) -> AsyncIterator[dict[str, AvanzaClient]]:
         _configure_authenticated_requests(lambda: auth.session, auth.invalidate_session)
-
-        async with AvanzaClient(session_provider=lambda: auth.session) as client:
-            auth.set_session_cleared_callback(client.clear_authenticated_session)
-            # Restore completes before the MCP surface accepts calls, so an older
-            # persisted session cannot race an explicit connect/disconnect action.
-            await auth.restore()
-            try:
-                yield {"client": client}
-            finally:
-                auth.set_session_cleared_callback(None)
-                await auth.aclose()
-                _configure_authenticated_requests(None, None)
+        try:
+            async with AvanzaClient(session_provider=lambda: auth.session) as client:
+                auth.set_session_cleared_callback(client.clear_authenticated_session)
+                try:
+                    # Restore completes before the MCP surface accepts calls, so an
+                    # older persisted session cannot race an explicit user action.
+                    await auth.restore()
+                    yield {"client": client}
+                finally:
+                    auth.set_session_cleared_callback(None)
+                    await auth.aclose()
+        finally:
+            # Reset process-global wiring even if restore/startup is cancelled or fails.
+            _configure_authenticated_requests(None, None)
 
     server = FastMCP(
         "Avanza MCP Authenticated Server",

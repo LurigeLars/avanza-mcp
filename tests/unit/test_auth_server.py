@@ -11,6 +11,7 @@ import respx
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
+import avanza_mcp
 from avanza_mcp import main
 from avanza_mcp.auth.browser import AuthStatus
 from avanza_mcp.auth.server import create_auth_server, run_auth_server
@@ -108,6 +109,24 @@ async def test_existing_market_tools_reuse_authenticated_session():
 
     assert result.structured_content["last"] == 10
     assert route.calls.last.request.headers["x-securitytoken"] == "sentinel-token"
+
+
+async def test_auth_lifespan_resets_global_wiring_when_restore_fails():
+    class RestoreFails(FakeAuth):
+        async def restore(self):
+            raise RuntimeError("synthetic restore failure")
+
+    auth = RestoreFails()
+    server = create_auth_server(auth)  # type: ignore[arg-type]
+
+    with pytest.raises(RuntimeError, match="synthetic restore failure"):
+        async with Client(server):
+            pass
+
+    assert auth.closed
+    assert auth.session_cleared is None
+    assert avanza_mcp._auth_session_provider is None
+    assert avanza_mcp._auth_session_invalidator is None
 
 
 def test_auth_transport_is_stdio(monkeypatch):

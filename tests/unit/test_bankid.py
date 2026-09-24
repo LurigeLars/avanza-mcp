@@ -335,7 +335,7 @@ async def test_cancel_and_logout_are_strict_and_clear_local_cookies():
             return response(body=session_info(True))
         if request.url.path == LOGOUT:
             assert request.headers["x-securitytoken"] == "synthetic-security-token"
-            return response(401)
+            return response(204)
         assert request.url.path == CANCEL
         assert json.loads(request.content) == {"transactionId": "synthetic-transaction"}
         return response(404)
@@ -353,6 +353,68 @@ async def test_cancel_and_logout_are_strict_and_clear_local_cookies():
 
     assert sum(request.url.path == CANCEL for request in requests) == 1
     assert sum(request.url.path == LOGOUT for request in requests) == 1
+
+
+async def test_fresh_logout_client_restores_saved_session_cookies_and_token():
+    async def source_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == START:
+            return response(
+                body=started(), headers={"set-cookie": "session=secret; Path=/; Secure"}
+            )
+        if request.url.path == COLLECT:
+            return response(body={"state": "COMPLETE"})
+        assert request.url.path == INFO
+        return response(body=session_info(True))
+
+    async with await start_client(source_handler) as source:
+        result = await source.collect()
+        assert result.session is not None
+        saved = result.session
+
+    seen: dict[str, str | None] = {}
+
+    async def logout_handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == LOGOUT
+        seen["cookie"] = request.headers.get("cookie")
+        seen["token"] = request.headers.get("x-securitytoken")
+        return response(204)
+
+    async with BankIDClient(_transport=httpx.MockTransport(logout_handler)) as fresh:
+        await fresh.logout(saved)
+        assert list(fresh._client.cookies.jar) == []
+
+    assert seen == {
+        "cookie": "session=secret",
+        "token": "synthetic-security-token",
+    }
+
+
+async def test_logout_401_is_not_treated_as_confirmed_revocation():
+    async def source_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == START:
+            return response(
+                body=started(), headers={"set-cookie": "session=secret; Path=/; Secure"}
+            )
+        if request.url.path == COLLECT:
+            return response(body={"state": "COMPLETE"})
+        assert request.url.path == INFO
+        return response(body=session_info(True))
+
+    async with await start_client(source_handler) as source:
+        result = await source.collect()
+        assert result.session is not None
+        saved = result.session
+
+    async def logout_handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers.get("cookie") == "session=secret"
+        assert request.headers.get("x-securitytoken") == "synthetic-security-token"
+        return response(401)
+
+    async with BankIDClient(_transport=httpx.MockTransport(logout_handler)) as fresh:
+        with pytest.raises(BankIDError) as caught:
+            await fresh.logout(saved)
+
+    assert caught.value.upstream_status == 401
 
 
 async def test_saved_session_is_restored_and_revalidated_without_start():
