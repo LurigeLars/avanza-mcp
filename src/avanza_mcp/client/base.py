@@ -427,6 +427,7 @@ class AvanzaClient:
                         math.ceil((date - datetime.now(timezone.utc)).total_seconds()),
                     )
             except (ValueError, TypeError, OverflowError):
+                # Invalid Retry-After values are treated as unspecified.
                 pass
             raise AvanzaRateLimitError(seconds, f"{context}: {message}")
         else:

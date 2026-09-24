@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 from fastmcp import Client
 
@@ -27,7 +25,6 @@ class FakeMarket:
 
     async def list_futures_forwards(self, request):
         self.calls.append(request)
-        option_type = request.filter.optionTypes[0] if request.filter.optionTypes else None
         expiry = request.filter.endDates[0] if request.filter.endDates else None
 
         filter_options = {

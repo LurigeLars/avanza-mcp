@@ -65,29 +65,39 @@ class AuthStatus(BaseModel):
 
 
 class BankIDAttempt(Protocol):
-    async def start(self) -> str: ...
+    async def start(self) -> str:
+        pass
 
-    async def restart(self) -> str: ...
+    async def restart(self) -> str:
+        pass
 
-    async def collect(self) -> CollectResult: ...
+    async def collect(self) -> CollectResult:
+        pass
 
-    async def cancel(self) -> None: ...
+    async def cancel(self) -> None:
+        pass
 
-    async def logout(self, session: SessionMaterial | None = None) -> None: ...
+    async def logout(self, session: SessionMaterial | None = None) -> None:
+        pass
 
     async def validate_session(
         self, session: SessionMaterial
-    ) -> SessionMaterial | None: ...
+    ) -> SessionMaterial | None:
+        pass
 
-    async def aclose(self) -> None: ...
+    async def aclose(self) -> None:
+        pass
 
 
 class SessionStore(Protocol):
-    async def load(self) -> SessionMaterial | None: ...
+    async def load(self) -> SessionMaterial | None:
+        pass
 
-    async def save(self, session: SessionMaterial) -> None: ...
+    async def save(self, session: SessionMaterial) -> None:
+        pass
 
-    async def delete(self) -> None: ...
+    async def delete(self) -> None:
+        pass
 
 
 def render_qr_svg(payload: str) -> str:
@@ -423,7 +433,7 @@ class BrowserAuth:
         if stop_task is not None and stop_task is not asyncio.current_task():
             stop_task.cancel()
             with suppress(asyncio.CancelledError):
-                await stop_task
+                _ = await stop_task
         await self._stop_listener()
 
     async def _finish_attempt(
@@ -465,6 +475,7 @@ class BrowserAuth:
             await asyncio.sleep(self._attempt_timeout)
             await self._finish_attempt(attempt, "timed_out")
         except asyncio.CancelledError:
+            # Cancellation is the expected shutdown path for the timeout task.
             pass
 
     def _cancel_timeout(self) -> None:
@@ -545,7 +556,7 @@ class BrowserAuth:
             server.should_exit = True
         if task is not None and task is not asyncio.current_task():
             with suppress(asyncio.CancelledError):
-                await task
+                _ = await task
 
     def _schedule_listener_stop(self) -> None:
         if self._server is not None and (
@@ -559,7 +570,7 @@ class BrowserAuth:
         if task is not None and task is not asyncio.current_task() and not task.done():
             task.cancel()
             with suppress(asyncio.CancelledError):
-                await task
+                _ = await task
 
     async def _stop_listener_later(self) -> None:
         await asyncio.sleep(2)
