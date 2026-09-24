@@ -21,8 +21,10 @@ def main() -> int:
     rotate_log()
     with LOG_FILE.open("a", encoding="utf-8") as log:
         with redirect_stdout(log), redirect_stderr(log):
-            from avanza_mcp import mcp
-            mcp.run(transport="http", host="127.0.0.1", port=PORT)
+            from avanza_mcp.auth.server import create_auth_server
+
+            server = create_auth_server()
+            server.run(transport="http", host="127.0.0.1", port=PORT)
     return 0
 
 
