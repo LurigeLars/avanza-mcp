@@ -88,16 +88,15 @@ export function compactSchema(value) {
   if (Array.isArray(value)) return value.map(compactSchema);
   if (!value || typeof value !== 'object') return value;
 
-  const out = {};
+  const entries = [];
   for (const [key, item] of Object.entries(value)) {
     if (key === '$schema' || key === 'title' || key === 'examples') continue;
-    if (key === 'description') {
-      out[key] = compactText(item, 96);
-      continue;
-    }
-    out[key] = compactSchema(item);
+    entries.push([
+      key,
+      key === 'description' ? compactText(item, 96) : compactSchema(item),
+    ]);
   }
-  return out;
+  return Object.fromEntries(entries);
 }
 
 export function compactToolDefinition(tool) {
