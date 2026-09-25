@@ -2,7 +2,7 @@
 
 from pydantic import Field
 
-from .common import MODEL_CONFIG as MODEL_CONFIG, AvanzaModel
+from .common import AvanzaModel
 from .filter import FilterResponse, PaginationRequest, SortBy
 from .stock import (
     HistoricalClosingPrices,

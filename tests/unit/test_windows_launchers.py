@@ -28,5 +28,8 @@ def test_local_gateway_uses_dedicated_port_auth_surface_and_kill_on_close_job() 
     assert '"PORT": "8769"' in source
     assert '"ALLOWED_TOOLS": "@authenticated"' in source
     assert "run_child(" in source
+    assert "find_node_executable()" in source
+    assert "sys.argv" not in source
     assert "JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE" in helper
     assert "Get-NetTCPConnection -LocalPort 8769" in installer
+    assert "$launcherArg = '\"{0}\"' -f $launcher" in installer

@@ -3,7 +3,7 @@
 from pydantic import Field
 from typing import Literal
 
-from .common import MODEL_CONFIG as MODEL_CONFIG, AvanzaModel
+from .common import AvanzaModel
 
 
 class SortBy(AvanzaModel):

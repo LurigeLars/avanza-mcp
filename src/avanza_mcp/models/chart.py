@@ -2,7 +2,7 @@
 
 from pydantic import Field
 
-from .common import MODEL_CONFIG as MODEL_CONFIG, AvanzaModel
+from .common import AvanzaModel
 
 
 class OHLCDataPoint(AvanzaModel):

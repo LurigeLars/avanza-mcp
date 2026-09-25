@@ -1,7 +1,7 @@
 """Certificate-related Pydantic models."""
 
 from pydantic import Field
-from .common import MODEL_CONFIG as MODEL_CONFIG, AvanzaModel, OrderBookId
+from .common import AvanzaModel, OrderBookId
 from .stock import Quote, Listing, HistoricalClosingPrices, KeyIndicators
 from .filter import UnderlyingInstrument, SortBy, FilterResponse, PaginationRequest
 

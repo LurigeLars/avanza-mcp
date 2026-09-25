@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
 
 from _job_process import run_child
+from _runtime_paths import find_node_executable, local_appdata_dir
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GATEWAY = REPO_ROOT / "public" / "gateway" / "gateway.mjs"
-LOG_DIR = Path(os.environ["LOCALAPPDATA"]) / "avanza-mcp"
+LOG_DIR = local_appdata_dir() / "avanza-mcp"
 LOG_FILE = LOG_DIR / "local-gateway.log"
 OLD_LOG_FILE = LOG_DIR / "local-gateway.log.1"
 
@@ -24,10 +24,11 @@ def rotate_log() -> None:
 
 
 def main() -> int:
-    if len(sys.argv) != 2 or not GATEWAY.exists():
+    if not GATEWAY.exists():
         return 2
-    node = Path(sys.argv[1])
-    if not node.is_file():
+    try:
+        node = find_node_executable()
+    except FileNotFoundError:
         return 2
 
     rotate_log()
@@ -55,4 +56,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

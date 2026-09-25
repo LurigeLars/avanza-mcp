@@ -5,7 +5,7 @@ from decimal import Decimal
 
 from pydantic import Field, field_validator
 
-from .common import MODEL_CONFIG as MODEL_CONFIG, AvanzaModel
+from .common import AvanzaModel
 
 
 class FundPerformance(AvanzaModel):

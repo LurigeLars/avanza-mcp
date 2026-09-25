@@ -16,7 +16,7 @@ if (-not $node) {
 }
 
 $userId = "$env:USERDOMAIN\$env:USERNAME"
-$launcherArg = '"{0}" "{1}"' -f $launcher, $node.Source
+$launcherArg = '"{0}"' -f $launcher
 $action = New-ScheduledTaskAction -Execute $pythonw -Argument $launcherArg -WorkingDirectory $repoRoot
 $logonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $userId
 $watchdogTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650)

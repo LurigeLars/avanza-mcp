@@ -4,7 +4,7 @@ from datetime import date
 
 from pydantic import field_validator
 
-from .common import MODEL_CONFIG as MODEL_CONFIG, AvanzaModel, OrderBookId
+from .common import AvanzaModel, OrderBookId
 from .filter import SortBy, PaginationRequest
 from .stock import HistoricalClosingPrices, Listing, Quote
 

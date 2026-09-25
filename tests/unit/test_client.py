@@ -345,9 +345,9 @@ class TestAvanzaClientRequests:
             assert not clearing.done()
 
             release_first.set()
-            await first
-            await queued
-            await clearing
+            _ = await first
+            _ = await queued
+            _ = await clearing
 
             assert seen_tokens == ["sentinel-token", None]
             assert client._authenticated_client is None

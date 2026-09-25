@@ -2,7 +2,7 @@
 
 from pydantic import Field
 
-from .common import MODEL_CONFIG as MODEL_CONFIG, AvanzaModel, OrderBookId
+from .common import AvanzaModel, OrderBookId
 from .filter import SortBy, FilterResponse, UnderlyingInstrument, PaginationRequest
 from .stock import Listing, Quote, HistoricalClosingPrices
 

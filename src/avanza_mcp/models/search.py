@@ -2,7 +2,7 @@
 
 from pydantic import BaseModel, Field, field_validator
 
-from .common import MODEL_CONFIG as MODEL_CONFIG, AvanzaModel, OrderBookId, SearchQuery
+from .common import AvanzaModel, OrderBookId, SearchQuery
 
 
 class SearchPrice(AvanzaModel):

@@ -31,11 +31,14 @@ class AuthStoreError(RuntimeError):
 
 
 class CredentialBackend(Protocol):
-    def get_password(self, service: str, username: str) -> str | None: ...
+    def get_password(self, service: str, username: str) -> str | None:
+        pass
 
-    def set_password(self, service: str, username: str, password: str) -> None: ...
+    def set_password(self, service: str, username: str, password: str) -> None:
+        pass
 
-    def delete_password(self, service: str, username: str) -> None: ...
+    def delete_password(self, service: str, username: str) -> None:
+        pass
 
 
 class _CookieRecord(BaseModel):
