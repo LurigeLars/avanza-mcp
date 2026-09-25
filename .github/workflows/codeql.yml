@@ -23,8 +23,7 @@ jobs:
     name: Analyze (${{ matrix.language }})
     if: >-
       github.event_name != 'pull_request' ||
-      (github.actor != 'dependabot[bot]' &&
-       github.event.pull_request.head.repo.full_name == github.repository)
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -48,11 +47,6 @@ jobs:
             threat-models: local
             queries:
               - uses: security-and-quality
-            # Repository policy intentionally permits maintained version tags for Actions.
-            # Do not re-introduce SHA pinning as a CodeQL requirement.
-            query-filters:
-              - exclude:
-                  id: actions/unpinned-tag
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
