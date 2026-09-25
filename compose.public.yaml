@@ -32,7 +32,7 @@ services:
     restart: unless-stopped
 
   cloudflared:
-    image: cloudflare/cloudflared:2026.9.1
+    image: cloudflare/cloudflared:2026.9.3
     container_name: avanza-mcp-cloudflared
     command: ["tunnel", "--no-autoupdate", "run"]
     env_file: public/tunnel.env
