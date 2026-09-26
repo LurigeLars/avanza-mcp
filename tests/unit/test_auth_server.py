@@ -103,7 +103,7 @@ async def test_existing_market_tools_delegate_authenticated_request_without_sess
         result = await client.call_tool("get_stock_quote", {"order_book_id": "123"})
 
     assert result.structured_content["last"] == 10
-    assert result.structured_content["is_real_time"] is True
+    assert result.structured_content["isRealTime"] is True
     assert len(broker.market_calls) == 1
     method, path, kwargs = broker.market_calls[0]
     assert method == "GET"
