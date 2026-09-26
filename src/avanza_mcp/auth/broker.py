@@ -211,6 +211,8 @@ class AuthProcessBroker:
                 try:
                     await self._command(process, {"action": "shutdown"}, timeout=10.0)
                 except AuthWorkerError:
+                    # Best-effort graceful logout: process termination below is the
+                    # fallback if the worker cannot acknowledge shutdown.
                     pass
                 await self._stop_process(process)
             self._daemon = None
@@ -229,6 +231,7 @@ class AuthProcessBroker:
             try:
                 await reaper
             except asyncio.CancelledError:
+                # Cancellation is expected because broker shutdown owns the UI worker.
                 pass
 
     async def _start_persistent_ui(self, action: str) -> AuthStatus:
@@ -270,6 +273,8 @@ class AuthProcessBroker:
                         if response.get("ok") is True and "status" in response:
                             self._ui_status = self._status_from_response(response)
                     except AuthWorkerOperationError:
+                        # Ignore malformed late status frames; the worker is already
+                        # terminal and no credential-bearing payload is accepted.
                         pass
             await process.wait()
         finally:
