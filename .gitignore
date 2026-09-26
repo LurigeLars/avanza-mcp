@@ -14,4 +14,3 @@ wheels/
 
 # Local deployment secrets
 public/gateway.env
-public/tunnel.env
