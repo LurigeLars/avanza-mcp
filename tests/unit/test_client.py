@@ -13,7 +13,10 @@ import httpx
 import respx
 from tenacity import retry
 from unittest.mock import AsyncMock
-from avanza_mcp.client.endpoints import PublicEndpoint
+from avanza_mcp.client.endpoints import (
+    PublicEndpoint,
+    authenticated_public_request_allowed,
+)
 from avanza_mcp.client.bankid import SessionMaterial
 from avanza_mcp.client.exceptions import (
     AvanzaAuthError,
@@ -145,16 +148,14 @@ class TestAvanzaClientRequests:
             assert not request.url.params
 
     @respx.mock
-    async def test_authentication_is_used_only_for_explicit_realtime_market_paths(self, method):
+    async def test_authentication_is_reused_across_approved_public_market_paths(self, method):
         active = SessionMaterial((), "sentinel-token")
         if method == "get":
             path = "/_api/market-guide/stock/123/quote"
             payload = {"last": 10, "isRealTime": True, "sessionId": "must-not-leak"}
-            expect_authenticated = True
         else:
             path = "/_api/search/filtered-search"
             payload = {"ok": True}
-            expect_authenticated = False
 
         route = respx.route(
             method=method.upper(), url=f"https://www.avanza.se{path}"
@@ -165,12 +166,10 @@ class TestAvanzaClientRequests:
             result = await getattr(client, method)(path)
 
         headers = route.calls.last.request.headers
-        if expect_authenticated:
-            assert headers["x-securitytoken"] == "sentinel-token"
+        assert headers["x-securitytoken"] == "sentinel-token"
+        if method == "get":
             assert result == {"last": 10, "isRealTime": True}
         else:
-            assert "x-securitytoken" not in headers
-            assert "cookie" not in headers
             assert result == {"ok": True}
 
     @respx.mock
@@ -183,7 +182,11 @@ class TestAvanzaClientRequests:
             active = None
             invalidated += 1
 
-        path = "/_api/market-guide/stock/123/quote"
+        path = (
+            "/_api/market-guide/stock/123/quote"
+            if method == "get"
+            else "/_api/search/filtered-search"
+        )
         route = respx.route(
             method=method.upper(), url=f"https://www.avanza.se{path}"
         ).mock(return_value=httpx.Response(401, json={"error": "expired"}))
@@ -198,12 +201,8 @@ class TestAvanzaClientRequests:
                 await getattr(client, method)(path)
 
         assert route.call_count == 1
-        if method == "get":
-            assert invalidated == 1
-            assert route.calls.last.request.headers["x-securitytoken"] == "sentinel-token"
-        else:
-            assert invalidated == 0
-            assert "x-securitytoken" not in route.calls.last.request.headers
+        assert invalidated == 1
+        assert route.calls.last.request.headers["x-securitytoken"] == "sentinel-token"
 
     @respx.mock
     async def test_authenticated_market_payload_is_strictly_projected(self, method):
@@ -673,3 +672,53 @@ def test_order_book_id_and_period(value):
 def test_invalid_request_deadline(timeout):
     with pytest.raises(ValueError, match="request_timeout"):
         AvanzaClient(request_timeout=timeout)
+
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("POST", "/_api/search/filtered-search"),
+        ("POST", "/_api/market-certificate-filter/"),
+        ("POST", "/_api/market-warrant-filter/"),
+        ("POST", "/_api/market-etf-filter/"),
+        ("POST", "/_api/market-option-future-forward-list/matrix"),
+        ("GET", "/_api/market-option-future-forward-list/filter-options"),
+        ("GET", "/_api/market-guide/stock/4478"),
+        ("GET", "/_api/market-guide/stock/4478/analysis"),
+        ("GET", "/_api/market-guide/stock/4478/quote"),
+        ("GET", "/_api/market-guide/stock/4478/orderdepth"),
+        ("GET", "/_api/price-chart/stock/4478"),
+        ("GET", "/_api/price-chart/marketmaker/123"),
+        ("GET", "/_api/fund-guide/guide/123"),
+        ("GET", "/_api/fund-guide/chart/123/three_years"),
+        ("GET", "/_api/market-guide/certificate/123"),
+        ("GET", "/_api/market-guide/certificate/123/details"),
+        ("GET", "/_api/market-guide/warrant/123"),
+        ("GET", "/_api/market-guide/warrant/123/details"),
+        ("GET", "/_api/market-etf/123"),
+        ("GET", "/_api/market-guide/futureforward/123"),
+        ("GET", "/_api/market-guide/option/123"),
+        ("GET", "/_api/market-guide/number-of-owners/123"),
+        ("GET", "/_api/market-guide/short-selling/123"),
+    ],
+)
+def test_authenticated_public_market_allowlist(method, path):
+    assert authenticated_public_request_allowed(method, path)
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("POST", "/_api/trading/rest/orders"),
+        ("DELETE", "/_api/trading/rest/orders/123"),
+        ("POST", "/_api/account-overview/overview/categorizedAccounts"),
+        ("GET", "/_api/customer-offer/currentoffers/"),
+        ("GET", "/_api/market-guide/forum/123"),
+        ("GET", "/_api/superloan/creditinfo/credited"),
+        ("GET", "/_api/market-guide/stock/123/unknown"),
+        ("GET", "/_api/market-guide/certificate/123/../../account"),
+    ],
+)
+def test_authenticated_public_market_allowlist_rejects_non_public_or_removed_paths(method, path):
+    assert not authenticated_public_request_allowed(method, path)
