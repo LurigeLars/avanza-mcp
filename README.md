@@ -201,14 +201,13 @@ pwsh -File .\scripts\windows\uninstall-public-http-task.ps1
 For ChatGPT web, keep the FastMCP endpoint on loopback and use the included public deployment layer:
 
 ```text
-ChatGPT -> Cloudflare Access Managed OAuth -> Cloudflare Tunnel
-        -> public/gateway -> 127.0.0.1:8767/mcp
+ChatGPT -> Cloudflare Access Managed OAuth -> shared Cloudflare Tunnel
+        -> avanza-gateway:8080 -> 127.0.0.1:8767/mcp
 ```
 
-Copy `public/gateway.env.example` to `public/gateway.env` and
-`public/tunnel.env.example` to `public/tunnel.env`; never commit the real files.
-Configure the Cloudflare Access application for Managed OAuth and point the tunnel's
-public hostname at `http://gateway:8080`, then start:
+Copy `public/gateway.env.example` to `public/gateway.env`; never commit the real file.
+Configure the Cloudflare Access application for Managed OAuth and point the shared tunnel
+route at `http://avanza-gateway:8080`, then start:
 
 ```bash
 docker compose -f compose.public.yaml up -d
