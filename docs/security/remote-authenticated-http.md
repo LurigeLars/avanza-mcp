@@ -9,8 +9,10 @@ ChatGPT
   -> Cloudflare Access / Managed OAuth
   -> Docker gateway
   -> 127.0.0.1:8767 FastMCP control plane
-       -> public anonymous market requests
-       -> isolated auth worker
+       -> public market tools
+            -> anonymous when no session exists
+            -> isolated auth worker when a valid session exists
+       -> isolated auth worker for account reads
             -> Windows Credential Manager (persistent mode only)
             -> Avanza
 ```
@@ -19,7 +21,11 @@ ChatGPT
 
 The long-lived FastMCP process and the Docker/Cloudflare gateway do not receive Avanza cookies, the Avanza security token or BankID transaction/QR material.
 
-For authenticated operations the FastMCP control plane sends only a restricted operation name and bounded tool arguments to a local worker process. The worker returns the reviewed account/market result, never session material. The broker rejects worker responses containing credential-shaped keys.
+For account operations the FastMCP control plane sends only a restricted operation name
+and bounded tool arguments. For market data it may send only method/path combinations in
+the explicit read-only public endpoint allowlist already used by the 37 public tools.
+The worker returns reviewed account/market data, never session material. The broker
+rejects worker responses containing credential-shaped keys.
 
 ## Session modes
 

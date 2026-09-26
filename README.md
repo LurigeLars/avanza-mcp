@@ -247,8 +247,12 @@ credential-free and cannot access Avanza accounts or place orders.
 
 Optional authenticated read-only access uses a loopback BankID flow and an isolated
 auth-worker architecture. The long-lived FastMCP/control-plane process does not receive
-Avanza cookies or the security token. Authenticated account operations are performed in
-a separate worker process with an explicit operation allowlist.
+Avanza cookies or the security token. When a valid Avanza session exists, the existing
+public market-data tools reuse it through an explicit read-only endpoint allowlist so
+Avanza can return the fresher/realtime data entitled to the logged-in session. This
+includes stocks, certificates, warrants, leveraged screening, ETFs, options/futures,
+funds and the other existing public market-data tools; realtime availability remains
+an upstream Avanza property and is not fabricated by the MCP.
 
 Three session modes are available:
 
@@ -258,11 +262,11 @@ Three session modes are available:
   client, and exits.
 - `memory_only`: no reusable Avanza session is written to the OS credential store.
   A dedicated isolated worker keeps the session only in its process memory and performs
-  remote logout plus exits after 15 minutes without an authenticated account operation.
+  remote logout plus exits after 15 minutes without an authenticated read-only operation.
 - `one_shot`: no persistent session is written. After BankID, the isolated worker
   permits one explicit authenticated account workflow, performs remote logout, and exits.
-  If unused, it logs out after five minutes. Public market-data calls remain anonymous
-  in this mode.
+  If unused, it logs out after five minutes. Approved public market-data calls may reuse
+  the in-memory session during that bounded window.
 
 The Cloudflare gateway may expose the reviewed authenticated read-only MCP tools when
 configured with the `@authenticated` profile, but Avanza session credentials remain on
@@ -343,7 +347,9 @@ The public market-data surface exposes 37 read-only tools. Search first to obtai
 | Additional | `get_short_selling` | Short-selling history |
 | Additional | `get_marketmaker_chart` | Traded-product OHLC and market-maker data |
 
-Optional authenticated mode adds separate read-only account and activity tools. Those authenticated tools are not exposed by the public Cloudflare gateway.
+Authenticated mode keeps the same 37 public market-data tools and adds reviewed read-only
+account/activity tools. With the gateway's `@authenticated` profile, that combined
+surface is available behind Cloudflare Access.
 
 ## Prompts
 
