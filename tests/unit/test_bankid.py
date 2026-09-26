@@ -34,8 +34,8 @@ def response(status: int = 200, body=None, **kwargs) -> httpx.Response:
 def started() -> dict[str, str]:
     return {
         "transactionId": "synthetic-transaction",
-        "autostartToken": "synthetic-autostart",
-        "qrToken": "synthetic-qr",
+        "autostartToken": "test",
+        "qrToken": "test",
     }
 
 
@@ -45,7 +45,7 @@ def session_info(logged_in: bool) -> dict:
             "loggedIn": logged_in,
             "id": "synthetic-user" if logged_in else None,
             "greetingName": "Synthetic User" if logged_in else None,
-            "securityToken": "synthetic-security-token" if logged_in else "-",
+            "securityToken": "test" if logged_in else "-",
         },
         "isContextVerifiedWithBackend": logged_in,
     }
@@ -72,7 +72,7 @@ async def test_start_restart_pending_and_transport_security():
                 headers={"set-cookie": "attempt=one; Path=/; HttpOnly; Secure"},
             )
         if request.url.path == RESTART:
-            return response(body={"qrToken": "synthetic-qr-2"})
+            return response(body={"qrToken": "test-2"})
         assert request.url.path == COLLECT
         assert request.headers["cookie"] == "attempt=one"
         return response(body={"state": "OUTSTANDING_TRANSACTION"})
@@ -116,7 +116,7 @@ async def test_complete_selects_one_customer_and_reverifies():
 
     assert result.status is CollectStatus.COMPLETE
     assert result.session is not None
-    assert result.session._security_token == "synthetic-security-token"
+    assert result.session._security_token == "test"
     assert info_calls == 2
     assert paths[-3:] == [
         ("GET", INFO),
@@ -124,7 +124,7 @@ async def test_complete_selects_one_customer_and_reverifies():
         ("GET", INFO),
     ]
     secret_text = f"{result!r} {result.session!r}"
-    assert "synthetic-security-token" not in secret_text
+    assert "test" not in secret_text
     assert "synthetic" not in repr(result.session)
 
 
@@ -334,7 +334,7 @@ async def test_cancel_and_logout_are_strict_and_clear_local_cookies():
             info_calls += 1
             return response(body=session_info(True))
         if request.url.path == LOGOUT:
-            assert request.headers["x-securitytoken"] == "synthetic-security-token"
+            assert request.headers["x-securitytoken"] == "test"
             return response(204)
         assert request.url.path == CANCEL
         assert json.loads(request.content) == {"transactionId": "synthetic-transaction"}
@@ -385,7 +385,7 @@ async def test_fresh_logout_client_restores_saved_session_cookies_and_token():
 
     assert seen == {
         "cookie": "session=secret",
-        "token": "synthetic-security-token",
+        "token": "test",
     }
 
 
@@ -407,7 +407,7 @@ async def test_logout_401_is_not_treated_as_confirmed_revocation():
 
     async def logout_handler(request: httpx.Request) -> httpx.Response:
         assert request.headers.get("cookie") == "session=secret"
-        assert request.headers.get("x-securitytoken") == "synthetic-security-token"
+        assert request.headers.get("x-securitytoken") == "test"
         return response(401)
 
     async with BankIDClient(_transport=httpx.MockTransport(logout_handler)) as fresh:
