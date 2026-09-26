@@ -3,6 +3,7 @@
 import json
 
 import pytest
+from unittest.mock import AsyncMock
 
 from avanza_mcp.auth.broker import (
     AuthProcessBroker,
@@ -32,6 +33,7 @@ def test_invalid_session_mode_is_rejected(monkeypatch):
 def test_worker_result_secret_keys_are_rejected():
     assert _contains_forbidden_key({"result": {"securityToken": "sentinel"}})
     assert _contains_forbidden_key({"result": [{"cookies": []}]})
+    assert _contains_forbidden_key({"result": {"sessionId": "sentinel"}})
     assert not _contains_forbidden_key({"result": {"account_id": "123"}})
 
     with pytest.raises(AuthWorkerOperationError, match="unsafe"):
@@ -40,16 +42,54 @@ def test_worker_result_secret_keys_are_rejected():
         )
 
 
-async def test_one_shot_mode_never_uses_session_for_public_market_calls():
+async def test_one_shot_mode_reuses_live_session_for_approved_market_calls(monkeypatch):
     broker = AuthProcessBroker(mode="one_shot")
+    process = _LiveProcess()
+    broker._daemon = process  # type: ignore[assignment]
+    command = AsyncMock(
+        side_effect=[
+            {
+                "ok": True,
+                "status": {
+                    "state": "connected",
+                    "message": "Avanza is connected for this MCP process.",
+                    "error_code": None,
+                },
+            },
+            {"ok": True, "result": {"last": 10}},
+        ]
+    )
+    monkeypatch.setattr(broker, "_command", command)
     try:
         response = await broker.market_request(
             "GET",
             "/_api/market-guide/stock/123/quote",
             {"params": None},
         )
+        assert response is not None
+        assert response.status_code == 200
+        assert response.json() == {"last": 10}
+        assert command.await_count == 2
+        sent = command.await_args_list[1].args[1]
+        assert sent["action"] == "market"
+        assert sent["path"] == "/_api/market-guide/stock/123/quote"
+    finally:
+        broker._daemon = None
+        await broker.aclose()
+
+
+async def test_market_broker_rejects_non_allowlisted_authenticated_path(monkeypatch):
+    broker = AuthProcessBroker(mode="persistent")
+    command = AsyncMock()
+    monkeypatch.setattr(broker, "_run_once", command)
+    try:
+        response = await broker.market_request(
+            "POST",
+            "/_api/trading/rest/orders",
+            {"json": {"side": "BUY"}},
+        )
         assert response is None
-        assert broker._daemon is None
+        command.assert_not_awaited()
     finally:
         await broker.aclose()
 
@@ -118,3 +158,15 @@ def test_worker_argument_validators_fail_closed():
 
     with pytest.raises(ValueError):
         _only_arguments({"limit": 20, "extra": "blocked"}, {"limit"})
+
+
+
+def test_worker_blocks_credential_shaped_market_payload_before_ipc():
+    from avanza_mcp.auth.worker import _contains_forbidden_market_result
+
+    assert _contains_forbidden_market_result({"securityToken": "secret"})
+    assert _contains_forbidden_market_result({"nested": {"sessionId": "secret"}})
+    assert _contains_forbidden_market_result({"authorization": "Bearer secret"})
+    assert not _contains_forbidden_market_result(
+        {"last": 10, "isRealTime": True, "bid": 9.9, "ask": 10.1}
+    )

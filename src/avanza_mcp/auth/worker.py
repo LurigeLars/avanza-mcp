@@ -13,7 +13,12 @@ from datetime import date
 from typing import Any
 
 from ..client.accounts import AccountAuthExpired, AccountClient, AccountReadError
-from ..client.base import AvanzaClient, _authenticated_market_kind
+from ..client.base import (
+    AvanzaClient,
+    _authenticated_market_kind,
+    _project_authenticated_market_payload,
+)
+from ..client.endpoints import authenticated_public_request_allowed
 from ..client.exceptions import AvanzaAuthError
 from .browser import AuthStatus, BrowserAuth
 from .store import AuthStoreError, create_session_store
@@ -37,6 +42,36 @@ _ALLOWED_ACCOUNT_OPERATIONS = frozenset(
         "stop_loss_orders",
     }
 )
+_FORBIDDEN_MARKET_RESULT_KEYS = frozenset(
+    {
+        "cookies",
+        "securitytoken",
+        "security_token",
+        "authenticationsession",
+        "authentication_session",
+        "sessionid",
+        "session_id",
+        "authorization",
+        "x_securitytoken",
+        "x_security_token",
+        "set_cookie",
+    }
+)
+
+
+def _contains_forbidden_market_result(value: Any) -> bool:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            normalized = str(key).replace("-", "_").lower()
+            if normalized in _FORBIDDEN_MARKET_RESULT_KEYS:
+                return True
+            if _contains_forbidden_market_result(item):
+                return True
+    elif isinstance(value, list):
+        return any(_contains_forbidden_market_result(item) for item in value)
+    return False
+
+
 _PORTFOLIO_PERIODS = frozenset(
     {"TODAY", "ONE_WEEK", "THIS_YEAR", "THREE_YEARS_ROLLING"}
 )
@@ -233,13 +268,16 @@ async def _market_operation(
 ) -> dict[str, Any]:
     method = str(command.get("method", ""))
     path = str(command.get("path", ""))
-    if _authenticated_market_kind(method, path) is None:
+    if not authenticated_public_request_allowed(method, path):
         return {"ok": False, "code": "operation_not_allowed"}
     if auth.session is None:
         return {"ok": False, "code": "no_session"}
 
     params = command.get("params")
-    if params not in (None, {}):
+    json_body = command.get("json")
+    if params is not None and not isinstance(params, dict):
+        return {"ok": False, "code": "protocol_error"}
+    if json_body is not None and not isinstance(json_body, dict):
         return {"ok": False, "code": "protocol_error"}
 
     try:
@@ -247,7 +285,25 @@ async def _market_operation(
             session_provider=lambda: auth.session,
             session_invalidated=auth.invalidate_session,
         ) as client:
-            result = await client.get(path, params=params)
+            response = await client.request_authenticated(
+                method,
+                path,
+                params=params,
+                json=json_body,
+            )
+            if response.status_code == 401:
+                await auth.invalidate_session()
+                return {"ok": False, "code": "auth_expired"}
+            if response.status_code != 200:
+                return {"ok": False, "code": "read_error"}
+            result = response.json()
+            if not isinstance(result, (dict, list)):
+                return {"ok": False, "code": "read_error"}
+            kind = _authenticated_market_kind(method, path)
+            if kind is not None:
+                result = _project_authenticated_market_payload(kind, result)
+            elif _contains_forbidden_market_result(result):
+                return {"ok": False, "code": "unsafe_upstream_payload"}
     except AvanzaAuthError:
         await auth.invalidate_session()
         return {"ok": False, "code": "auth_expired"}
@@ -438,7 +494,10 @@ async def _run_daemon(mode: str, parent_pid: int) -> None:
                 _emit(response)
                 continue
             if action == "market":
-                _emit(await _market_operation(auth, command))
+                response = await _market_operation(auth, command)
+                if response.get("ok") is True and mode == "memory_only":
+                    last_activity = time.monotonic()
+                _emit(response)
                 continue
 
             _emit({"ok": False, "code": "operation_not_allowed"})

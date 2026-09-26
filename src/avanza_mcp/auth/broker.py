@@ -11,7 +11,7 @@ from typing import Any, Literal
 
 import httpx
 
-from ..client.base import _authenticated_market_kind
+from ..client.endpoints import authenticated_public_request_allowed
 from .browser import AuthStatus
 
 SessionMode = Literal["persistent", "memory_only", "one_shot"]
@@ -27,6 +27,12 @@ _FORBIDDEN_RESULT_KEYS = frozenset(
         "security_token",
         "authenticationsession",
         "authentication_session",
+        "sessionid",
+        "session_id",
+        "authorization",
+        "x_securitytoken",
+        "x_security_token",
+        "set_cookie",
     }
 )
 
@@ -158,12 +164,8 @@ class AuthProcessBroker:
     async def market_request(
         self, method: str, path: str, kwargs: dict[str, Any]
     ) -> httpx.Response | None:
-        """Use isolated auth only for the three reviewed realtime stock GET paths."""
-        if _authenticated_market_kind(method, path) is None:
-            return None
-        if self.mode == "one_shot":
-            # One-shot mode reserves its authenticated session for one explicit
-            # account workflow. Public market tools remain anonymous.
+        """Use isolated auth for approved public read-only market-data requests."""
+        if not authenticated_public_request_allowed(method, path):
             return None
 
         command = {
@@ -171,6 +173,7 @@ class AuthProcessBroker:
             "method": method,
             "path": path,
             "params": kwargs.get("params"),
+            "json": kwargs.get("json"),
         }
         try:
             async with self._operation_lock:

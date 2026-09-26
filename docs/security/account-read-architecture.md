@@ -4,7 +4,9 @@
 
 The MCP surface is read-only, but the underlying Avanza web session is **not assumed to be read-only**. A stolen cookie/security-token set may have broader authority outside this MCP. Treat Avanza session material as a high-value banking credential.
 
-The public market-data MCP remains credential-free. Authenticated account access is available only through the reviewed account/session tools and the narrowly approved realtime stock paths.
+The standalone public market-data MCP remains credential-free. In authenticated mode,
+all existing public market-data tools may reuse the logged-in Avanza session through an
+explicit read-only endpoint allowlist, alongside the reviewed account/session tools.
 
 ## Process boundary
 
@@ -35,11 +37,16 @@ Worker commands are operation names plus bounded tool arguments. No generic arbi
 
 The verified session is stored in the native OS credential store. On Windows this is Windows Credential Manager. Each authenticated account operation starts a fresh worker process: load stored session, validate it, perform one approved operation, close the authenticated HTTP client, then exit.
 
-The long-lived MCP process never receives the session. Realtime-capable stock quote, order-depth and trade requests use the same short-lived worker pattern.
+The long-lived MCP process never receives the session. Approved public market-data
+requests use the same short-lived worker pattern, including certificate/warrant filters
+and details, leveraged screening dependencies, options/futures, ETFs, funds and stock
+market data.
 
 ### memory_only
 
-No reusable Avanza session is written to the OS credential store. BankID is performed inside a dedicated isolated worker. Successful authenticated account operations reset a 15-minute idle timer; public market-data calls do not.
+No reusable Avanza session is written to the OS credential store. BankID is performed
+inside a dedicated isolated worker. Successful authenticated read-only operations reset
+the 15-minute idle timer.
 
 After 15 minutes without an authenticated account operation the worker sends Avanza remote logout, clears local HTTP/session state, and exits. A process/server/computer restart therefore requires BankID again.
 
@@ -47,7 +54,8 @@ After 15 minutes without an authenticated account operation the worker sends Ava
 
 No reusable session is persisted. After BankID, the isolated worker permits one explicit authenticated account workflow. When that workflow completes, the worker performs remote logout and exits. If unused, it logs out after five minutes.
 
-Public market-data calls remain anonymous in one-shot mode so a quote lookup cannot accidentally consume the one authenticated workflow.
+Approved public market-data calls may reuse the one-shot worker's session during its
+bounded five-minute window; they do not expand the endpoint allowlist or permit writes.
 
 ## Account request allowlist
 
@@ -57,7 +65,13 @@ No order placement, modification, cancellation, transfer, withdrawal or settings
 
 ## Authenticated market reuse
 
-Only exact GET paths for stock `quote`, `orderdepth`, and `trades` may use an authenticated worker. Authenticated responses are projected onto reviewed public-market fields before they leave the worker boundary. In `one_shot` mode these requests remain anonymous.
+Authenticated market reuse is limited to the exact read-only endpoint families already
+used by the 37 public MCP tools. This includes the read-only POST search/filter endpoints
+and the bounded GET market-data paths for stocks, funds, certificates, warrants, ETFs,
+options/futures and related instrument data. No arbitrary authenticated URL/method is
+accepted. The stock quote/order-depth/trades shapes retain their stricter field
+projection; all worker responses are additionally rejected if credential-shaped keys
+appear in the IPC payload.
 
 ## Disconnect semantics
 
