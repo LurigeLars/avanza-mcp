@@ -46,7 +46,19 @@ async def test_one_shot_mode_reuses_live_session_for_approved_market_calls(monke
     broker = AuthProcessBroker(mode="one_shot")
     process = _LiveProcess()
     broker._daemon = process  # type: ignore[assignment]
-    command = AsyncMock(return_value={"ok": True, "result": {"last": 10}})
+    command = AsyncMock(
+        side_effect=[
+            {
+                "ok": True,
+                "status": {
+                    "state": "connected",
+                    "message": "Avanza is connected for this MCP process.",
+                    "error_code": None,
+                },
+            },
+            {"ok": True, "result": {"last": 10}},
+        ]
+    )
     monkeypatch.setattr(broker, "_command", command)
     try:
         response = await broker.market_request(
@@ -57,7 +69,8 @@ async def test_one_shot_mode_reuses_live_session_for_approved_market_calls(monke
         assert response is not None
         assert response.status_code == 200
         assert response.json() == {"last": 10}
-        sent = command.await_args.args[1]
+        assert command.await_count == 2
+        sent = command.await_args_list[1].args[1]
         assert sent["action"] == "market"
         assert sent["path"] == "/_api/market-guide/stock/123/quote"
     finally:
