@@ -2,7 +2,7 @@
 # Cloudflare Access Managed OAuth -> Tunnel -> JWT-validating gateway -> host Avanza MCP HTTP server.
 # The canonical HTTP server on 127.0.0.1:8767 is the authenticated read-only
 # Avanza server, which mounts the existing public market-data MCP surface.
-# Configure the public hostname to target http://gateway:8080.
+# Configure the shared Cloudflare tunnel route to target http://avanza-gateway:8080.
 name: avanza-mcp-public
 
 services:
@@ -24,20 +24,14 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./public/gateway:/app:ro
-    networks: [edge]
+    networks:
+      edge:
+        aliases:
+          - avanza-gateway
     read_only: true
     cap_drop: [ALL]
     security_opt:
       - no-new-privileges:true
-    restart: unless-stopped
-
-  cloudflared:
-    image: cloudflare/cloudflared:2026.9.3
-    container_name: avanza-mcp-cloudflared
-    command: ["tunnel", "--no-autoupdate", "run"]
-    env_file: public/tunnel.env
-    networks: [edge]
-    depends_on: [gateway]
     restart: unless-stopped
 
 networks:
