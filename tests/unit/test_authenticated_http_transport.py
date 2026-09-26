@@ -3,12 +3,12 @@
 from fastmcp import Client
 from fastmcp.utilities.tests import run_server_async
 
-from avanza_mcp.auth.browser import BrowserAuth
+from avanza_mcp.auth.broker import AuthProcessBroker
 from avanza_mcp.auth.server import create_auth_server
 
 
 async def test_authenticated_http_discovery_uses_single_combined_avanza_surface():
-    server = create_auth_server(BrowserAuth(store=None))
+    server = create_auth_server(AuthProcessBroker(mode="one_shot"))
 
     async with run_server_async(server) as url:
         async with Client(url) as client:
