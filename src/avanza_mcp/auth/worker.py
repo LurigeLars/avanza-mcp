@@ -13,7 +13,11 @@ from datetime import date
 from typing import Any
 
 from ..client.accounts import AccountAuthExpired, AccountClient, AccountReadError
-from ..client.base import AvanzaClient
+from ..client.base import (
+    AvanzaClient,
+    _authenticated_market_kind,
+    _project_authenticated_market_payload,
+)
 from ..client.endpoints import authenticated_public_request_allowed
 from ..client.exceptions import AvanzaAuthError
 from .browser import AuthStatus, BrowserAuth
@@ -38,6 +42,36 @@ _ALLOWED_ACCOUNT_OPERATIONS = frozenset(
         "stop_loss_orders",
     }
 )
+_FORBIDDEN_MARKET_RESULT_KEYS = frozenset(
+    {
+        "cookies",
+        "securitytoken",
+        "security_token",
+        "authenticationsession",
+        "authentication_session",
+        "sessionid",
+        "session_id",
+        "authorization",
+        "x_securitytoken",
+        "x_security_token",
+        "set_cookie",
+    }
+)
+
+
+def _contains_forbidden_market_result(value: Any) -> bool:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            normalized = str(key).replace("-", "_").lower()
+            if normalized in _FORBIDDEN_MARKET_RESULT_KEYS:
+                return True
+            if _contains_forbidden_market_result(item):
+                return True
+    elif isinstance(value, list):
+        return any(_contains_forbidden_market_result(item) for item in value)
+    return False
+
+
 _PORTFOLIO_PERIODS = frozenset(
     {"TODAY", "ONE_WEEK", "THIS_YEAR", "THREE_YEARS_ROLLING"}
 )
@@ -265,6 +299,11 @@ async def _market_operation(
             result = response.json()
             if not isinstance(result, (dict, list)):
                 return {"ok": False, "code": "read_error"}
+            kind = _authenticated_market_kind(method, path)
+            if kind is not None:
+                result = _project_authenticated_market_payload(kind, result)
+            elif _contains_forbidden_market_result(result):
+                return {"ok": False, "code": "unsafe_upstream_payload"}
     except AvanzaAuthError:
         await auth.invalidate_session()
         return {"ok": False, "code": "auth_expired"}

@@ -27,6 +27,12 @@ _FORBIDDEN_RESULT_KEYS = frozenset(
         "security_token",
         "authenticationsession",
         "authentication_session",
+        "sessionid",
+        "session_id",
+        "authorization",
+        "x_securitytoken",
+        "x_security_token",
+        "set_cookie",
     }
 )
 
