@@ -1,5 +1,21 @@
 # Avanza MCP Server
 
+## About this fork
+
+This is a maintained fork of [AnteWall/avanza-mcp](https://github.com/AnteWall/avanza-mcp). It keeps the upstream read-only market-data surface while adding a local-first deployment and agent layer.
+
+Fork-specific changes include:
+
+- optional BankID-authenticated **read-only** account access with native OS credential storage; no order placement, order editing, transfers, or withdrawals;
+- bounded leveraged-product and options screening, with pagination/concurrency work aimed at large Avanza instrument families;
+- compact model-facing MCP gateways for local agents and ChatGPT, explicit tool allowlists, schema/result compaction, and duplicate structured-result suppression;
+- Cloudflare Access support with a shared-tunnel deployment model plus sanitized public configuration templates;
+- Windows background-task installers and local service lifecycle helpers; and
+- additional security hardening, tests, Dependabot coverage, and fork-specific Advanced CodeQL scanning.
+
+Upstream changes are periodically reconciled while the fork-specific behavior above remains explicit.
+
+
 > **Want to use Avanza with Agents?** Consider the [Avanza CLI](https://antewall.github.io/avanza-ts/docs/cli/) with [agent skills](https://antewall.github.io/avanza-ts/docs/cli/skills/) instead. It may be a better fit for agent workflows.
 
 ![PyPI - Version](https://img.shields.io/pypi/v/avanza-mcp)
