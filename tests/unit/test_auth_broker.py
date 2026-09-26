@@ -3,6 +3,7 @@
 import json
 
 import pytest
+from unittest.mock import AsyncMock
 
 from avanza_mcp.auth.broker import (
     AuthProcessBroker,
@@ -40,16 +41,41 @@ def test_worker_result_secret_keys_are_rejected():
         )
 
 
-async def test_one_shot_mode_never_uses_session_for_public_market_calls():
+async def test_one_shot_mode_reuses_live_session_for_approved_market_calls(monkeypatch):
     broker = AuthProcessBroker(mode="one_shot")
+    process = _LiveProcess()
+    broker._daemon = process  # type: ignore[assignment]
+    command = AsyncMock(return_value={"ok": True, "result": {"last": 10}})
+    monkeypatch.setattr(broker, "_command", command)
     try:
         response = await broker.market_request(
             "GET",
             "/_api/market-guide/stock/123/quote",
             {"params": None},
         )
+        assert response is not None
+        assert response.status_code == 200
+        assert response.json() == {"last": 10}
+        sent = command.await_args.args[1]
+        assert sent["action"] == "market"
+        assert sent["path"] == "/_api/market-guide/stock/123/quote"
+    finally:
+        broker._daemon = None
+        await broker.aclose()
+
+
+async def test_market_broker_rejects_non_allowlisted_authenticated_path(monkeypatch):
+    broker = AuthProcessBroker(mode="persistent")
+    command = AsyncMock()
+    monkeypatch.setattr(broker, "_run_once", command)
+    try:
+        response = await broker.market_request(
+            "POST",
+            "/_api/trading/rest/orders",
+            {"json": {"side": "BUY"}},
+        )
         assert response is None
-        assert broker._daemon is None
+        command.assert_not_awaited()
     finally:
         await broker.aclose()
 
