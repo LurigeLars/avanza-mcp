@@ -5,7 +5,7 @@ from pathlib import Path
 
 from fastmcp import Client
 
-from avanza_mcp.auth.browser import BrowserAuth
+from avanza_mcp.auth.broker import AuthProcessBroker
 from avanza_mcp.auth.server import create_auth_server
 
 
@@ -29,7 +29,7 @@ async def test_authenticated_gateway_allowlist_matches_auth_server_tool_surface(
     extra_tools = set(re.findall(r"'([a-z][a-z0-9_]*)'", extra_match.group(1)))
     allowed_tools = public_tools | extra_tools
 
-    async with Client(create_auth_server(BrowserAuth(store=None))) as client:
+    async with Client(create_auth_server(AuthProcessBroker(mode="one_shot"))) as client:
         server_tools = {tool.name for tool in await client.list_tools()}
 
     assert len(public_tools) == 37
