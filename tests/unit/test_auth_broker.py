@@ -76,3 +76,45 @@ async def test_persistent_disconnect_blocks_new_authenticated_operations():
         broker._ui_process = None
         broker._ui_action = None
         await broker.aclose()
+
+
+def test_worker_account_allowlist_excludes_hidden_internal_operations():
+    from avanza_mcp.auth.worker import _ALLOWED_ACCOUNT_OPERATIONS
+
+    assert {
+        "credit_info",
+        "current_offers",
+        "forum_posts",
+    }.isdisjoint(_ALLOWED_ACCOUNT_OPERATIONS)
+    assert _ALLOWED_ACCOUNT_OPERATIONS == {
+        "accounts",
+        "holdings",
+        "transactions",
+        "watchlists",
+        "price_alerts",
+        "portfolio_insights",
+        "instrument_news",
+        "insider_transactions",
+        "active_orders",
+        "deals",
+        "stop_loss_orders",
+    }
+
+
+def test_worker_argument_validators_fail_closed():
+    from avanza_mcp.auth.worker import _bounded_int, _numeric_order_book_id, _only_arguments
+
+    assert _bounded_int(None, default=20, minimum=1, maximum=100) == 20
+    assert _numeric_order_book_id("4478") == "4478"
+    _only_arguments({"limit": 20}, {"limit"})
+
+    for value in (0, 101, True):
+        with pytest.raises((TypeError, ValueError)):
+            _bounded_int(value, default=20, minimum=1, maximum=100)
+
+    for value in ("", "12x", "１２３"):
+        with pytest.raises(ValueError):
+            _numeric_order_book_id(value)
+
+    with pytest.raises(ValueError):
+        _only_arguments({"limit": 20, "extra": "blocked"}, {"limit"})
