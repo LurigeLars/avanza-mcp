@@ -22,6 +22,24 @@ _INTERNAL_BROWSER_IDLE_SECONDS = 365 * 24 * 60 * 60
 _MEMORY_ONLY_IDLE_SECONDS = 15 * 60
 _ONE_SHOT_IDLE_SECONDS = 5 * 60
 _TERMINAL_STATES = frozenset({"connected", "disconnected", "denied", "timed_out", "error"})
+_ALLOWED_ACCOUNT_OPERATIONS = frozenset(
+    {
+        "accounts",
+        "holdings",
+        "transactions",
+        "watchlists",
+        "price_alerts",
+        "portfolio_insights",
+        "instrument_news",
+        "insider_transactions",
+        "active_orders",
+        "deals",
+        "stop_loss_orders",
+    }
+)
+_PORTFOLIO_PERIODS = frozenset(
+    {"TODAY", "ONE_WEEK", "THIS_YEAR", "THREE_YEARS_ROLLING"}
+)
 
 
 def _emit(value: dict[str, Any]) -> None:
@@ -86,9 +104,34 @@ async def _restore_persistent(
     return "error", status
 
 
+def _bounded_int(value: Any, *, default: int, minimum: int, maximum: int) -> int:
+    if value is None:
+        value = default
+    if isinstance(value, bool):
+        raise ValueError
+    parsed = int(value)
+    if parsed < minimum or parsed > maximum:
+        raise ValueError
+    return parsed
+
+
+def _numeric_order_book_id(value: Any) -> str:
+    parsed = str(value)
+    if not parsed or not parsed.isascii() or not parsed.isdecimal():
+        raise ValueError
+    return parsed
+
+
+def _only_arguments(arguments: dict[str, Any], allowed: set[str] | frozenset[str]) -> None:
+    if set(arguments) - set(allowed):
+        raise ValueError
+
+
 async def _account_operation(
     auth: BrowserAuth, operation: str, arguments: dict[str, Any]
 ) -> dict[str, Any]:
+    if operation not in _ALLOWED_ACCOUNT_OPERATIONS:
+        return {"ok": False, "code": "operation_not_allowed"}
     if auth.session is None:
         return {"ok": False, "code": "auth_required"}
 
@@ -98,55 +141,83 @@ async def _account_operation(
             session_invalidated=auth.invalidate_session,
         ) as client:
             account = AccountClient(client)
+
             if operation == "accounts":
+                _only_arguments(arguments, frozenset())
                 result = await account.accounts()
             elif operation == "holdings":
+                _only_arguments(arguments, frozenset())
                 result = await account.holdings()
             elif operation == "transactions":
+                _only_arguments(arguments, {"from_date", "to_date", "limit"})
                 raw_from = arguments.get("from_date")
                 raw_to = arguments.get("to_date")
+                from_date = date.fromisoformat(raw_from) if raw_from else None
+                to_date = date.fromisoformat(raw_to) if raw_to else None
+                if from_date is not None and to_date is not None and from_date > to_date:
+                    raise ValueError
                 result = await account.transactions(
-                    from_date=date.fromisoformat(raw_from) if raw_from else None,
-                    to_date=date.fromisoformat(raw_to) if raw_to else None,
-                    limit=int(arguments.get("limit", 100)),
+                    from_date=from_date,
+                    to_date=to_date,
+                    limit=_bounded_int(
+                        arguments.get("limit"), default=100, minimum=1, maximum=1000
+                    ),
                 )
-            elif operation == "credit_info":
-                result = await account.credit_info(str(arguments.get("credit_type", "credited")))
             elif operation == "watchlists":
+                _only_arguments(arguments, frozenset())
                 result = await account.watchlists()
             elif operation == "price_alerts":
-                result = await account.price_alerts(str(arguments["order_book_id"]))
-            elif operation == "current_offers":
-                result = await account.offers()
+                _only_arguments(arguments, {"order_book_id"})
+                result = await account.price_alerts(
+                    _numeric_order_book_id(arguments["order_book_id"])
+                )
             elif operation == "portfolio_insights":
+                _only_arguments(arguments, {"time_period"})
+                time_period = str(arguments.get("time_period", "THIS_YEAR"))
+                if time_period not in _PORTFOLIO_PERIODS:
+                    raise ValueError
                 accounts = await account.accounts()
                 result = await account.insights(
                     [item.account_id for item in accounts.accounts],
-                    str(arguments.get("time_period", "THIS_YEAR")),
+                    time_period,
                 )
             elif operation == "instrument_news":
+                _only_arguments(arguments, {"order_book_id", "limit"})
                 result = await account.news(
-                    str(arguments["order_book_id"]),
-                    int(arguments.get("limit", 20)),
-                )
-            elif operation == "forum_posts":
-                result = await account.forum_posts(
-                    str(arguments["order_book_id"]),
-                    int(arguments.get("limit", 20)),
+                    _numeric_order_book_id(arguments["order_book_id"]),
+                    _bounded_int(
+                        arguments.get("limit"), default=20, minimum=1, maximum=100
+                    ),
                 )
             elif operation == "insider_transactions":
+                _only_arguments(arguments, {"order_book_id", "limit"})
                 result = await account.insider_transactions(
-                    str(arguments["order_book_id"]),
-                    int(arguments.get("limit", 20)),
+                    _numeric_order_book_id(arguments["order_book_id"]),
+                    _bounded_int(
+                        arguments.get("limit"), default=20, minimum=1, maximum=100
+                    ),
                 )
             elif operation == "active_orders":
-                result = await account.active_orders(int(arguments.get("limit", 100)))
+                _only_arguments(arguments, {"limit"})
+                result = await account.active_orders(
+                    _bounded_int(
+                        arguments.get("limit"), default=100, minimum=1, maximum=100
+                    )
+                )
             elif operation == "deals":
-                result = await account.deals(int(arguments.get("limit", 100)))
-            elif operation == "stop_loss_orders":
-                result = await account.stop_losses(int(arguments.get("limit", 100)))
+                _only_arguments(arguments, {"limit"})
+                result = await account.deals(
+                    _bounded_int(
+                        arguments.get("limit"), default=100, minimum=1, maximum=100
+                    )
+                )
             else:
-                return {"ok": False, "code": "operation_not_allowed"}
+                _only_arguments(arguments, {"limit"})
+                result = await account.stop_losses(
+                    _bounded_int(
+                        arguments.get("limit"), default=100, minimum=1, maximum=100
+                    )
+                )
     except AccountAuthExpired:
         await auth.invalidate_session()
         return {"ok": False, "code": "auth_expired"}
@@ -156,7 +227,6 @@ async def _account_operation(
         return {"ok": False, "code": "worker_error"}
 
     return {"ok": True, "result": result.model_dump(mode="json")}
-
 
 async def _market_operation(
     auth: BrowserAuth, command: dict[str, Any]
@@ -169,7 +239,7 @@ async def _market_operation(
         return {"ok": False, "code": "no_session"}
 
     params = command.get("params")
-    if params is not None and not isinstance(params, dict):
+    if params not in (None, {}):
         return {"ok": False, "code": "protocol_error"}
 
     try:
