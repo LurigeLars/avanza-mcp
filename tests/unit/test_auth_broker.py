@@ -52,3 +52,27 @@ async def test_one_shot_mode_never_uses_session_for_public_market_calls():
         assert broker._daemon is None
     finally:
         await broker.aclose()
+
+
+class _LiveProcess:
+    returncode = None
+
+
+async def test_persistent_disconnect_blocks_new_authenticated_operations():
+    broker = AuthProcessBroker(mode="persistent")
+    broker._ui_action = "disconnect"
+    broker._ui_process = _LiveProcess()  # type: ignore[assignment]
+    try:
+        with pytest.raises(AuthWorkerOperationError, match="Disconnect"):
+            await broker.account("accounts", {})
+
+        response = await broker.market_request(
+            "GET",
+            "/_api/market-guide/stock/123/quote",
+            {"params": None},
+        )
+        assert response is None
+    finally:
+        broker._ui_process = None
+        broker._ui_action = None
+        await broker.aclose()
