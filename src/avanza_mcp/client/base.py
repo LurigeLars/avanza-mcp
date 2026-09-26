@@ -23,6 +23,7 @@ from tenacity import (
 )
 
 from .. import __version__
+from .endpoints import authenticated_public_request_allowed
 from .exceptions import (
     AvanzaAPIError,
     AvanzaAuthError,
@@ -515,6 +516,7 @@ class AvanzaClient:
         post_prefix = "POST " if method == "POST" else ""
 
         auth_market_kind = _authenticated_market_kind(method, path)
+        auth_public_allowed = authenticated_public_request_allowed(method, path)
 
         @retry(
             retry=retry_if_exception(
@@ -544,7 +546,7 @@ class AvanzaClient:
                 response, authenticated = await self._send_request(
                     method,
                     path,
-                    allow_authenticated=auth_market_kind is not None,
+                    allow_authenticated=auth_public_allowed,
                     params=params,
                     json=json,
                 )
@@ -596,9 +598,7 @@ class AvanzaClient:
                 data = response.json()
                 if not isinstance(data, (dict, list)):
                     raise ValueError("Expected a JSON object or array")
-                if authenticated:
-                    if auth_market_kind is None:
-                        raise ValueError("Authenticated market path is not approved")
+                if authenticated and auth_market_kind is not None:
                     data = _project_authenticated_market_payload(auth_market_kind, data)
                 return data
             except ValueError as e:
