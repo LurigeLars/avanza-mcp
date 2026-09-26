@@ -226,7 +226,8 @@ class BankIDClient:
 
         A disconnect may use a fresh BankIDClient instance, so the saved session
         cookies must be restored explicitly before the logout request. A 401 is
-        not treated as proof of revocation; callers surface it as unconfirmed.
+        treated as an already-invalid session: Avanza no longer accepts it, so
+        logout has reached the desired remote end state.
         """
         self._ensure_open()
         stale = set(self._inflight)
@@ -247,6 +248,9 @@ class BankIDClient:
                 headers=headers,
                 cleanup=True,
                 attempt_deadline=False,
+                # A 401 means Avanza no longer accepts this session. For logout
+                # purposes that is already the desired remote end state.
+                allowed_statuses={401},
             )
         except BankIDError as error:
             remote_error = error
