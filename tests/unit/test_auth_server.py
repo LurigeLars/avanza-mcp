@@ -21,6 +21,7 @@ class FakeAuth:
     def __init__(self):
         self.closed = False
         self.opened = 0
+        self.restored = 0
         self._session = None
 
     async def open_browser(self):
@@ -44,6 +45,7 @@ class FakeAuth:
         self.closed = True
 
     async def restore(self):
+        self.restored += 1
         return self.status()
 
     async def invalidate_session(self):
@@ -88,7 +90,8 @@ async def test_auth_server_mounts_public_contract_and_adds_auth_tools():
         with pytest.raises(ToolError, match="AVANZA_AUTH_REQUIRED"):
             await client.call_tool("get_accounts", {})
     assert auth.closed
-    assert auth.opened == 2
+    assert auth.opened == 1
+    assert auth.restored == 1
 
 
 @respx.mock
