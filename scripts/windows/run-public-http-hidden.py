@@ -1,3 +1,4 @@
+import argparse
 import os
 import sys
 from contextlib import redirect_stderr, redirect_stdout
@@ -19,6 +20,15 @@ def rotate_log() -> None:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--session-mode",
+        choices=("persistent", "memory_only", "one_shot"),
+        default=os.environ.get("AVANZA_SESSION_MODE", "persistent"),
+    )
+    args = parser.parse_args()
+    os.environ["AVANZA_SESSION_MODE"] = args.session_mode
+
     rotate_log()
     with LOG_FILE.open("a", encoding="utf-8") as log:
         with redirect_stdout(log), redirect_stderr(log):
