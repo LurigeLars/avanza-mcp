@@ -4,6 +4,7 @@ import asyncio
 import html
 import io
 import json
+import math
 import secrets
 import socket
 import time
@@ -40,6 +41,7 @@ AuthState = Literal[
     "starting",
     "scanning",
     "connected",
+    "idle",
     "denied",
     "timed_out",
     "error",
@@ -52,6 +54,9 @@ _MESSAGES: dict[AuthState, str] = {
     "starting": "Starting BankID authentication.",
     "scanning": "Scan the BankID QR code in the local browser window.",
     "connected": "Avanza is connected for this MCP process.",
+    "idle": (
+        "Avanza session is stored securely and will be revalidated on next account access."
+    ),
     "denied": "BankID authentication was cancelled or denied.",
     "timed_out": "BankID authentication timed out. Start again when ready.",
     "error": "Authentication failed safely. Start again when ready.",
@@ -120,14 +125,18 @@ class BrowserAuth:
         store: SessionStore | None = None,
         poll_interval: float = 1.5,
         attempt_timeout: float = 120.0,
+        session_idle_seconds: float = 60 * 60,
         session_cleared: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
+        if not math.isfinite(session_idle_seconds) or session_idle_seconds <= 0:
+            raise ValueError("session_idle_seconds must be positive and finite")
         self._client_factory = client_factory
         self._qr_renderer = qr_renderer
         self._browser_opener = browser_opener
         self._store = store
         self._poll_interval = poll_interval
         self._attempt_timeout = attempt_timeout
+        self._session_idle_seconds = session_idle_seconds
         self._state: AuthState = "disconnected"
         self._error_code: str | None = None
         self._qr_svg: str | None = None
@@ -136,6 +145,7 @@ class BrowserAuth:
         self._last_poll = 0.0
         self._lock = asyncio.Lock()
         self._timeout_task: asyncio.Task[None] | None = None
+        self._idle_task: asyncio.Task[None] | None = None
         self._stop_task: asyncio.Task[None] | None = None
         self._server: uvicorn.Server | None = None
         self._server_task: asyncio.Task[None] | None = None
@@ -159,6 +169,19 @@ class BrowserAuth:
     def session(self) -> SessionMaterial | None:
         return self._session
 
+    async def ensure_account_session(self) -> SessionMaterial | None:
+        """Return a validated account session and reset the account-idle timer."""
+        if self._session is None:
+            await self.restore()
+
+        async with self._lock:
+            if self._session is None:
+                return None
+            self._state = "connected"
+            self._error_code = None
+            self._arm_session_idle_locked()
+            return self._session
+
     def status(self) -> AuthStatus:
         message = _MESSAGES[self._state]
         if self._error_code == "credential_store":
@@ -171,6 +194,7 @@ class BrowserAuth:
 
     async def invalidate_session(self) -> None:
         async with self._lock:
+            self._cancel_session_idle_locked()
             self._session = None
             self._state = "disconnected"
             self._error_code = "avanza_auth_expired"
@@ -187,6 +211,8 @@ class BrowserAuth:
         # validation request is deliberate: startup restore must finish or fail
         # before a later explicit user action can change authentication state.
         async with self._lock:
+            if self._session is not None:
+                return self.status()
             if self._store is None:
                 return self.status()
             try:
@@ -226,10 +252,13 @@ class BrowserAuth:
             self._session = validated
             self._state = "connected"
             self._error_code = None
+            self._arm_session_idle_locked()
             return self.status()
 
     async def open_browser(self) -> AuthStatus:
         await self._cancel_scheduled_stop()
+        if self._state == "idle":
+            await self.restore()
         async with self._lock:
             if self._state == "connected":
                 return self.status()
@@ -250,6 +279,8 @@ class BrowserAuth:
 
     async def open_disconnect_browser(self) -> AuthStatus:
         await self._cancel_scheduled_stop()
+        if self._state == "idle":
+            await self.restore()
         async with self._lock:
             if self._session is None:
                 self._state = "disconnected"
@@ -370,6 +401,7 @@ class BrowserAuth:
         async with self._lock:
             attempt = self._attempt
             session = self._session
+            self._cancel_session_idle_locked()
             self._attempt = None
             self._session = None
             self._qr_svg = None
@@ -425,6 +457,7 @@ class BrowserAuth:
             self._attempt = None
             self._qr_svg = None
             self._cancel_timeout()
+            self._cancel_session_idle_locked()
         if attempt is not None:
             with suppress(BankIDError):
                 await attempt.cancel()
@@ -461,6 +494,10 @@ class BrowserAuth:
             if state != "error":
                 self._error_code = None
             self._cancel_timeout()
+            if state == "connected" and session is not None:
+                self._arm_session_idle_locked()
+            else:
+                self._cancel_session_idle_locked()
         if logout_session is not None:
             with suppress(BankIDError):
                 await attempt.logout(logout_session)
@@ -483,6 +520,34 @@ class BrowserAuth:
             if self._timeout_task is not asyncio.current_task():
                 self._timeout_task.cancel()
             self._timeout_task = None
+
+    def _arm_session_idle_locked(self) -> None:
+        self._cancel_session_idle_locked()
+        self._idle_task = asyncio.create_task(self._evict_session_after_idle())
+
+    def _cancel_session_idle_locked(self) -> None:
+        if self._idle_task is not None:
+            if self._idle_task is not asyncio.current_task():
+                self._idle_task.cancel()
+            self._idle_task = None
+
+    async def _evict_session_after_idle(self) -> None:
+        try:
+            await asyncio.sleep(self._session_idle_seconds)
+            async with self._lock:
+                if self._session is None:
+                    self._idle_task = None
+                    return
+                self._session = None
+                self._state = "idle"
+                self._error_code = None
+                self._idle_task = None
+            # Remove copied cookies/tokens from the reusable HTTP client as soon
+            # as the in-memory session is evicted. The credential-store copy is
+            # intentionally preserved for validated lazy restore.
+            await self._clear_cached_session()
+        except asyncio.CancelledError:
+            pass
 
     @staticmethod
     def _error_state(error: BankIDError) -> AuthState:

@@ -240,7 +240,11 @@ credential-free and cannot access Avanza accounts or place orders.
 Optional authenticated read-only access is available locally when explicitly enabled in local configuration.
 It uses a loopback BankID flow, stores the verified session in the native OS credential
 store, and reuses that session for market-data requests plus selected portfolio/activity
-reads. It has no order-placement, order-edit, cancellation, transfer, or withdrawal tools.
+reads. After 60 minutes without an authenticated account-tool call, the in-memory session
+and authenticated HTTP client are evicted while the credential-store copy is retained.
+The next account-tool call revalidates and restores that saved session automatically.
+Public market-data calls do not reset the 60-minute account-idle timer. It has no
+order-placement, order-edit, cancellation, transfer, or withdrawal tools.
 The public Cloudflare gateway does not expose authenticated account tools.
 
 Intentionally not exposed by the authenticated MCP surface: `get_credit_info`,
