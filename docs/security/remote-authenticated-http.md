@@ -1,96 +1,50 @@
-# Remote authenticated read-only Avanza MCP
+# Remote authenticated Avanza MCP
 
 ## Scope
 
-This document covers remote ChatGPT access to the existing authenticated read-only Avanza MCP surface. It does not add a second Avanza connector and does not add trading/write capabilities.
-
-The canonical architecture remains:
+Remote ChatGPT access may call the reviewed authenticated read-only MCP tools through the existing Cloudflare Access gateway. The Avanza session credential itself remains on the Windows host.
 
 ```text
 ChatGPT
   -> Cloudflare Access / Managed OAuth
-  -> existing avanza-mcp-gateway
-  -> 127.0.0.1:8767 on the Windows host
-  -> create_auth_server()
-       -> authenticated read-only tools
-       -> mounted public market-data MCP
-  -> Windows Credential Manager
-  -> Avanza
+  -> Docker gateway
+  -> 127.0.0.1:8767 FastMCP control plane
+       -> public anonymous market requests
+       -> isolated auth worker
+            -> Windows Credential Manager (persistent mode only)
+            -> Avanza
 ```
-
-The local model-optimized gateway remains on `127.0.0.1:8769` and forwards to the same canonical server on `8767`.
-
-## One connector, one server
-
-The authenticated FastMCP server already mounts the public MCP. Remote deployment therefore starts `create_auth_server()` directly as the canonical loopback HTTP server instead of running the public-only `mcp` object.
-
-The gateway uses the reserved `ALLOWED_TOOLS=@authenticated` profile. That profile is the union of:
-
-- the existing 37 public market-data tools; and
-- 14 reviewed session/account read-only tools.
-
-Total model-visible surface: 51 tools.
-
-The following internally implemented upstream capabilities remain intentionally absent from the model surface:
-
-- `get_credit_info`
-- `get_current_offers`
-- `get_forum_posts`
-
-No order placement, order modification/cancellation, money movement, arbitrary authenticated request tool, or generic network tool is added.
 
 ## Credential boundary
 
-Avanza session cookies and `X-SecurityToken` remain on the Windows host.
+The long-lived FastMCP process and the Docker/Cloudflare gateway do not receive Avanza cookies, the Avanza security token or BankID transaction/QR material.
 
-They are:
+For authenticated operations the FastMCP control plane sends only a restricted operation name and bounded tool arguments to a local worker process. The worker returns the reviewed account/market result, never session material. The broker rejects worker responses containing credential-shaped keys.
 
-- created/validated by the reviewed BankID client;
-- persisted only through the native OS credential store;
-- copied only into the host-side authenticated Avanza HTTP client;
-- never returned from an MCP tool;
-- never forwarded through Cloudflare;
-- never injected by the gateway.
+## Session modes
 
-The Cloudflare-facing gateway strips client authorization/cookie/Cloudflare forwarding headers before forwarding MCP traffic to `8767`.
+`AVANZA_SESSION_MODE` selects the credential lifetime:
 
-Remote MCP calls may return the explicitly modeled private account data requested by the user. That private result data necessarily traverses the existing encrypted MCP/Cloudflare/ChatGPT path; the Avanza session credential itself does not.
+- `persistent` (default): native OS credential store; fresh worker per authenticated operation.
+- `memory_only`: no persistent credential; isolated worker session; remote logout and worker exit after 15 minutes without an authenticated account operation.
+- `one_shot`: no persistent credential; one authenticated account workflow, then remote logout and worker exit; five-minute unused timeout.
+
+The Windows task installer exposes the same selection with `-SessionMode`.
+
+## Cloudflare boundary
+
+The gateway uses the `@authenticated` allowlist profile when remote account tools are enabled. Cloudflare Access remains the external identity boundary. The gateway accepts only `/mcp`, validates the configured Access identity, rate-limits it, strips inbound credential/forwarding headers, filters `tools/list`, blocks non-allowlisted `tools/call` requests, and compacts schemas/results.
+
+Account result data requested by the user necessarily traverses the encrypted MCP/Cloudflare/ChatGPT path. Avanza session credentials do not.
 
 ## BankID boundary
 
-`connect_avanza` may be invoked through the remote connector, but the approval/QR page remains a temporary loopback listener bound to `127.0.0.1` on the Windows host.
+`connect_avanza` may be invoked remotely, but the approval and BankID QR page is opened and served on the Windows host over a temporary `127.0.0.1` listener. QR/auth transaction material is not returned through MCP.
 
-The QR payload, BankID transaction material and local CSRF/path tokens are not returned through MCP. The remote tool returns only safe connection state.
+In `persistent` mode that temporary worker saves the verified session to the OS credential store and exits. In `memory_only` and `one_shot` modes the isolated worker remains the credential owner for the bounded session lifetime.
 
-## Realtime behavior
+## Security interpretation
 
-Only exact approved stock GET paths for quote, order depth and recent trades may reuse the authenticated session. Authentication expiry fails closed for that request; the same request is not silently retried anonymously.
+The MCP tools are read-only. The underlying Avanza web session is not assumed to be read-only and must be treated as a high-value banking credential. Tool allowlists protect the MCP execution path; they do not constrain an attacker who independently steals and reuses the Avanza session.
 
-## Gateway boundary
-
-Cloudflare Access remains the external identity boundary. The gateway continues to verify signature, issuer, audience and explicitly allowed email before forwarding.
-
-The gateway still:
-
-- accepts only `/mcp`;
-- rate-limits by authenticated Access identity;
-- enforces request-size limits;
-- strips inbound credentials/forwarding headers;
-- filters `tools/list`;
-- blocks non-allowlisted `tools/call` before upstream execution;
-- compacts tool schemas and duplicate result representations.
-
-## Activation gate
-
-This branch must not be deployed or used with a remote authenticated account session until an independent security/code review approves the remote boundary.
-
-Required review focus:
-
-1. same-connector tool-surface correctness (51 tools, hidden three absent);
-2. Cloudflare Access identity boundary;
-3. proof that Avanza cookies/security token never cross the gateway;
-4. loopback-only BankID approval page under remote invocation;
-5. account-result privacy and logging behavior;
-6. fail-closed auth expiry/realtime behavior;
-7. no trading/write capability;
-8. scheduled-task lifecycle and local browser behavior when invoked from ChatGPT.
+The worker architecture therefore minimizes credential lifetime and process exposure rather than claiming the session itself has reduced Avanza privileges.
