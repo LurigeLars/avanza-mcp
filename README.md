@@ -205,8 +205,8 @@ ChatGPT -> Cloudflare Access Managed OAuth -> shared Cloudflare Tunnel
         -> avanza-gateway:8080 -> 127.0.0.1:8767/mcp
 ```
 
-Provide the local gateway configuration out of band and keep it gitignored.
-Configure the Cloudflare Access application and shared tunnel route outside this repository, then start:
+Copy `public/gateway.env.example` to `public/gateway.env` and replace every placeholder with your own deployment values. Keep the real file gitignored.
+Configure the Cloudflare Access application and shared tunnel route for your own hostname, then start:
 
 ```bash
 docker compose -f compose.public.yaml up -d
