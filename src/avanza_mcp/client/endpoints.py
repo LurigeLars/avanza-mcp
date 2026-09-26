@@ -4,6 +4,7 @@ All endpoints are public and require no authentication.
 """
 
 from enum import Enum
+import re
 
 
 class PublicEndpoint(Enum):
@@ -79,3 +80,46 @@ class PublicEndpoint(Enum):
             if not instrument_id.isascii() or not instrument_id.isdecimal():
                 raise ValueError("Order-book id must contain only ASCII numeric digits")
         return self.value.format(**kwargs)
+
+
+_AUTHENTICATED_PUBLIC_EXACT = frozenset(
+    {
+        ("POST", PublicEndpoint.SEARCH.value),
+        ("POST", PublicEndpoint.CERTIFICATE_FILTER.value),
+        ("POST", PublicEndpoint.WARRANT_FILTER.value),
+        ("POST", PublicEndpoint.ETF_FILTER.value),
+        ("POST", PublicEndpoint.FUTURE_FORWARD_MATRIX.value),
+        ("GET", PublicEndpoint.FUTURE_FORWARD_FILTER_OPTIONS.value),
+    }
+)
+
+_AUTHENTICATED_PUBLIC_GET_PATTERNS = (
+    re.compile(
+        r"^/_api/market-guide/stock/[0-9]+"
+        r"(?:/analysis|/quote|/marketplace|/orderdepth|/trades|/broker-trade-summaries)?$"
+    ),
+    re.compile(r"^/_api/price-chart/stock/[0-9]+$"),
+    re.compile(r"^/_api/price-chart/marketmaker/[0-9]+$"),
+    re.compile(r"^/_api/fund-guide/guide/[0-9]+$"),
+    re.compile(r"^/_api/fund-reference/sustainability/[0-9]+$"),
+    re.compile(r"^/_api/fund-guide/chart/[0-9]+/[a-z_]+$"),
+    re.compile(r"^/_api/fund-guide/chart/timeperiods/[0-9]+$"),
+    re.compile(r"^/_api/fund-guide/description/[0-9]+$"),
+    re.compile(r"^/_api/market-guide/certificate/[0-9]+(?:/details)?$"),
+    re.compile(r"^/_api/market-guide/warrant/[0-9]+(?:/details)?$"),
+    re.compile(r"^/_api/market-etf/[0-9]+(?:/details)?$"),
+    re.compile(r"^/_api/market-guide/futureforward/[0-9]+(?:/details)?$"),
+    re.compile(r"^/_api/market-guide/option/[0-9]+(?:/details)?$"),
+    re.compile(r"^/_api/market-guide/number-of-owners/[0-9]+$"),
+    re.compile(r"^/_api/market-guide/short-selling/[0-9]+$"),
+)
+
+
+def authenticated_public_request_allowed(method: str, path: str) -> bool:
+    """Return whether an existing public read-only endpoint may reuse login state."""
+    normalized_method = method.upper()
+    if (normalized_method, path) in _AUTHENTICATED_PUBLIC_EXACT:
+        return True
+    if normalized_method != "GET":
+        return False
+    return any(pattern.fullmatch(path) for pattern in _AUTHENTICATED_PUBLIC_GET_PATTERNS)
