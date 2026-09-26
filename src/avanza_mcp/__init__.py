@@ -14,15 +14,22 @@ from .client import AvanzaClient
 
 _auth_session_provider: Callable[[], Any | None] | None = None
 _auth_session_invalidator: Callable[[], Awaitable[None]] | None = None
+_auth_request_delegate: Callable[
+    [str, str, dict[str, Any]], Awaitable[Any | None]
+] | None = None
 
 
 def _configure_authenticated_requests(
     provider: Callable[[], Any | None] | None,
     invalidator: Callable[[], Awaitable[None]] | None,
+    request_delegate: Callable[
+        [str, str, dict[str, Any]], Awaitable[Any | None]
+    ] | None = None,
 ) -> None:
-    global _auth_session_provider, _auth_session_invalidator
+    global _auth_session_provider, _auth_session_invalidator, _auth_request_delegate
     _auth_session_provider = provider
     _auth_session_invalidator = invalidator
+    _auth_request_delegate = request_delegate
 
 
 async def _invalidate_authenticated_session() -> None:
@@ -38,6 +45,7 @@ async def lifespan(server: FastMCP) -> AsyncIterator[dict[str, AvanzaClient]]:
             _auth_session_provider() if _auth_session_provider else None
         ),
         session_invalidated=_invalidate_authenticated_session,
+        authenticated_request_delegate=_auth_request_delegate,
     ) as client:
         yield {"client": client}
 

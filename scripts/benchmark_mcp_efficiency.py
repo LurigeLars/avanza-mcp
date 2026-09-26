@@ -11,7 +11,7 @@ from fastmcp import Client, FastMCP
 from pydantic import BaseModel
 
 from avanza_mcp import mcp as avanza_mcp
-from avanza_mcp.auth.browser import BrowserAuth
+from avanza_mcp.auth.broker import AuthProcessBroker
 from avanza_mcp.auth.server import create_auth_server
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -79,7 +79,7 @@ async def _list_tools(server) -> list[dict]:
 async def main() -> None:
     public_tools = await _list_tools(avanza_mcp)
     authenticated_tools = await _list_tools(
-        create_auth_server(BrowserAuth(store=None))
+        create_auth_server(AuthProcessBroker(mode="one_shot"))
     )
 
     public_catalog = _compact_catalog(public_tools)

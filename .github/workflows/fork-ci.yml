@@ -38,7 +38,7 @@ jobs:
         run: uv sync --locked --all-extras
 
       - name: Unit tests
-        run: uv run --locked pytest tests/unit -q
+        run: timeout 90s uv run --locked pytest tests/unit -vv
 
       - name: Verify import
         run: uv run --locked python -c "from avanza_mcp import mcp; print('import ok')"
