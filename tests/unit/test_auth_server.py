@@ -1,4 +1,4 @@
-"""Local stdio launch policy for the opt-in authenticated server."""
+"""Authenticated server composition using credential-isolated workers."""
 
 import os
 import subprocess
@@ -7,64 +7,54 @@ from unittest.mock import Mock
 
 import httpx
 import pytest
-import respx
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
 import avanza_mcp
+from avanza_mcp.auth.broker import AuthWorkerRequired
 from avanza_mcp.auth.browser import AuthStatus
 from avanza_mcp.auth.server import create_auth_server, run_auth_server
-from avanza_mcp.client.bankid import SessionMaterial
 
 
-class FakeAuth:
+class FakeBroker:
     def __init__(self):
         self.closed = False
         self.opened = 0
-        self._session = None
-        self.session_cleared = None
-        self.ensure_calls = 0
+        self.account_calls = []
+        self.market_calls = []
+        self.market_response = None
+        self.account_results = {}
 
-    def set_session_cleared_callback(self, callback):
-        self.session_cleared = callback
-
-    async def open_browser(self):
+    async def connect(self):
         self.opened += 1
         return AuthStatus(
             state="awaiting_approval", message="Approve in the local browser."
         )
 
-    async def open_disconnect_browser(self):
+    async def disconnect(self):
         self.opened += 1
-        return self.status()
-
-    def status(self):
         return AuthStatus(state="disconnected", message="Avanza is not connected.")
 
-    @property
-    def session(self):
-        return self._session
+    async def status(self):
+        return AuthStatus(state="disconnected", message="Avanza is not connected.")
 
-    async def ensure_account_session(self):
-        self.ensure_calls += 1
-        return self._session
+    async def account(self, operation, arguments):
+        self.account_calls.append((operation, arguments))
+        if operation not in self.account_results:
+            raise AuthWorkerRequired
+        return self.account_results[operation]
+
+    async def market_request(self, method, path, kwargs):
+        self.market_calls.append((method, path, kwargs))
+        return self.market_response
 
     async def aclose(self):
         self.closed = True
 
-    async def restore(self):
-        return self.status()
-
-    async def invalidate_session(self):
-        self._session = None
-        if self.session_cleared is not None:
-            await self.session_cleared()
-        return None
-
 
 async def test_auth_server_mounts_public_contract_and_adds_auth_tools():
-    auth = FakeAuth()
-    server = create_auth_server(auth)  # type: ignore[arg-type]
+    broker = FakeBroker()
+    server = create_auth_server(broker)  # type: ignore[arg-type]
     async with Client(server) as client:
         tools = {tool.name for tool in await client.list_tools()}
         assert len(tools) == 51
@@ -86,6 +76,7 @@ async def test_auth_server_mounts_public_contract_and_adds_auth_tools():
         } <= tools
         assert {"get_credit_info", "get_current_offers", "get_forum_posts"}.isdisjoint(tools)
         assert len(await client.list_prompts()) == 3
+
         connected = await client.call_tool("connect_avanza", {})
         assert connected.structured_content["state"] == "awaiting_approval"
         status = await client.call_tool("get_auth_status", {})
@@ -96,43 +87,41 @@ async def test_auth_server_mounts_public_contract_and_adds_auth_tools():
         }
         with pytest.raises(ToolError, match="AVANZA_AUTH_REQUIRED"):
             await client.call_tool("get_accounts", {})
-    assert auth.closed
-    assert auth.opened == 1
-    assert auth.ensure_calls == 1
+
+    assert broker.closed
+    assert broker.opened == 1
+    assert broker.account_calls == [("accounts", {})]
 
 
-@respx.mock
-async def test_existing_market_tools_reuse_authenticated_session():
-    auth = FakeAuth()
-    auth._session = SessionMaterial((), "sentinel-token")
-    route = respx.get("https://www.avanza.se/_api/market-guide/stock/123/quote").mock(
-        return_value=httpx.Response(200, json={"last": 10, "isRealTime": True})
+async def test_existing_market_tools_delegate_authenticated_request_without_session_material():
+    broker = FakeBroker()
+    broker.market_response = httpx.Response(
+        200, json={"last": 10, "isRealTime": True, "unknownSensitiveField": "discard"}
     )
 
-    async with Client(create_auth_server(auth)) as client:  # type: ignore[arg-type]
+    async with Client(create_auth_server(broker)) as client:  # type: ignore[arg-type]
         result = await client.call_tool("get_stock_quote", {"order_book_id": "123"})
 
     assert result.structured_content["last"] == 10
-    assert route.calls.last.request.headers["x-securitytoken"] == "sentinel-token"
-    assert auth.ensure_calls == 0
+    assert result.structured_content["is_real_time"] is True
+    assert len(broker.market_calls) == 1
+    method, path, kwargs = broker.market_calls[0]
+    assert method == "GET"
+    assert path == "/_api/market-guide/stock/123/quote"
+    assert kwargs.get("params") is None
 
 
-async def test_auth_lifespan_resets_global_wiring_when_restore_fails():
-    class RestoreFails(FakeAuth):
-        async def restore(self):
-            raise RuntimeError("synthetic restore failure")
+async def test_auth_lifespan_resets_global_worker_delegate():
+    broker = FakeBroker()
+    server = create_auth_server(broker)  # type: ignore[arg-type]
 
-    auth = RestoreFails()
-    server = create_auth_server(auth)  # type: ignore[arg-type]
+    async with Client(server):
+        assert avanza_mcp._auth_request_delegate is not None
 
-    with pytest.raises(RuntimeError, match="synthetic restore failure"):
-        async with Client(server):
-            pass
-
-    assert auth.closed
-    assert auth.session_cleared is None
+    assert broker.closed
     assert avanza_mcp._auth_session_provider is None
     assert avanza_mcp._auth_session_invalidator is None
+    assert avanza_mcp._auth_request_delegate is None
 
 
 def test_auth_transport_is_stdio(monkeypatch):
