@@ -78,7 +78,7 @@ async def test_start_restart_pending_and_transport_security():
         return response(body={"state": "OUTSTANDING_TRANSACTION"})
 
     async with await start_client(handler) as client:
-        assert await client.restart() == "synthetic-qr-2"
+        assert await client.restart() == "test-2"
         assert (await client.collect()).status is CollectStatus.PENDING
 
     assert all(request.url.scheme == "https" for request in requests)
