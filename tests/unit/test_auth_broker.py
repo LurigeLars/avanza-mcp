@@ -33,6 +33,7 @@ def test_invalid_session_mode_is_rejected(monkeypatch):
 def test_worker_result_secret_keys_are_rejected():
     assert _contains_forbidden_key({"result": {"securityToken": "sentinel"}})
     assert _contains_forbidden_key({"result": [{"cookies": []}]})
+    assert _contains_forbidden_key({"result": {"sessionId": "sentinel"}})
     assert not _contains_forbidden_key({"result": {"account_id": "123"}})
 
     with pytest.raises(AuthWorkerOperationError, match="unsafe"):
@@ -144,3 +145,15 @@ def test_worker_argument_validators_fail_closed():
 
     with pytest.raises(ValueError):
         _only_arguments({"limit": 20, "extra": "blocked"}, {"limit"})
+
+
+
+def test_worker_blocks_credential_shaped_market_payload_before_ipc():
+    from avanza_mcp.auth.worker import _contains_forbidden_market_result
+
+    assert _contains_forbidden_market_result({"securityToken": "secret"})
+    assert _contains_forbidden_market_result({"nested": {"sessionId": "secret"}})
+    assert _contains_forbidden_market_result({"authorization": "Bearer secret"})
+    assert not _contains_forbidden_market_result(
+        {"last": 10, "isRealTime": True, "bid": 9.9, "ask": 10.1}
+    )
