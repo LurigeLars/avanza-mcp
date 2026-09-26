@@ -156,6 +156,14 @@ included Scheduled Task installer:
 pwsh -File .\scripts\windows\install-public-http-task.ps1
 ```
 
+The default session mode is `persistent`. To choose a stricter mode when installing
+or replacing the task:
+
+```powershell
+pwsh -File .\scripts\windows\install-public-http-task.ps1 -SessionMode memory_only
+pwsh -File .\scripts\windows\install-public-http-task.ps1 -SessionMode one_shot
+```
+
 The task uses the repository virtualenv's `pythonw.exe`, so no console window is created. It runs as the current Windows user with limited privileges, starts at logon, and also has a five-minute recovery trigger with `IgnoreNew` so an already-running server is never duplicated. No Windows password is stored. The FastMCP endpoint remains bound to `127.0.0.1:8767`. Logs are written to `%LOCALAPPDATA%\avanza-mcp\public-http.log` and rotated once at 5 MiB.
 
 If port 8767 is already occupied by a manually started FastMCP process, the installer
@@ -237,15 +245,29 @@ until the allowlist is reviewed.
 This project does not provide a hosted endpoint. The public connector remains
 credential-free and cannot access Avanza accounts or place orders.
 
-Optional authenticated read-only access is available locally when explicitly enabled in local configuration.
-It uses a loopback BankID flow, stores the verified session in the native OS credential
-store, and reuses that session for market-data requests plus selected portfolio/activity
-reads. After 60 minutes without an authenticated account-tool call, the in-memory session
-and authenticated HTTP client are evicted while the credential-store copy is retained.
-The next account-tool call revalidates and restores that saved session automatically.
-Public market-data calls do not reset the 60-minute account-idle timer. It has no
-order-placement, order-edit, cancellation, transfer, or withdrawal tools.
-The public Cloudflare gateway does not expose authenticated account tools.
+Optional authenticated read-only access uses a loopback BankID flow and an isolated
+auth-worker architecture. The long-lived FastMCP/control-plane process does not receive
+Avanza cookies or the security token. Authenticated account operations are performed in
+a separate worker process with an explicit operation allowlist.
+
+Three session modes are available:
+
+- `persistent` (default): the verified Avanza session is stored in the native OS
+  credential store. Each authenticated account operation starts a short-lived worker,
+  which loads and validates the session, performs the approved read, closes its HTTP
+  client, and exits.
+- `memory_only`: no reusable Avanza session is written to the OS credential store.
+  A dedicated isolated worker keeps the session only in its process memory and performs
+  remote logout plus exits after 15 minutes without an authenticated account operation.
+- `one_shot`: no persistent session is written. After BankID, the isolated worker
+  permits one explicit authenticated account workflow, performs remote logout, and exits.
+  If unused, it logs out after five minutes. Public market-data calls remain anonymous
+  in this mode.
+
+The Cloudflare gateway may expose the reviewed authenticated read-only MCP tools when
+configured with the `@authenticated` profile, but Avanza session credentials remain on
+the Windows host and never traverse Docker, Cloudflare, or the MCP result channel.
+There are no order-placement, order-edit, cancellation, transfer, or withdrawal tools.
 
 Intentionally not exposed by the authenticated MCP surface: `get_credit_info`,
 `get_current_offers`, and `get_forum_posts`. Their client implementations are retained
