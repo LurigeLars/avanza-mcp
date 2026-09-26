@@ -242,10 +242,18 @@ class AuthProcessBroker:
         process = await self._spawn("ui", "persistent")
         self._ui_process = process
         self._ui_action = action
-        response = await self._command(
-            process, {"action": action}, timeout=_UI_RESPONSE_TIMEOUT
-        )
-        status = self._status_from_response(response)
+        try:
+            response = await self._command(
+                process, {"action": action}, timeout=_UI_RESPONSE_TIMEOUT
+            )
+            status = self._status_from_response(response)
+        except AuthWorkerError:
+            self._ui_process = None
+            self._ui_status = None
+            self._ui_action = None
+            await self._stop_process(process)
+            raise
+
         self._ui_status = status
         self._ui_reaper = asyncio.create_task(self._reap_ui(process))
         return status
