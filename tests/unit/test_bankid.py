@@ -389,7 +389,7 @@ async def test_fresh_logout_client_restores_saved_session_cookies_and_token():
     }
 
 
-async def test_logout_401_is_not_treated_as_confirmed_revocation():
+async def test_logout_401_is_treated_as_already_signed_out():
     async def source_handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == START:
             return response(
@@ -411,10 +411,8 @@ async def test_logout_401_is_not_treated_as_confirmed_revocation():
         return response(401)
 
     async with BankIDClient(_transport=httpx.MockTransport(logout_handler)) as fresh:
-        with pytest.raises(BankIDError) as caught:
-            await fresh.logout(saved)
-
-    assert caught.value.upstream_status == 401
+        await fresh.logout(saved)
+        assert list(fresh._client.cookies.jar) == []
 
 
 async def test_saved_session_is_restored_and_revalidated_without_start():
