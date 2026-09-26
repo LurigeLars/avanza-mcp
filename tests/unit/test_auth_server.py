@@ -23,6 +23,7 @@ class FakeAuth:
         self.opened = 0
         self._session = None
         self.session_cleared = None
+        self.ensure_calls = 0
 
     def set_session_cleared_callback(self, callback):
         self.session_cleared = callback
@@ -42,6 +43,10 @@ class FakeAuth:
 
     @property
     def session(self):
+        return self._session
+
+    async def ensure_account_session(self):
+        self.ensure_calls += 1
         return self._session
 
     async def aclose(self):
@@ -93,6 +98,7 @@ async def test_auth_server_mounts_public_contract_and_adds_auth_tools():
             await client.call_tool("get_accounts", {})
     assert auth.closed
     assert auth.opened == 1
+    assert auth.ensure_calls == 1
 
 
 @respx.mock
@@ -108,6 +114,7 @@ async def test_existing_market_tools_reuse_authenticated_session():
 
     assert result.structured_content["last"] == 10
     assert route.calls.last.request.headers["x-securitytoken"] == "sentinel-token"
+    assert auth.ensure_calls == 0
 
 
 async def test_auth_lifespan_resets_global_wiring_when_restore_fails():

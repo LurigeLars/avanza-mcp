@@ -263,3 +263,108 @@ async def test_disconnect_clears_cached_http_session_and_reports_unconfirmed_rev
         cleared.assert_awaited_once()
     finally:
         await auth.aclose()
+
+
+async def test_idle_session_is_evicted_from_memory_and_lazy_restored():
+    session = SessionMaterial((), "synthetic-token")
+    store = FakeStore(session)
+    attempts: list[FakeAttempt] = []
+    cleared = AsyncMock()
+
+    def factory():
+        attempt = FakeAttempt()
+        attempts.append(attempt)
+        return attempt
+
+    auth = BrowserAuth(
+        client_factory=factory,
+        store=store,
+        session_cleared=cleared,
+        session_idle_seconds=0.02,
+    )
+
+    try:
+        assert (await auth.restore()).state == "connected"
+        assert auth.session is not None
+        assert store.session is not None
+
+        for _ in range(100):
+            if auth.status().state == "idle":
+                break
+            await asyncio.sleep(0.01)
+
+        assert auth.status().state == "idle"
+        assert auth.session is None
+        assert store.session is not None
+        cleared.assert_awaited_once()
+
+        restored = await auth.ensure_account_session()
+        assert restored is not None
+        assert auth.status().state == "connected"
+        assert store.saved == 2
+        assert len(attempts) == 2
+        assert all(attempt.started == 0 for attempt in attempts)
+    finally:
+        await auth.aclose()
+
+
+async def test_disconnect_from_idle_revalidates_before_confirmation():
+    session = SessionMaterial((), "synthetic-token")
+    store = FakeStore(session)
+    opened: list[str] = []
+    auth = BrowserAuth(
+        client_factory=FakeAttempt,
+        browser_opener=lambda url: opened.append(url) is None,
+        store=store,
+        session_idle_seconds=0.02,
+    )
+
+    try:
+        assert (await auth.restore()).state == "connected"
+        for _ in range(100):
+            if auth.status().state == "idle":
+                break
+            await asyncio.sleep(0.01)
+
+        assert auth.status().state == "idle"
+        assert auth.session is None
+        assert (await auth.open_disconnect_browser()).state == "awaiting_disconnect"
+        assert auth.session is not None
+        assert len(opened) == 1
+    finally:
+        await auth.aclose()
+
+
+async def test_direct_disconnect_from_idle_restores_for_remote_logout():
+    session = SessionMaterial((), "synthetic-token")
+    store = FakeStore(session)
+    attempts: list[FakeAttempt] = []
+
+    def factory():
+        attempt = FakeAttempt()
+        attempts.append(attempt)
+        return attempt
+
+    auth = BrowserAuth(
+        client_factory=factory,
+        store=store,
+        session_idle_seconds=0.02,
+    )
+
+    try:
+        assert (await auth.restore()).state == "connected"
+        for _ in range(100):
+            if auth.status().state == "idle":
+                break
+            await asyncio.sleep(0.01)
+
+        assert auth.status().state == "idle"
+        status = await auth.disconnect()
+
+        assert status.state == "disconnected"
+        assert auth.session is None
+        assert store.session is None
+        assert len(attempts) == 3
+        assert attempts[-1].cancelled
+    finally:
+        await auth.aclose()

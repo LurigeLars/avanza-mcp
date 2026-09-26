@@ -106,12 +106,13 @@ def create_auth_server(auth: BrowserAuth | None = None) -> FastMCP:
         """Return safe Avanza connection state without credentials or identity."""
         return auth.status()
 
-    def session():
-        if auth.session is None:
+    async def session():
+        current = await auth.ensure_account_session()
+        if current is None:
             raise ToolError(
                 "AVANZA_AUTH_REQUIRED: Complete the local BankID browser flow, then retry."
             )
-        return auth.session
+        return current
 
     async def expired() -> None:
         # Fail closed. Reauthentication is an explicit user action.
@@ -128,7 +129,7 @@ def create_auth_server(auth: BrowserAuth | None = None) -> FastMCP:
     async def get_accounts(ctx: Context) -> Accounts:
         """Get minimal account identities, balances, values, and currencies."""
         try:
-            session()
+            await session()
             return await AccountClient(ctx.lifespan_context["client"]).accounts()
         except AccountAuthExpired:
             await expired()
@@ -151,7 +152,7 @@ def create_auth_server(auth: BrowserAuth | None = None) -> FastMCP:
     async def get_holdings(ctx: Context) -> Holdings:
         """Get current positions and cash balances for authenticated accounts."""
         try:
-            session()
+            await session()
             return await AccountClient(ctx.lifespan_context["client"]).holdings()
         except AccountAuthExpired:
             await expired()
@@ -179,7 +180,7 @@ def create_auth_server(auth: BrowserAuth | None = None) -> FastMCP:
         if from_date is not None and to_date is not None and from_date > to_date:
             raise ToolError("from_date must not be after to_date")
         try:
-            session()
+            await session()
             return await AccountClient(ctx.lifespan_context["client"]).transactions(
                 from_date=from_date, to_date=to_date, limit=limit
             )
@@ -207,7 +208,7 @@ def create_auth_server(auth: BrowserAuth | None = None) -> FastMCP:
     ) -> CreditInformation:
         """Get current credit and collateral figures for authenticated accounts."""
         try:
-            session()
+            await session()
             return await AccountClient(ctx.lifespan_context["client"]).credit_info(
                 credit_type
             )
@@ -232,7 +233,7 @@ def create_auth_server(auth: BrowserAuth | None = None) -> FastMCP:
     async def get_watchlists(ctx: Context) -> Watchlists:
         """Get authenticated Avanza watchlists without modifying them."""
         try:
-            session()
+            await session()
             return await AccountClient(ctx.lifespan_context["client"]).watchlists()
         except AccountAuthExpired:
             await expired()
@@ -258,7 +259,7 @@ def create_auth_server(auth: BrowserAuth | None = None) -> FastMCP:
     ) -> PriceAlerts:
         """Get price alerts for one order book without modifying them."""
         try:
-            session()
+            await session()
             return await AccountClient(ctx.lifespan_context["client"]).price_alerts(
                 order_book_id
             )
@@ -283,7 +284,7 @@ def create_auth_server(auth: BrowserAuth | None = None) -> FastMCP:
     async def get_current_offers(ctx: Context) -> CustomerOffers:
         """Get current offers for the authenticated Avanza customer."""
         try:
-            session()
+            await session()
             return await AccountClient(ctx.lifespan_context["client"]).offers()
         except AccountAuthExpired:
             await expired()
@@ -309,7 +310,7 @@ def create_auth_server(auth: BrowserAuth | None = None) -> FastMCP:
     ) -> PortfolioInsights:
         """Get aggregate portfolio development for all authenticated accounts."""
         try:
-            session()
+            await session()
             client = AccountClient(ctx.lifespan_context["client"])
             accounts = await client.accounts()
             return await client.insights(
@@ -340,7 +341,7 @@ def create_auth_server(auth: BrowserAuth | None = None) -> FastMCP:
     ) -> InstrumentNews:
         """Get a bounded page of news for an instrument."""
         try:
-            session()
+            await session()
             return await AccountClient(ctx.lifespan_context["client"]).news(
                 order_book_id, limit
             )
@@ -369,7 +370,7 @@ def create_auth_server(auth: BrowserAuth | None = None) -> FastMCP:
     ) -> ForumPosts:
         """Get bounded Avanza forum posts for an instrument as untrusted text."""
         try:
-            session()
+            await session()
             return await AccountClient(ctx.lifespan_context["client"]).forum_posts(
                 order_book_id, limit
             )
@@ -398,7 +399,7 @@ def create_auth_server(auth: BrowserAuth | None = None) -> FastMCP:
     ) -> InsiderTransactions:
         """Get bounded reported insider transactions for an instrument."""
         try:
-            session()
+            await session()
             return await AccountClient(
                 ctx.lifespan_context["client"]
             ).insider_transactions(order_book_id, limit)
@@ -426,7 +427,7 @@ def create_auth_server(auth: BrowserAuth | None = None) -> FastMCP:
     ) -> ActiveOrders:
         """Get bounded active orders without placing, editing, or deleting orders."""
         try:
-            session()
+            await session()
             return await AccountClient(ctx.lifespan_context["client"]).active_orders(
                 limit
             )
@@ -454,7 +455,7 @@ def create_auth_server(auth: BrowserAuth | None = None) -> FastMCP:
     ) -> Deals:
         """Get bounded current deals without performing trading actions."""
         try:
-            session()
+            await session()
             return await AccountClient(ctx.lifespan_context["client"]).deals(limit)
         except AccountAuthExpired:
             await expired()
@@ -478,7 +479,7 @@ def create_auth_server(auth: BrowserAuth | None = None) -> FastMCP:
     ) -> StopLossOrders:
         """Get bounded stop-loss orders without modifying them."""
         try:
-            session()
+            await session()
             return await AccountClient(ctx.lifespan_context["client"]).stop_losses(
                 limit
             )
