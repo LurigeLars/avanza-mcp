@@ -82,6 +82,7 @@ class AuthProcessBroker:
         self._operation_lock = asyncio.Lock()
         self._ui_process: asyncio.subprocess.Process | None = None
         self._ui_status: AuthStatus | None = None
+        self._ui_action: str | None = None
         self._ui_reaper: asyncio.Task[None] | None = None
         self._closed = False
 
@@ -97,7 +98,11 @@ class AuthProcessBroker:
     async def disconnect(self) -> AuthStatus:
         self._ensure_open()
         if self.mode == "persistent":
-            return await self._start_persistent_ui("disconnect")
+            # Wait for an already-started authenticated operation to finish before
+            # opening the disconnect confirmation. New operations are blocked by
+            # _ui_action until the UI worker reaches a terminal state.
+            async with self._operation_lock:
+                return await self._start_persistent_ui("disconnect")
         async with self._daemon_lock:
             process = self._live_daemon()
             if process is None:
@@ -133,11 +138,19 @@ class AuthProcessBroker:
         }
         async with self._operation_lock:
             if self.mode == "persistent":
+                if self._persistent_disconnect_active():
+                    raise AuthWorkerOperationError("Disconnect confirmation is pending")
                 response = await self._run_once(command)
             else:
                 async with self._daemon_lock:
                     process = self._live_daemon()
                     if process is None:
+                        raise AuthWorkerRequired
+                    status_response = await self._command(process, {"action": "status"})
+                    status = self._status_from_response(status_response)
+                    if status.state == "awaiting_disconnect":
+                        raise AuthWorkerOperationError("Disconnect confirmation is pending")
+                    if status.state != "connected":
                         raise AuthWorkerRequired
                     response = await self._command(process, command)
             return self._result_from_response(response)
@@ -162,11 +175,17 @@ class AuthProcessBroker:
         try:
             async with self._operation_lock:
                 if self.mode == "persistent":
+                    if self._persistent_disconnect_active():
+                        return None
                     response = await self._run_once(command)
                 else:
                     async with self._daemon_lock:
                         process = self._live_daemon()
                         if process is None:
+                            return None
+                        status_response = await self._command(process, {"action": "status"})
+                        status = self._status_from_response(status_response)
+                        if status.state != "connected":
                             return None
                         response = await self._command(process, command)
         except AuthWorkerOperationError:
@@ -199,6 +218,7 @@ class AuthProcessBroker:
         process = self._ui_process
         self._ui_process = None
         self._ui_status = None
+        self._ui_action = None
         if process is not None and process.returncode is None:
             await self._stop_process(process)
 
@@ -221,6 +241,7 @@ class AuthProcessBroker:
 
         process = await self._spawn("ui", "persistent")
         self._ui_process = process
+        self._ui_action = action
         response = await self._command(
             process, {"action": action}, timeout=_UI_RESPONSE_TIMEOUT
         )
@@ -247,6 +268,14 @@ class AuthProcessBroker:
             if self._ui_process is process:
                 self._ui_process = None
                 self._ui_status = None
+                self._ui_action = None
+
+    def _persistent_disconnect_active(self) -> bool:
+        return (
+            self._ui_action == "disconnect"
+            and self._ui_process is not None
+            and self._ui_process.returncode is None
+        )
 
     async def _ensure_daemon_locked(self) -> asyncio.subprocess.Process:
         process = self._live_daemon()
