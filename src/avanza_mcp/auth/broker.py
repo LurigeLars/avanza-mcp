@@ -159,15 +159,18 @@ class AuthProcessBroker:
             "path": path,
             "params": kwargs.get("params"),
         }
-        async with self._operation_lock:
-            if self.mode == "persistent":
-                response = await self._run_once(command)
-            else:
-                async with self._daemon_lock:
-                    process = self._live_daemon()
-                    if process is None:
-                        return None
-                    response = await self._command(process, command)
+        try:
+            async with self._operation_lock:
+                if self.mode == "persistent":
+                    response = await self._run_once(command)
+                else:
+                    async with self._daemon_lock:
+                        process = self._live_daemon()
+                        if process is None:
+                            return None
+                        response = await self._command(process, command)
+        except AuthWorkerOperationError:
+            return httpx.Response(502, content=b"")
 
         if response.get("ok") is True:
             return httpx.Response(200, json=response.get("result"))
