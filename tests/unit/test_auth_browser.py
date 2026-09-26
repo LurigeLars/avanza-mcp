@@ -333,3 +333,38 @@ async def test_disconnect_from_idle_revalidates_before_confirmation():
         assert len(opened) == 1
     finally:
         await auth.aclose()
+
+
+async def test_direct_disconnect_from_idle_restores_for_remote_logout():
+    session = SessionMaterial((), "synthetic-token")
+    store = FakeStore(session)
+    attempts: list[FakeAttempt] = []
+
+    def factory():
+        attempt = FakeAttempt()
+        attempts.append(attempt)
+        return attempt
+
+    auth = BrowserAuth(
+        client_factory=factory,
+        store=store,
+        session_idle_seconds=0.02,
+    )
+
+    try:
+        assert (await auth.restore()).state == "connected"
+        for _ in range(100):
+            if auth.status().state == "idle":
+                break
+            await asyncio.sleep(0.01)
+
+        assert auth.status().state == "idle"
+        status = await auth.disconnect()
+
+        assert status.state == "disconnected"
+        assert auth.session is None
+        assert store.session is None
+        assert len(attempts) == 3
+        assert attempts[-1].cancelled
+    finally:
+        await auth.aclose()

@@ -400,6 +400,8 @@ class BrowserAuth:
         return self.status()
 
     async def disconnect(self) -> AuthStatus:
+        if self._state == "idle":
+            await self.restore()
         async with self._lock:
             attempt = self._attempt
             session = self._session
