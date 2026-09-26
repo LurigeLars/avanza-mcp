@@ -257,6 +257,7 @@ async def _run_ui(command: dict[str, Any], parent_pid: int) -> None:
         while _parent_alive(parent_pid):
             current = auth.status()
             if current.state in _TERMINAL_STATES:
+                _emit(_safe_status(current))
                 # Keep the success/failure page reachable long enough to render.
                 await asyncio.sleep(2.2)
                 return

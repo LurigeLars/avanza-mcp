@@ -231,6 +231,17 @@ class AuthProcessBroker:
 
     async def _reap_ui(self, process: asyncio.subprocess.Process) -> None:
         try:
+            if process.stdout is not None:
+                while True:
+                    line = await process.stdout.readline()
+                    if not line:
+                        break
+                    try:
+                        response = self._decode_response(line)
+                        if response.get("ok") is True and "status" in response:
+                            self._ui_status = self._status_from_response(response)
+                    except AuthWorkerOperationError:
+                        pass
             await process.wait()
         finally:
             if self._ui_process is process:
