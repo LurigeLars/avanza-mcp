@@ -222,6 +222,8 @@ class BrowserAuth:
                 self._error_code = "credential_store"
                 return self.status()
             if saved is None:
+                self._state = "disconnected"
+                self._error_code = None
                 return self.status()
 
             attempt = self._client_factory()
@@ -542,10 +544,10 @@ class BrowserAuth:
                 self._state = "idle"
                 self._error_code = None
                 self._idle_task = None
-            # Remove copied cookies/tokens from the reusable HTTP client as soon
-            # as the in-memory session is evicted. The credential-store copy is
-            # intentionally preserved for validated lazy restore.
-            await self._clear_cached_session()
+                # Keep eviction atomic with respect to lazy restore: do not allow
+                # a new account call to reinstall session material before the
+                # reusable authenticated HTTP client has dropped its copy.
+                await self._clear_cached_session()
         except asyncio.CancelledError:
             pass
 
