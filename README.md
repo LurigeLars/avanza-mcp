@@ -205,9 +205,8 @@ ChatGPT -> Cloudflare Access Managed OAuth -> shared Cloudflare Tunnel
         -> avanza-gateway:8080 -> 127.0.0.1:8767/mcp
 ```
 
-Copy `public/gateway.env.example` to `public/gateway.env`; never commit the real file.
-Configure the Cloudflare Access application for Managed OAuth and point the shared tunnel
-route at `http://avanza-gateway:8080`, then start:
+Provide the local gateway configuration out of band and keep it gitignored.
+Configure the Cloudflare Access application and shared tunnel route outside this repository, then start:
 
 ```bash
 docker compose -f compose.public.yaml up -d
@@ -223,7 +222,7 @@ until the allowlist is reviewed.
 This project does not provide a hosted endpoint. The public connector remains
 credential-free and cannot access Avanza accounts or place orders.
 
-Optional authenticated read-only access is available locally with `AVANZA_MCP_AUTH=1`.
+Optional authenticated read-only access is available locally when explicitly enabled in local configuration.
 It uses a loopback BankID flow, stores the verified session in the native OS credential
 store, and reuses that session for market-data requests plus selected portfolio/activity
 reads. It has no order-placement, order-edit, cancellation, transfer, or withdrawal tools.
