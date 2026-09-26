@@ -136,6 +136,9 @@ class AvanzaClient:
         request_timeout: float = DEFAULT_TIMEOUT,
         session_provider: Callable[[], AuthenticatedSession | None] | None = None,
         session_invalidated: Callable[[], Awaitable[None]] | None = None,
+        authenticated_request_delegate: Callable[
+            [str, str, dict[str, Any]], Awaitable[httpx.Response | None]
+        ] | None = None,
     ) -> None:
         """Initialize Avanza client.
 
@@ -159,6 +162,7 @@ class AvanzaClient:
         self._request_timeout = request_timeout
         self._session_provider = session_provider
         self._session_invalidated = session_invalidated
+        self._authenticated_request_delegate = authenticated_request_delegate
         self._client: httpx.AsyncClient | None = None
         self._authenticated_client: httpx.AsyncClient | None = None
         self._authenticated_session: AuthenticatedSession | None = None
@@ -302,6 +306,22 @@ class AvanzaClient:
         a stale authenticated client.
         """
         public_client = self._public_client()
+        delegate_possible = (
+            allow_authenticated
+            and self._authenticated_request_delegate is not None
+            and self._base_url.rstrip("/") == self.DEFAULT_BASE_URL
+        )
+        if delegate_possible:
+            delegated = await self._authenticated_request_delegate(
+                method,
+                path,
+                dict(kwargs),
+            )
+            if delegated is not None:
+                return delegated, True
+            if require_authenticated:
+                raise AvanzaAuthError("No authenticated Avanza session is available")
+
         auth_possible = (
             allow_authenticated
             and self._session_provider is not None
