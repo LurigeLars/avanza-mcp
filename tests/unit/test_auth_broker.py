@@ -226,3 +226,103 @@ async def test_market_worker_protocol_failure_degrades_to_public(monkeypatch):
         assert response is None
     finally:
         await broker.aclose()
+
+
+
+async def test_market_family_backoff_skips_repeated_failed_auth_attempts(monkeypatch):
+    broker = AuthProcessBroker(mode="persistent")
+    worker = AsyncMock(
+        side_effect=[
+            {"ok": False, "code": "read_error"},
+            {"ok": True, "result": {"last": 10}},
+        ]
+    )
+    monkeypatch.setattr(broker, "_run_once", worker)
+    monkeypatch.setattr("avanza_mcp.auth.broker.monotonic", lambda: 100.0)
+    try:
+        first = await broker.market_request(
+            "GET",
+            "/_api/market-guide/warrant/1704709",
+            {"params": None},
+        )
+        repeated_family = await broker.market_request(
+            "GET",
+            "/_api/market-guide/warrant/1709700",
+            {"params": None},
+        )
+        different_family = await broker.market_request(
+            "GET",
+            "/_api/market-guide/stock/4478/quote",
+            {"params": None},
+        )
+
+        assert first is None
+        assert repeated_family is None
+        assert different_family is not None
+        assert different_family.status_code == 200
+        assert worker.await_count == 2
+    finally:
+        await broker.aclose()
+
+
+async def test_market_family_backoff_expires(monkeypatch):
+    broker = AuthProcessBroker(mode="persistent")
+    worker = AsyncMock(
+        side_effect=[
+            {"ok": False, "code": "read_error"},
+            {"ok": True, "result": {"ok": True}},
+        ]
+    )
+    clock = iter([100.0, 120.0, 161.0])
+    monkeypatch.setattr("avanza_mcp.auth.broker.monotonic", lambda: next(clock))
+    try:
+        assert (
+            await broker.market_request(
+                "POST",
+                "/_api/market-warrant-filter/",
+                {"json": {}},
+            )
+            is None
+        )
+        assert (
+            await broker.market_request(
+                "POST",
+                "/_api/market-warrant-filter/",
+                {"json": {}},
+            )
+            is None
+        )
+        retried = await broker.market_request(
+            "POST",
+            "/_api/market-warrant-filter/",
+            {"json": {}},
+        )
+        assert retried is not None
+        assert retried.status_code == 200
+        assert worker.await_count == 2
+    finally:
+        await broker.aclose()
+
+
+async def test_auth_expiry_is_never_added_to_market_family_backoff(monkeypatch):
+    broker = AuthProcessBroker(mode="persistent")
+    worker = AsyncMock(return_value={"ok": False, "code": "auth_expired"})
+    monkeypatch.setattr(broker, "_run_once", worker)
+    monkeypatch.setattr("avanza_mcp.auth.broker.monotonic", lambda: 100.0)
+    try:
+        first = await broker.market_request(
+            "GET",
+            "/_api/market-guide/stock/4478/quote",
+            {"params": None},
+        )
+        second = await broker.market_request(
+            "GET",
+            "/_api/market-guide/stock/4478/quote",
+            {"params": None},
+        )
+        assert first is not None and first.status_code == 401
+        assert second is not None and second.status_code == 401
+        assert worker.await_count == 2
+        assert broker._market_auth_backoff_until == {}
+    finally:
+        await broker.aclose()
