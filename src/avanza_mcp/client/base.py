@@ -5,6 +5,7 @@ import copy
 import logging
 import re
 import math
+import random
 import uuid
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
@@ -125,6 +126,10 @@ class AvanzaClient:
     DEFAULT_MAX_CONNECTIONS = 10
     DEFAULT_MAX_KEEPALIVE = 5
     DEFAULT_MAX_RETRIES = 3
+    DEFAULT_MAX_IN_FLIGHT_REQUESTS = 4
+    DEFAULT_MIN_REQUEST_INTERVAL = 0.125
+    DEFAULT_REQUEST_JITTER = 0.025
+    DEFAULT_RATE_LIMIT_COOLDOWN = 5.0
 
     def __init__(
         self,
@@ -140,6 +145,10 @@ class AvanzaClient:
         authenticated_request_delegate: Callable[
             [str, str, dict[str, Any]], Awaitable[httpx.Response | None]
         ] | None = None,
+        max_in_flight_requests: int = DEFAULT_MAX_IN_FLIGHT_REQUESTS,
+        min_request_interval: float = DEFAULT_MIN_REQUEST_INTERVAL,
+        request_jitter: float = DEFAULT_REQUEST_JITTER,
+        rate_limit_cooldown: float = DEFAULT_RATE_LIMIT_COOLDOWN,
     ) -> None:
         """Initialize Avanza client.
 
@@ -151,6 +160,10 @@ class AvanzaClient:
             max_keepalive_connections: Maximum number of keepalive connections
             max_retries: Maximum total attempts for transient failures
             request_timeout: Overall deadline in seconds, including retries and waits
+            max_in_flight_requests: Per-client cap for simultaneous Avanza requests
+            min_request_interval: Minimum spacing between new upstream request starts
+            request_jitter: Additional random spacing added to each request start
+            rate_limit_cooldown: Fallback cooldown after a 429 without Retry-After
         """
         self._base_url = base_url
         self._timeout = timeout
@@ -164,6 +177,27 @@ class AvanzaClient:
         self._session_provider = session_provider
         self._session_invalidated = session_invalidated
         self._authenticated_request_delegate = authenticated_request_delegate
+        if (
+            not isinstance(max_in_flight_requests, int)
+            or isinstance(max_in_flight_requests, bool)
+            or max_in_flight_requests < 1
+        ):
+            raise ValueError("max_in_flight_requests must be a positive integer")
+        for name, value in (
+            ("min_request_interval", min_request_interval),
+            ("request_jitter", request_jitter),
+            ("rate_limit_cooldown", rate_limit_cooldown),
+        ):
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(f"{name} must be finite and >= 0")
+        self._max_in_flight_requests = max_in_flight_requests
+        self._min_request_interval = min_request_interval
+        self._request_jitter = request_jitter
+        self._rate_limit_cooldown = rate_limit_cooldown
+        self._request_semaphore = asyncio.Semaphore(max_in_flight_requests)
+        self._request_pace_lock = asyncio.Lock()
+        self._next_request_start = 0.0
+        self._rate_limit_until = 0.0
         self._client: httpx.AsyncClient | None = None
         self._authenticated_client: httpx.AsyncClient | None = None
         self._authenticated_session: AuthenticatedSession | None = None
@@ -290,7 +324,64 @@ class AvanzaClient:
                 "Authenticated Avanza requests require a relative same-origin path"
             )
 
+    async def _pace_request_start(self) -> None:
+        """Apply per-client pacing and any active 429 cooldown before a request."""
+
+        loop = asyncio.get_running_loop()
+        async with self._request_pace_lock:
+            while True:
+                now = loop.time()
+                not_before = max(self._next_request_start, self._rate_limit_until)
+                delay = not_before - now
+                if delay <= 0:
+                    break
+                await asyncio.sleep(delay)
+
+            jitter = (
+                random.uniform(0.0, self._request_jitter)
+                if self._request_jitter
+                else 0.0
+            )
+            self._next_request_start = (
+                loop.time() + self._min_request_interval + jitter
+            )
+
+    def _note_rate_limit(self, retry_after: int | None) -> None:
+        """Delay subsequent request starts after an upstream 429 response."""
+
+        delay = (
+            float(retry_after)
+            if retry_after is not None
+            else self._rate_limit_cooldown
+        )
+        loop = asyncio.get_running_loop()
+        self._rate_limit_until = max(
+            self._rate_limit_until,
+            loop.time() + max(0.0, delay),
+        )
+
     async def _send_request(
+        self,
+        method: str,
+        path: str,
+        *,
+        allow_authenticated: bool,
+        require_authenticated: bool = False,
+        **kwargs: Any,
+    ) -> tuple[httpx.Response, bool]:
+        """Send one governed upstream request."""
+
+        async with self._request_semaphore:
+            await self._pace_request_start()
+            return await self._send_request_unpaced(
+                method,
+                path,
+                allow_authenticated=allow_authenticated,
+                require_authenticated=require_authenticated,
+                **kwargs,
+            )
+
+    async def _send_request_unpaced(
         self,
         method: str,
         path: str,
@@ -450,6 +541,7 @@ class AvanzaClient:
             except (ValueError, TypeError, OverflowError):
                 # Invalid Retry-After values are treated as unspecified.
                 pass
+            self._note_rate_limit(seconds)
             raise AvanzaRateLimitError(seconds, f"{context}: {message}")
         else:
             error_type = (
