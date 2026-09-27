@@ -573,3 +573,85 @@ async def test_accounts_try_lightweight_list_before_full_trading_accounts():
     assert result.accounts[0].account_type == "INVESTMENT_SAVINGS_ACCOUNT"
     assert result.accounts[0].currency_balances == []
     assert "must-not-leak" not in result.model_dump_json()
+
+
+
+@respx.mock
+async def test_accounts_derive_unique_minimal_accounts_from_positions_as_last_resort():
+    requests = []
+
+    async def handler(request):
+        requests.append(request.url.path)
+        if request.url.path.endswith("categorizedAccounts"):
+            return httpx.Response(503, json={"error": "temporary"})
+        if request.url.path.endswith("/account-overview/accounts/list"):
+            return httpx.Response(503, json={"error": "temporary"})
+        if request.url.path.endswith("/trading-critical/rest/lightweightaccounts"):
+            return httpx.Response(503, json={"error": "temporary"})
+        if request.url.path.endswith("/trading-critical/rest/accounts"):
+            return httpx.Response(503, json={"error": "temporary"})
+        if request.url.path.endswith("/position-data/positions"):
+            return httpx.Response(
+                200,
+                json={
+                    "withOrderbook": [
+                        {
+                            "account": {
+                                "id": "a1",
+                                "name": "ISK",
+                                "type": "INVESTMENT_SAVINGS_ACCOUNT",
+                                "hasCredit": True,
+                                "secretField": "must-not-leak",
+                            },
+                            "instrument": {"secret": "must-not-leak"},
+                        },
+                        {
+                            "account": {
+                                "id": "a1",
+                                "name": "ISK",
+                                "type": "INVESTMENT_SAVINGS_ACCOUNT",
+                            }
+                        },
+                    ],
+                    "withoutOrderbook": [
+                        {
+                            "account": {
+                                "id": "a2",
+                                "name": "KF",
+                                "type": "CAPITAL_INSURANCE",
+                            }
+                        }
+                    ],
+                    "cashPositions": [
+                        {
+                            "account": {
+                                "id": "a2",
+                                "name": "KF",
+                                "type": "CAPITAL_INSURANCE",
+                            },
+                            "totalBalance": {"value": 1000, "unit": "SEK"},
+                        }
+                    ],
+                },
+            )
+        raise AssertionError(request.url.path)
+
+    mock_avanza(handler)
+    async with client() as account_client:
+        result = await account_client.accounts()
+
+    assert requests == [
+        "/_api/account-overview/overview/categorizedAccounts",
+        "/_api/account-overview/accounts/list",
+        "/_api/trading-critical/rest/lightweightaccounts",
+        "/_api/trading-critical/rest/accounts",
+        "/_api/position-data/positions",
+    ]
+    assert [(item.account_id, item.name, item.account_type) for item in result.accounts] == [
+        ("a1", "ISK", "INVESTMENT_SAVINGS_ACCOUNT"),
+        ("a2", "KF", "CAPITAL_INSURANCE"),
+    ]
+    output = result.model_dump_json()
+    assert "hasCredit" not in output
+    assert "secretField" not in output
+    assert "must-not-leak" not in output

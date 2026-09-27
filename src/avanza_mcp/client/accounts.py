@@ -135,8 +135,20 @@ class AccountClient:
         except AccountReadError:
             pass
 
-        values = await self._get_list(_TRADING_ACCOUNTS)
-        return Accounts(accounts=[self._trading_account(item) for item in values])
+        try:
+            values = await self._get_list(_TRADING_ACCOUNTS)
+            return Accounts(accounts=[self._trading_account(item) for item in values])
+        except AccountAuthExpired:
+            raise
+        except AccountReadError:
+            pass
+
+        # Last resort: the positions endpoint is already required by get_holdings
+        # and carries the account id/name/type alongside every position. This can
+        # omit a completely empty account, so it is deliberately used only after
+        # all dedicated account-list endpoints have failed.
+        body = await self._get(_POSITIONS)
+        return self._accounts_from_positions(body)
 
     async def holdings(self) -> Holdings:
         body = await self._get(_POSITIONS)
@@ -627,6 +639,39 @@ class AccountClient:
             balance=None,
             currency_balances=currency_balances,
         )
+
+    @classmethod
+    def _accounts_from_positions(cls, body: dict[str, Any]) -> Accounts:
+        seen: set[str] = set()
+        accounts: list[Account] = []
+
+        for key in ("withOrderbook", "withoutOrderbook", "cashPositions"):
+            values = body.get(key, [])
+            if not isinstance(values, list):
+                raise AccountReadError
+            for item in values:
+                if not isinstance(item, dict):
+                    continue
+                raw_account = item.get("account")
+                if not isinstance(raw_account, dict):
+                    continue
+                account_id = cls._identifier(raw_account.get("id"))
+                if account_id in seen:
+                    continue
+                seen.add(account_id)
+                accounts.append(
+                    Account(
+                        account_id=account_id,
+                        name=str(raw_account.get("name") or "Unknown account"),
+                        account_type=str(raw_account.get("type") or "UNKNOWN"),
+                        hidden=False,
+                        total_value=None,
+                        balance=None,
+                        currency_balances=[],
+                    )
+                )
+
+        return Accounts(accounts=accounts)
 
     @classmethod
     def _holding(cls, value: Any) -> Holding:
