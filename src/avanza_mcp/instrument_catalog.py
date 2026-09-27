@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import sqlite3
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Literal
 
@@ -31,6 +32,51 @@ _RATE_LIMIT_ATTEMPTS = 4
 _RATE_LIMIT_FALLBACK_SECONDS = 5
 _MAX_RATE_LIMIT_DELAY_SECONDS = 60
 _VALID_PRODUCT_TYPES = frozenset({"certificate", "warrant"})
+_DEFAULT_CATALOG_MAX_AGE = timedelta(days=2)
+
+
+def default_instrument_catalog_path() -> Path | None:
+    """Return the default local catalog path when it can be resolved safely."""
+
+    override = os.environ.get("AVANZA_MCP_INSTRUMENT_CATALOG")
+    if override:
+        path = Path(override).expanduser()
+        return path if path.is_absolute() else None
+
+    if os.name == "nt":
+        local_appdata = os.environ.get("LOCALAPPDATA")
+        if local_appdata:
+            root = Path(local_appdata)
+            if root.is_absolute():
+                return root / "avanza-mcp" / "instrument-catalog.sqlite3"
+    return None
+
+
+def fresh_default_instrument_catalog(
+    *,
+    max_age: timedelta = _DEFAULT_CATALOG_MAX_AGE,
+) -> "InstrumentCatalog | None":
+    """Return the default catalog only when a non-empty recent snapshot exists."""
+
+    path = default_instrument_catalog_path()
+    if path is None or not path.is_file():
+        return None
+
+    catalog = InstrumentCatalog(path)
+    try:
+        stats = catalog.stats()
+        refreshed_at = stats.get("refreshed_at")
+        if not refreshed_at or stats.get("row_count", 0) <= 0:
+            return None
+        refreshed = datetime.fromisoformat(str(refreshed_at))
+        if refreshed.tzinfo is None:
+            return None
+        age = datetime.now(timezone.utc) - refreshed.astimezone(timezone.utc)
+        if age > max_age:
+            return None
+    except (OSError, sqlite3.Error, TypeError, ValueError):
+        return None
+    return catalog
 
 
 @dataclass(frozen=True)
