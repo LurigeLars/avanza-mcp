@@ -70,10 +70,17 @@ class Quote(AvanzaModel):
     freshness: QuoteFreshness | None = None
 
     def model_post_init(self, __context: Any) -> None:
-        observed_at = int(time.time() * 1000)
         source_updated_at = _timestamp_ms(self.updated)
         bid_ask_updated_at = _bid_ask_updated_at(self)
         last_trade_at = _timestamp_ms(self.timeOfLast)
+        if (
+            source_updated_at is None
+            and bid_ask_updated_at is None
+            and last_trade_at is None
+        ):
+            return
+
+        observed_at = int(time.time() * 1000)
         freshness = QuoteFreshness(
             observedAt=observed_at,
             sourceUpdatedAt=source_updated_at,
