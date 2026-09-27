@@ -10,6 +10,7 @@ from jsonschema import validate
 
 from avanza_mcp import mcp
 from avanza_mcp.client import AvanzaClient
+from avanza_mcp.client.exceptions import AvanzaNotFoundError
 
 
 @pytest.fixture
@@ -86,6 +87,7 @@ async def test_mcp_validation_before_upstream(upstream, name, args):
 
 
 async def test_exact_lookup_and_curated_search(upstream):
+    upstream.get.side_effect = AvanzaNotFoundError("not found")
     upstream.post.return_value = {
         "totalNumberOfHits": 2,
         "searchQuery": "123",

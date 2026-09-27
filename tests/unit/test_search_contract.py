@@ -10,6 +10,7 @@ from jsonschema import validate
 
 from avanza_mcp import mcp
 from avanza_mcp.client import AvanzaClient
+from avanza_mcp.client.exceptions import AvanzaNotFoundError
 from avanza_mcp.instrument_catalog import CatalogInstrument, InstrumentCatalog
 
 
@@ -18,6 +19,7 @@ def upstream(monkeypatch):
     client = AsyncMock()
     monkeypatch.setattr(AvanzaClient, "__aenter__", AsyncMock(return_value=client))
     monkeypatch.setattr(AvanzaClient, "__aexit__", AsyncMock(return_value=None))
+    client.get.side_effect = AvanzaNotFoundError("not found")
     client.post.return_value = {
         "totalNumberOfHits": 687,
         "searchQuery": "Volvo",
@@ -148,6 +150,7 @@ async def test_exact_lookup_never_substitutes_or_accepts_faq(upstream):
                 await client.call_tool(
                     "get_instrument_by_order_book_id", {"order_book_id": identifier}
                 )
+    assert upstream.get.await_count == 5
     assert upstream.post.await_count == 5
 
 
@@ -296,4 +299,40 @@ async def test_exact_lookup_prefers_fresh_leveraged_catalog(
         "isin": None,
         "currency": None,
     }
+    upstream.post.assert_not_awaited()
+
+
+async def test_exact_lookup_uses_generic_market_guide_identity(upstream):
+    upstream.get.side_effect = None
+    upstream.get.return_value = {
+        "orderbookId": "4478",
+        "name": "NVIDIA",
+        "isin": "US67066G1040",
+        "listing": {
+            "shortName": "NVDA",
+            "tickerSymbol": "NVDA",
+            "countryCode": "US",
+            "currency": "USD",
+            "marketPlaceCode": "XNAS",
+            "marketPlaceName": "NASDAQ",
+        },
+        "quote": {},
+        "type": "STOCK",
+    }
+
+    async with Client(mcp) as client:
+        result = await client.call_tool(
+            "get_instrument_by_order_book_id",
+            {"order_book_id": "4478"},
+        )
+
+    assert result.structured_content == {
+        "order_book_id": "4478",
+        "name": "NVIDIA",
+        "type": "STOCK",
+        "exchange": "NASDAQ",
+        "isin": "US67066G1040",
+        "currency": "USD",
+    }
+    upstream.get.assert_awaited_once_with("/_api/market-guide/stock/4478")
     upstream.post.assert_not_awaited()
