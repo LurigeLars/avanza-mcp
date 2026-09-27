@@ -3,6 +3,7 @@
 from pydantic import validate_call
 
 from ..client.base import AvanzaClient
+from ..instrument_catalog import InstrumentCatalog
 from ..client.endpoints import PublicEndpoint
 from ..models.common import InstrumentType, SearchLimit, SearchQuery
 from ..models.search import (
@@ -18,13 +19,14 @@ from ..models.search import (
 class SearchService:
     """Service for searching financial instruments."""
 
-    def __init__(self, client: AvanzaClient) -> None:
-        """Initialize search service.
-
-        Args:
-            client: Avanza HTTP client
-        """
+    def __init__(
+        self,
+        client: AvanzaClient,
+        catalog: InstrumentCatalog | None = None,
+    ) -> None:
+        """Initialize search service with optional local leveraged-instrument catalog."""
         self._client = client
+        self._catalog = catalog
 
     @validate_call
     async def search(
@@ -35,6 +37,33 @@ class SearchService:
     ) -> InstrumentSearch:
         """Filter one bounded candidate page before applying the output limit."""
         type_value = instrument_type.upper() if instrument_type else "ALL"
+        if type_value in {"CERTIFICATE", "WARRANT"} and self._catalog is not None:
+            product_type = type_value.casefold()
+            rows = self._catalog.search(
+                query,
+                product_types=[product_type],
+                limit=50,
+            )
+            if rows:
+                hits = [
+                    InstrumentHit(
+                        order_book_id=row["order_book_id"],
+                        name=row["name"],
+                        type=type_value,
+                        exchange=row.get("marketplace_code"),
+                    )
+                    for row in rows
+                ]
+                selected = hits[:limit]
+                return InstrumentSearch(
+                    totalNumberOfHits=len(hits),
+                    candidatesExamined=len(rows),
+                    upstreamTotalNumberOfHits=len(rows),
+                    hits=selected,
+                    searchQuery=query,
+                    returned=len(selected),
+                )
+
         financial_types = {
             item.value for item in InstrumentType if item != InstrumentType.FAQ
         }
