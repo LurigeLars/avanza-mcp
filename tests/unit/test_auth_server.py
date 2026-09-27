@@ -188,3 +188,13 @@ async def test_account_tool_does_not_surface_unclassified_worker_text():
             await client.call_tool("get_watchlists", {})
 
     assert "must-not-leak" not in str(exc.value)
+
+
+async def test_account_tool_surfaces_only_safe_exception_class():
+    class DiagnosticBroker(FakeBroker):
+        async def account(self, operation, arguments):
+            raise AuthWorkerOperationError("worker_error_AttributeError")
+
+    async with Client(create_auth_server(DiagnosticBroker())) as client:  # type: ignore[arg-type]
+        with pytest.raises(ToolError, match=r"Safe diagnostic: exception_AttributeError"):
+            await client.call_tool("get_watchlists", {})
