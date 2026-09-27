@@ -148,7 +148,24 @@ def _compact_option_info(info: Any) -> dict[str, Any]:
     spread = _quote_spread_percent(compact_quote)
     if spread is not None:
         compact_quote["spread_percent_from_quote_prices"] = spread
-    compact_quote["freshness"] = _quote_freshness(compact_quote)
+    quote_freshness = _quote_freshness(compact_quote)
+    if quote_freshness is not None:
+        compact_quote["freshness"] = quote_freshness
+
+    compact_underlying_quote = pick(
+        underlying_quote,
+        (
+            ("buy", "bid"),
+            ("sell", "ask"),
+            ("last", "last"),
+            ("spread", "upstream_spread_percent"),
+            ("updated", "updated"),
+            ("isRealTime", "is_real_time"),
+        ),
+    )
+    underlying_freshness = _quote_freshness(compact_underlying_quote)
+    if underlying_freshness is not None:
+        compact_underlying_quote["freshness"] = underlying_freshness
 
     return {
         key: value
@@ -168,30 +185,13 @@ def _compact_option_info(info: Any) -> dict[str, Any]:
                     ("subType", "sub_type"),
                 ),
             ),
-            "underlying_quote": (
-                lambda compact: {
-                    **compact,
-                    "freshness": _quote_freshness(compact),
-                }
-            )(
-                pick(
-                    underlying_quote,
-                    (
-                        ("buy", "bid"),
-                        ("sell", "ask"),
-                        ("last", "last"),
-                        ("spread", "upstream_spread_percent"),
-                        ("updated", "updated"),
-                        ("isRealTime", "is_real_time"),
-                    ),
-                )
-            ),
+            "underlying_quote": compact_underlying_quote,
         }.items()
         if value not in (None, {})
     }
 
 
-def _quote_freshness(quote: dict[str, Any]) -> dict[str, Any]:
+def _quote_freshness(quote: dict[str, Any]) -> dict[str, Any] | None:
     observed_at = int(time() * 1000)
 
     def timestamp(value: Any) -> int | None:
@@ -206,6 +206,8 @@ def _quote_freshness(quote: dict[str, Any]) -> dict[str, Any]:
 
     source_updated_at = timestamp(quote.get("updated"))
     last_trade_at = timestamp(quote.get("time_of_last"))
+    if source_updated_at is None and last_trade_at is None:
+        return None
     return {
         key: value
         for key, value in {
