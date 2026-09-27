@@ -345,14 +345,14 @@ export function createGatewayServer(env = process.env, dependencies = {}) {
       let identity;
       if (config.mode === 'local') {
         if (!isLoopbackAddress(req.socket.remoteAddress)) {
-          console.warn('local gateway denied non-loopback client', JSON.stringify(clientIp(req)));
+          console.warn('local gateway denied non-loopback client');
           return send(res, 403, 'forbidden');
         }
         identity = { ok: true, email: 'local' };
       } else {
         identity = await verifyAccessJwt(req.headers['cf-access-jwt-assertion']);
         if (!identity.ok) {
-          console.warn('access denied', JSON.stringify({ client: clientIp(req), reason: identity.reason }));
+          console.warn('access denied');
           return send(res, 403, 'forbidden');
         }
       }
@@ -373,7 +373,7 @@ export function createGatewayServer(env = process.env, dependencies = {}) {
         for (const message of messages) {
           const verdict = checkRequest(message, config.allowedTools);
           if (verdict.error) {
-            console.warn(`blocked tool ${message?.params?.name} for ${identity.email}`);
+            console.warn(`blocked tool ${message?.params?.name}`);
             return sendJson(res, rpcError(message.id, verdict.error));
           }
 
@@ -387,7 +387,7 @@ export function createGatewayServer(env = process.env, dependencies = {}) {
         }
       }
 
-      console.log(new Date().toISOString(), JSON.stringify(identity.email), req.method, '/mcp');
+      console.log(`${new Date().toISOString()} authenticated ${req.method} /mcp`);
       forward(req, res, body, config, ctx);
     } catch (error) {
       const status = Number(error?.status) || 500;

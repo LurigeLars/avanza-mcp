@@ -551,6 +551,8 @@ class BrowserAuth:
                 # reusable authenticated HTTP client has dropped its copy.
                 await self._clear_cached_session()
         except asyncio.CancelledError:
+            # Expected when the idle-eviction task is cancelled during shutdown
+            # or rescheduling; no cleanup or error propagation is required here.
             pass
 
     @staticmethod

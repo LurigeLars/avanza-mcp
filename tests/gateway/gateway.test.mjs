@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import http from 'node:http';
 import test from 'node:test';
 import {
@@ -16,6 +17,12 @@ const validEnv = {
   ACCESS_AUD: 'aud-123',
   ACCESS_ALLOWED_EMAILS: 'user@example.com',
 };
+
+test('gateway logs do not include authenticated identity or client address values', () => {
+  const source = readFileSync(new URL('../../public/gateway/gateway.mjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /console\.(?:log|warn|error)\([^\n]*(?:identity\.email|clientIp\(req\)|identity\.reason)/);
+  assert.match(source, /authenticated \$\{req\.method\} \/mcp/);
+});
 
 test('gateway fails closed without Cloudflare Access configuration', () => {
   assert.throws(() => loadConfig({}), /ACCESS_TEAM_DOMAIN/);
