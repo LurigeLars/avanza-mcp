@@ -140,6 +140,9 @@ async def test_filters_apply_after_full_scan_and_before_ranking():
         "max_spread_percent": 2.1,
         "min_turnover": 600000,
     }
+    assert fake.certificate_calls[0].filter.issuers == ["issuer b"]
+    assert fake.warrant_calls[0].filter.issuers == ["issuer b"]
+    assert fake.warrant_calls[0].filter.subTypes == ["turbo"]
 
 
 @pytest.mark.asyncio
@@ -356,3 +359,90 @@ async def test_screen_tool_has_unbounded_page_size_and_filter_contract():
         "min_turnover",
     ):
         assert field in props
+
+
+class FilterOptionsWarrantMarket:
+    def __init__(self):
+        self.warrant_calls = []
+
+    async def filter_warrants(self, request):
+        self.warrant_calls.append(request)
+        return SimpleNamespace(
+            warrants=[
+                FakeItem(
+                    orderbookId="202",
+                    name="MINI L TEST",
+                    direction="long",
+                    issuer="Morgan Stanley",
+                    subType="MINI_FUTURE",
+                    leverage=4.0,
+                    buyPrice=10.0,
+                    sellPrice=10.1,
+                )
+            ],
+            totalNumberOfOrderbooks=1,
+            model_dump=lambda **_kwargs: {
+                "filterOptions": {
+                    "issuers": [
+                        {
+                            "value": "morgan stanley",
+                            "displayName": "Morgan Stanley",
+                            "numberOfOrderbooks": 1,
+                        },
+                        {
+                            "value": "vontobel",
+                            "displayName": "Vontobel",
+                            "numberOfOrderbooks": 2,
+                        },
+                        {
+                            "value": "unused",
+                            "displayName": "Unused",
+                            "numberOfOrderbooks": 0,
+                        },
+                    ],
+                    "subTypes": [
+                        {
+                            "value": "mini_future",
+                            "displayName": "Mini Future",
+                            "numberOfOrderbooks": 1,
+                        },
+                        {
+                            "value": "knock_out",
+                            "displayName": "Unlimited Turbo",
+                            "numberOfOrderbooks": 2,
+                        },
+                    ],
+                }
+            },
+        )
+
+
+@pytest.mark.asyncio
+async def test_filter_options_preserve_structural_discovery_values_after_pushdown():
+    service = LeveragedScreenService(object())
+    fake = FilterOptionsWarrantMarket()
+    service._market = fake
+
+    result = await service.screen(
+        "4478",
+        "long",
+        ["warrant"],
+        100,
+        ScreenFilters(
+            issuers=("MORGAN STANLEY",),
+            sub_types=("MINI_FUTURE",),
+        ),
+    )
+
+    request_filter = fake.warrant_calls[0].filter
+    assert request_filter.issuers == ["morgan stanley"]
+    assert request_filter.subTypes == ["mini_future"]
+    assert result["available_filter_values"]["issuers"] == [
+        "Morgan Stanley",
+        "Vontobel",
+    ]
+    assert result["available_filter_values"]["sub_types"] == [
+        "Mini Future",
+        "Unlimited Turbo",
+    ]
+    assert result["pagination"]["total"] == 1
