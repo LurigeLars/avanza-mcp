@@ -423,3 +423,67 @@ async def test_accounts_tolerate_optional_shape_drift_without_leaking_fields():
     assert result.accounts[1].hidden is True
     assert result.accounts[1].currency_balances[0].amount == "5"
     assert "must-not-leak" not in result.model_dump_json()
+
+
+
+@respx.mock
+async def test_accounts_fall_back_to_documented_trading_account_list_on_shape_drift():
+    requests = []
+
+    async def handler(request):
+        requests.append(request.url.path)
+        if request.url.path.endswith("categorizedAccounts"):
+            return httpx.Response(200, json={"categories": [], "accounts": None})
+        if request.url.path.endswith("/trading-critical/rest/accounts"):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "name": "ISK",
+                        "accountId": "a1",
+                        "accountType": "INVESTMENT_SAVINGS_ACCOUNT",
+                        "accountTypeName": "ISK",
+                        "isHidden": False,
+                        "currencyBalances": [
+                            {"currency": "SEK", "balance": 123.45},
+                            {"currency": "USD", "balance": 5},
+                        ],
+                        "availableCredit": 999999,
+                        "positions": [{"secret": "must-not-leak"}],
+                    }
+                ],
+            )
+        raise AssertionError(request.url.path)
+
+    mock_avanza(handler)
+    async with client() as account_client:
+        result = await account_client.accounts()
+
+    assert requests == [
+        "/_api/account-overview/overview/categorizedAccounts",
+        "/_api/trading-critical/rest/accounts",
+    ]
+    assert result.accounts[0].account_id == "a1"
+    assert result.accounts[0].name == "ISK"
+    assert result.accounts[0].account_type == "INVESTMENT_SAVINGS_ACCOUNT"
+    assert result.accounts[0].currency_balances[0].amount == "123.45"
+    output = result.model_dump_json()
+    assert "availableCredit" not in output
+    assert "positions" not in output
+    assert "must-not-leak" not in output
+
+
+@respx.mock
+async def test_accounts_auth_expiry_does_not_fall_back():
+    requests = []
+
+    async def handler(request):
+        requests.append(request.url.path)
+        return httpx.Response(401, json={"secret": "must-not-leak"})
+
+    mock_avanza(handler)
+    async with client() as account_client:
+        with pytest.raises(AccountAuthExpired):
+            await account_client.accounts()
+
+    assert requests == ["/_api/account-overview/overview/categorizedAccounts"]

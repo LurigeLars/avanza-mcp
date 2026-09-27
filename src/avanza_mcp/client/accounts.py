@@ -42,6 +42,7 @@ from .base import AvanzaClient
 from .exceptions import AvanzaAuthError
 
 _ACCOUNTS = "/_api/account-overview/overview/categorizedAccounts"
+_TRADING_ACCOUNTS = "/_api/trading-critical/rest/accounts"
 _POSITIONS = "/_api/position-data/positions"
 _TRANSACTIONS = "/_api/transactions/list"
 _CREDIT_INFO = "/_api/superloan/creditinfo/{credit_type}"
@@ -59,6 +60,7 @@ _STOP_LOSSES = "/_api/trading/stoploss"
 
 _ALLOWED_ACCOUNT_EXACT = {
     ("GET", _ACCOUNTS),
+    ("GET", _TRADING_ACCOUNTS),
     ("GET", _POSITIONS),
     ("GET", _TRANSACTIONS),
     ("GET", _WATCHLISTS),
@@ -102,11 +104,20 @@ class AccountClient:
         self._client = client
 
     async def accounts(self) -> Accounts:
-        body = await self._get(_ACCOUNTS)
-        records = body.get("accounts")
-        if not isinstance(records, list):
-            raise AccountReadError
-        return Accounts(accounts=[self._account(item) for item in records])
+        try:
+            body = await self._get(_ACCOUNTS)
+            records = body.get("accounts")
+            if not isinstance(records, list):
+                raise AccountReadError("categorized_shape")
+            return Accounts(accounts=[self._account(item) for item in records])
+        except AccountAuthExpired:
+            raise
+        except AccountReadError:
+            # Avanza has more than one documented read-only account surface.
+            # If the categorized overview drifts, fall back to the trading
+            # account list and keep projecting into the same narrow model.
+            values = await self._get_list(_TRADING_ACCOUNTS)
+            return Accounts(accounts=[self._trading_account(item) for item in values])
 
     async def holdings(self) -> Holdings:
         body = await self._get(_POSITIONS)
@@ -522,6 +533,45 @@ class AccountClient:
             hidden=hidden,
             total_value=cls._money(value.get("totalValue")),
             balance=cls._money(value.get("balance")),
+            currency_balances=currency_balances,
+        )
+
+    @classmethod
+    def _trading_account(cls, value: Any) -> Account:
+        if not isinstance(value, dict):
+            raise AccountReadError
+        balances = value.get("currencyBalances")
+        if balances is None:
+            balances = []
+        if not isinstance(balances, list):
+            raise AccountReadError
+
+        currency_balances: list[Money] = []
+        for item in balances:
+            if not isinstance(item, dict):
+                continue
+            currency = item.get("currency")
+            balance = item.get("balance")
+            if (
+                isinstance(currency, str)
+                and isinstance(balance, (str, int, float))
+                and not isinstance(balance, bool)
+            ):
+                currency_balances.append(
+                    Money(amount=str(balance), currency=currency)
+                )
+
+        return Account(
+            account_id=cls._identifier(value.get("accountId")),
+            name=str(value.get("name") or "Unknown account"),
+            account_type=str(
+                value.get("accountType")
+                or value.get("accountTypeName")
+                or "UNKNOWN"
+            ),
+            hidden=bool(value.get("isHidden", False)),
+            total_value=None,
+            balance=None,
             currency_balances=currency_balances,
         )
 
