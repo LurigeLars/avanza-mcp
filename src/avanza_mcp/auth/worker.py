@@ -36,6 +36,7 @@ _ALLOWED_ACCOUNT_OPERATIONS = frozenset(
         "watchlists",
         "price_alerts",
         "portfolio_insights",
+        "portfolio_snapshot",
         "instrument_news",
         "insider_transactions",
         "active_orders",
@@ -308,6 +309,13 @@ async def _account_operation(
                 result = await account.insights(
                     [item.account_id for item in accounts.accounts],
                     time_period,
+                )
+            elif operation == "portfolio_snapshot":
+                _only_arguments(arguments, {"limit"})
+                result = await account.portfolio_snapshot(
+                    _bounded_int(
+                        arguments.get("limit"), default=100, minimum=1, maximum=100
+                    )
                 )
             elif operation == "instrument_news":
                 _only_arguments(arguments, {"order_book_id", "limit"})
