@@ -170,3 +170,59 @@ def test_worker_blocks_credential_shaped_market_payload_before_ipc():
     assert not _contains_forbidden_market_result(
         {"last": 10, "isRealTime": True, "bid": 9.9, "ask": 10.1}
     )
+
+
+
+async def test_market_worker_non_auth_failure_falls_back_to_public(monkeypatch):
+    broker = AuthProcessBroker(mode="persistent")
+    monkeypatch.setattr(
+        broker,
+        "_run_once",
+        AsyncMock(return_value={"ok": False, "code": "read_error"}),
+    )
+    try:
+        response = await broker.market_request(
+            "GET",
+            "/_api/market-guide/warrant/1704709",
+            {"params": None},
+        )
+        assert response is None
+    finally:
+        await broker.aclose()
+
+
+async def test_market_worker_auth_expiry_never_falls_back(monkeypatch):
+    broker = AuthProcessBroker(mode="persistent")
+    monkeypatch.setattr(
+        broker,
+        "_run_once",
+        AsyncMock(return_value={"ok": False, "code": "auth_expired"}),
+    )
+    try:
+        response = await broker.market_request(
+            "GET",
+            "/_api/market-guide/stock/4478/quote",
+            {"params": None},
+        )
+        assert response is not None
+        assert response.status_code == 401
+    finally:
+        await broker.aclose()
+
+
+async def test_market_worker_protocol_failure_degrades_to_public(monkeypatch):
+    broker = AuthProcessBroker(mode="persistent")
+    monkeypatch.setattr(
+        broker,
+        "_run_once",
+        AsyncMock(side_effect=AuthWorkerOperationError("worker failed")),
+    )
+    try:
+        response = await broker.market_request(
+            "GET",
+            "/_api/market-guide/warrant/1704709",
+            {"params": None},
+        )
+        assert response is None
+    finally:
+        await broker.aclose()
