@@ -51,6 +51,7 @@ def test_catalog_refresh_launcher_logs_terminal_status_and_duration() -> None:
 def test_worktree_helper_protects_runtime_checkout() -> None:
     source = (WINDOWS / "new-worktree.ps1").read_text(encoding="utf-8")
 
+    assert '$currentBranch -ne "main"' in source
     assert '$Branch -eq "main"' in source
     assert '"worktree", "list", "--porcelain"' in source
     assert '"worktree", "add", "--track", "-b", $Branch' in source
