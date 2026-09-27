@@ -482,24 +482,47 @@ class AccountClient:
     def _account(cls, value: Any) -> Account:
         if not isinstance(value, dict):
             raise AccountReadError
-        name = value.get("name", {})
-        balances = value.get("currencyBalances", [])
-        if not isinstance(name, dict) or not isinstance(balances, list):
-            raise AccountReadError
+
+        raw_name = value.get("name")
+        if isinstance(raw_name, dict):
+            name = (
+                raw_name.get("userDefinedName")
+                or raw_name.get("defaultName")
+                or "Unknown account"
+            )
+        elif isinstance(raw_name, str) and raw_name:
+            name = raw_name
+        else:
+            name = "Unknown account"
+
+        raw_balances = value.get("currencyBalances")
+        balances = raw_balances if isinstance(raw_balances, list) else []
+
+        settings = value.get("settings")
+        hidden = (
+            bool(settings.get("IS_HIDDEN", False))
+            if isinstance(settings, dict)
+            else bool(value.get("isHidden", False))
+        )
+
+        currency_balances: list[Money] = []
+        for item in balances:
+            if not isinstance(item, dict):
+                continue
+            money = cls._money(item.get("balance", item))
+            if money is not None:
+                currency_balances.append(money)
+
         return Account(
-            account_id=cls._identifier(value.get("id")),
-            name=name.get("userDefinedName")
-            or name.get("defaultName")
-            or "Unknown account",
-            account_type=str(value.get("type") or "UNKNOWN"),
-            hidden=bool(value.get("settings", {}).get("IS_HIDDEN", False)),
+            account_id=cls._identifier(value.get("id") or value.get("accountId")),
+            name=name,
+            account_type=str(
+                value.get("type") or value.get("accountType") or "UNKNOWN"
+            ),
+            hidden=hidden,
             total_value=cls._money(value.get("totalValue")),
             balance=cls._money(value.get("balance")),
-            currency_balances=[
-                money
-                for item in balances
-                if (money := cls._money(item.get("balance", item)))
-            ],
+            currency_balances=currency_balances,
         )
 
     @classmethod

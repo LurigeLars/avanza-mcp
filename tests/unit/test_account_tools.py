@@ -375,3 +375,51 @@ async def test_unapproved_account_request_is_rejected_before_network():
     ):
         with pytest.raises(AccountReadError, match="request_not_allowed"):
             await account_client._request(method, path)
+
+
+
+@respx.mock
+async def test_accounts_tolerate_optional_shape_drift_without_leaking_fields():
+    async def handler(request):
+        assert request.url.path.endswith("categorizedAccounts")
+        return httpx.Response(
+            200,
+            json={
+                "accounts": [
+                    {
+                        "id": "a1",
+                        "name": {"defaultName": "ISK", "userDefinedName": None},
+                        "type": "INVESTERINGSSPARKONTO",
+                        "settings": None,
+                        "currencyBalances": None,
+                        "balance": {"value": 10, "unit": "SEK"},
+                        "totalValue": {"value": 20, "unit": "SEK"},
+                        "personalNumber": "must-not-leak",
+                    },
+                    {
+                        "accountId": "a2",
+                        "name": "Kapitalförsäkring",
+                        "accountType": "KAPITALFORSAKRING",
+                        "isHidden": True,
+                        "currencyBalances": [
+                            {"currency": "SEK", "balance": 5},
+                            None,
+                        ],
+                        "secretField": "must-not-leak",
+                    },
+                ]
+            },
+        )
+
+    mock_avanza(handler)
+    async with client() as account_client:
+        result = await account_client.accounts()
+
+    assert [item.account_id for item in result.accounts] == ["a1", "a2"]
+    assert result.accounts[0].name == "ISK"
+    assert result.accounts[0].hidden is False
+    assert result.accounts[1].name == "Kapitalförsäkring"
+    assert result.accounts[1].account_type == "KAPITALFORSAKRING"
+    assert result.accounts[1].hidden is True
+    assert result.accounts[1].currency_balances[0].amount == "5"
+    assert "must-not-leak" not in result.model_dump_json()
