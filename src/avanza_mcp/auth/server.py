@@ -103,6 +103,12 @@ def create_auth_server(broker: AuthProcessBroker | None = None) -> FastMCP:
                 raise ToolError(
                     f"{error_message} Safe diagnostic: {code.removeprefix('read_error_')}."
                 ) from None
+            if code.startswith("worker_error_"):
+                exception_name = code.removeprefix("worker_error_")
+                if exception_name.isidentifier() and len(exception_name) <= 64:
+                    raise ToolError(
+                        f"{error_message} Safe diagnostic: exception_{exception_name}."
+                    ) from None
             raise ToolError(error_message) from None
 
         try:
