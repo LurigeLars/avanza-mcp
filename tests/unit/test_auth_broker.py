@@ -267,32 +267,20 @@ async def test_market_family_backoff_skips_repeated_failed_auth_attempts(monkeyp
 
 async def test_market_family_backoff_expires(monkeypatch):
     broker = AuthProcessBroker(mode="persistent")
-    worker = AsyncMock(
-        side_effect=[
-            {"ok": False, "code": "read_error"},
-            {"ok": True, "result": {"ok": True}},
-        ]
-    )
-    now = [100.0]
+    worker = AsyncMock(return_value={"ok": True, "result": {"ok": True}})
+    monkeypatch.setattr(broker, "_run_once", worker)
+    now = [120.0]
     monkeypatch.setattr("avanza_mcp.auth.broker.monotonic", lambda: now[0])
+    broker._market_auth_backoff_until["warrant_filter"] = 160.0
     try:
-        assert (
-            await broker.market_request(
-                "POST",
-                "/_api/market-warrant-filter/",
-                {"json": {}},
-            )
-            is None
+        blocked = await broker.market_request(
+            "POST",
+            "/_api/market-warrant-filter/",
+            {"json": {}},
         )
-        now[0] = 120.0
-        assert (
-            await broker.market_request(
-                "POST",
-                "/_api/market-warrant-filter/",
-                {"json": {}},
-            )
-            is None
-        )
+        assert blocked is None
+        worker.assert_not_awaited()
+
         now[0] = 161.0
         retried = await broker.market_request(
             "POST",
@@ -301,7 +289,8 @@ async def test_market_family_backoff_expires(monkeypatch):
         )
         assert retried is not None
         assert retried.status_code == 200
-        assert worker.await_count == 2
+        assert worker.await_count == 1
+        assert "warrant_filter" not in broker._market_auth_backoff_until
     finally:
         await broker.aclose()
 
