@@ -44,18 +44,20 @@ Requires [uv](https://docs.astral.sh/uv/) and Python 3.12+.
 |---|---|---|
 | Claude Desktop, Cursor, VS Code | local stdio from a checkout | **yes**, with `AVANZA_MCP_AUTH=1` |
 | Claude Code, Codex | local loopback gateway `127.0.0.1:8769` | yes, when the background stack runs with auth |
-| ChatGPT and other cloud chats | Cloudflare Access -> public gateway -> `127.0.0.1:8767` | no |
+| ChatGPT and other cloud chats | Cloudflare Access -> gateway -> `127.0.0.1:8767` | **yes**, when the gateway uses the `@authenticated` profile |
 | Any client, no checkout | `uvx avanza-mcp` from PyPI | **no** |
 
-**`AVANZA_MCP_AUTH=1` is the switch.** Unset, `main()` serves public market data only. Set to `1`,
-it starts the authenticated server instead, which adds `connect_avanza`, `get_auth_status`,
-`get_accounts`, `get_holdings`, `get_deals`, `get_transactions`, `get_active_orders`,
-`get_stop_loss_orders`, `get_price_alerts`, `get_watchlists`, `get_portfolio_insights`,
-`get_insider_transactions`, `get_instrument_news`, `screen_options`,
-`screen_leveraged_instruments` and `enrich_option_snapshot` on top of the public surface --
-51 tools against 34. Authentication happens when `connect_avanza` is called, through a local
-browser and BankID; nothing is requested at startup and banking credentials never pass through the
-chat. Read-only throughout: no order placement, editing, transfers or withdrawals.
+**`AVANZA_MCP_AUTH=1` is the switch.** Unset, `main()` serves the 37-tool public
+market-data surface. Set to `1`, it starts the authenticated server instead and adds 14 reviewed
+session/account tools: `connect_avanza`, `disconnect_avanza`, `get_auth_status`, `get_accounts`,
+`get_holdings`, `get_transactions`, `get_watchlists`, `get_price_alerts`,
+`get_portfolio_insights`, `get_instrument_news`, `get_insider_transactions`,
+`get_active_orders`, `get_deals`, and `get_stop_loss_orders`. The combined surface is 51 tools.
+The screening tools `screen_options`, `screen_leveraged_instruments`, and
+`enrich_option_snapshot` are already part of the public 37-tool surface. Authentication happens
+when `connect_avanza` is called, through a local browser and BankID; nothing is requested at
+startup and banking credentials never pass through the chat. The MCP surface exposes no order
+placement, editing, transfers, or withdrawals.
 
 `uvx avanza-mcp` installs the published PyPI package, which is **not this fork** and has no account
 access. Use it only when you have no checkout, and do not expect holdings from it.
