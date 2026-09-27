@@ -9,6 +9,8 @@ from time import perf_counter
 from typing import Any, Literal
 from uuid import uuid4
 
+from pydantic import Field
+
 from ..client.base import AvanzaClient
 from ..client.exceptions import AvanzaError
 from ..models.certificate import CertificateFilter, CertificateFilterRequest
@@ -22,6 +24,18 @@ _PAGE_SIZE = 500
 _MAX_CONCURRENT_PAGES = 8
 _SNAPSHOT_TTL = timedelta(minutes=10)
 _RANKING = "two_way_quote, spread_percent_asc, turnover_desc"
+
+
+class _LeveragedCertificateFilterRequest(CertificateFilterRequest):
+    """Internal larger page request; public filter tools remain capped at 100."""
+
+    limit: int = Field(default=20, ge=1, le=_PAGE_SIZE)
+
+
+class _LeveragedWarrantFilterRequest(WarrantFilterRequest):
+    """Internal larger page request; public filter tools remain capped at 100."""
+
+    limit: int = Field(default=20, ge=1, le=_PAGE_SIZE)
 
 
 def _number(value: Any) -> float | None:
@@ -388,7 +402,7 @@ class LeveragedScreenService:
     ) -> dict[str, Any]:
         async def fetch(offset: int):
             return await self._market.filter_certificates(
-                CertificateFilterRequest(
+                _LeveragedCertificateFilterRequest(
                     filter=CertificateFilter(
                         directions=[direction],
                         issuers=list(filters.issuers),
@@ -465,7 +479,7 @@ class LeveragedScreenService:
     ) -> dict[str, Any]:
         async def fetch(offset: int):
             return await self._market.filter_warrants(
-                WarrantFilterRequest(
+                _LeveragedWarrantFilterRequest(
                     filter=WarrantFilter(
                         directions=[direction],
                         subTypes=list(filters.sub_types),
