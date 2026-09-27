@@ -22,7 +22,7 @@ test('default public allowlist contains the current 37 read-only Avanza tools', 
   assert.equal(DEFAULT_ALLOWED_TOOLS.split(',').length, 37);
 });
 
-test('authenticated profile adds exactly the 14 approved account/session tools', () => {
+test('authenticated profile adds exactly the 15 approved account/session tools', () => {
   const allowed = parseAllowedTools('@authenticated');
   assert.equal(AUTHENTICATED_EXTRA_TOOLS.split(',').length, 14);
   assert.equal(AUTHENTICATED_ALLOWED_TOOLS.split(',').length, 51);
