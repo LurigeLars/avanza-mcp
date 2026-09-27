@@ -18,7 +18,7 @@ from .market_data_service import MarketDataService
 
 ProductType = Literal["certificate", "warrant"]
 Direction = Literal["long", "short"]
-_PAGE_SIZE = 100
+_PAGE_SIZE = 500
 _MAX_CONCURRENT_PAGES = 8
 _SNAPSHOT_TTL = timedelta(minutes=10)
 _RANKING = "two_way_quote, spread_percent_asc, turnover_desc"
@@ -404,14 +404,26 @@ class LeveragedScreenService:
         items: list[Any] = list(first.certificates)
         total = first.totalNumberOfOrderbooks
 
-        if total is not None and len(first.certificates) == _PAGE_SIZE:
+        if total is not None and len(first.certificates) < total:
+            # Avanza may accept the requested page size or cap it server-side.
+            # Advance by the number of rows actually returned to avoid gaps.
+            page_step = len(first.certificates)
+            if page_step <= 0:
+                return {
+                    "products": [],
+                    "upstream_total": total,
+                    "scanned_count": 0,
+                    "quote_complete_count": 0,
+                    "available_issuers": _filter_option_display_values(first, "issuers"),
+                    "available_sub_types": [],
+                }
             semaphore = asyncio.Semaphore(_MAX_CONCURRENT_PAGES)
 
             async def fetch_bounded(offset: int):
                 async with semaphore:
                     return await fetch(offset)
 
-            offsets = list(range(_PAGE_SIZE, total, _PAGE_SIZE))
+            offsets = list(range(page_step, total, page_step))
             if offsets:
                 responses = await asyncio.gather(
                     *(fetch_bounded(offset) for offset in offsets)
@@ -469,14 +481,26 @@ class LeveragedScreenService:
         items: list[Any] = list(first.warrants)
         total = first.totalNumberOfOrderbooks
 
-        if total is not None and len(first.warrants) == _PAGE_SIZE:
+        if total is not None and len(first.warrants) < total:
+            # Avanza may accept the requested page size or cap it server-side.
+            # Advance by the number of rows actually returned to avoid gaps.
+            page_step = len(first.warrants)
+            if page_step <= 0:
+                return {
+                    "products": [],
+                    "upstream_total": total,
+                    "scanned_count": 0,
+                    "quote_complete_count": 0,
+                    "available_issuers": _filter_option_display_values(first, "issuers"),
+                    "available_sub_types": _filter_option_display_values(first, "subTypes"),
+                }
             semaphore = asyncio.Semaphore(_MAX_CONCURRENT_PAGES)
 
             async def fetch_bounded(offset: int):
                 async with semaphore:
                     return await fetch(offset)
 
-            offsets = list(range(_PAGE_SIZE, total, _PAGE_SIZE))
+            offsets = list(range(page_step, total, page_step))
             if offsets:
                 responses = await asyncio.gather(
                     *(fetch_bounded(offset) for offset in offsets)
