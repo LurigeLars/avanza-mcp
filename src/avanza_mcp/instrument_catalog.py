@@ -376,6 +376,44 @@ class InstrumentCatalog:
         finally:
             connection.close()
 
+    def count_by_underlying(
+        self,
+        underlying_order_book_id: str,
+        *,
+        direction: str | None = None,
+        product_types: Iterable[ProductType] | None = None,
+    ) -> int:
+        """Count locally indexed products for one underlying instrument."""
+
+        if not underlying_order_book_id.isascii() or not underlying_order_book_id.isdecimal():
+            raise ValueError("underlying_order_book_id must contain only ASCII numeric digits")
+
+        selected_types = self._normalize_product_types(product_types)
+        clauses = ["underlying_order_book_id = ?"]
+        params: list[Any] = [underlying_order_book_id]
+        if direction is not None:
+            clauses.append("direction = ?")
+            params.append(direction)
+        if selected_types:
+            placeholders = ",".join("?" for _ in selected_types)
+            clauses.append(f"product_type IN ({placeholders})")
+            params.extend(selected_types)
+
+        connection = self._connect()
+        try:
+            self._create_schema(connection)
+            row = connection.execute(
+                f"""
+                SELECT COUNT(*) AS count
+                FROM instruments
+                WHERE {' AND '.join(clauses)}
+                """,
+                params,
+            ).fetchone()
+            return int(row["count"]) if row is not None else 0
+        finally:
+            connection.close()
+
     @staticmethod
     def _fts_query(value: str) -> str:
         tokens = re.findall(r"[\w.-]+", value, flags=re.UNICODE)
