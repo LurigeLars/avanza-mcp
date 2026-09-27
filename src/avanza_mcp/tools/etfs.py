@@ -60,7 +60,7 @@ async def filter_etfs(
 
 @mcp.tool(annotations=READ_ONLY)
 async def get_etf_info(ctx: Context, order_book_id: OrderBookId) -> ETFInfo:
-    """Get ETF identity, listing and latest available quote; not guaranteed real-time."""
+    """Get ETF identity, listing and quote with explicit freshness/source-age metadata."""
     with api_errors():
         return await MarketDataService(ctx.lifespan_context["client"]).get_etf_info(
             order_book_id

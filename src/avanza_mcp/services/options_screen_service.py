@@ -5,7 +5,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from threading import Lock
-from time import perf_counter
+from time import perf_counter, time
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -148,6 +148,24 @@ def _compact_option_info(info: Any) -> dict[str, Any]:
     spread = _quote_spread_percent(compact_quote)
     if spread is not None:
         compact_quote["spread_percent_from_quote_prices"] = spread
+    quote_freshness = _quote_freshness(compact_quote)
+    if quote_freshness is not None:
+        compact_quote["freshness"] = quote_freshness
+
+    compact_underlying_quote = pick(
+        underlying_quote,
+        (
+            ("buy", "bid"),
+            ("sell", "ask"),
+            ("last", "last"),
+            ("spread", "upstream_spread_percent"),
+            ("updated", "updated"),
+            ("isRealTime", "is_real_time"),
+        ),
+    )
+    underlying_freshness = _quote_freshness(compact_underlying_quote)
+    if underlying_freshness is not None:
+        compact_underlying_quote["freshness"] = underlying_freshness
 
     return {
         key: value
@@ -167,19 +185,43 @@ def _compact_option_info(info: Any) -> dict[str, Any]:
                     ("subType", "sub_type"),
                 ),
             ),
-            "underlying_quote": pick(
-                underlying_quote,
-                (
-                    ("buy", "bid"),
-                    ("sell", "ask"),
-                    ("last", "last"),
-                    ("spread", "upstream_spread_percent"),
-                    ("updated", "updated"),
-                    ("isRealTime", "is_real_time"),
-                ),
-            ),
+            "underlying_quote": compact_underlying_quote,
         }.items()
         if value not in (None, {})
+    }
+
+
+def _quote_freshness(quote: dict[str, Any]) -> dict[str, Any] | None:
+    observed_at = int(time() * 1000)
+
+    def timestamp(value: Any) -> int | None:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)) and value >= 0:
+            return int(value)
+        return None
+
+    def age(source_at: int | None) -> int | None:
+        return max(0, observed_at - source_at) if source_at is not None else None
+
+    source_updated_at = timestamp(quote.get("updated"))
+    last_trade_at = timestamp(quote.get("time_of_last"))
+    if source_updated_at is None and last_trade_at is None:
+        return None
+    return {
+        key: value
+        for key, value in {
+            "observed_at": observed_at,
+            "source_updated_at": source_updated_at,
+            "bid_ask_updated_at": source_updated_at,
+            "last_trade_at": last_trade_at,
+            "source_update_age_ms": age(source_updated_at),
+            "bid_ask_age_ms": age(source_updated_at),
+            "last_trade_age_ms": age(last_trade_at),
+            "upstream_is_real_time": quote.get("is_real_time"),
+            "real_time_flag_is_freshness_guarantee": False,
+        }.items()
+        if value is not None
     }
 
 
@@ -810,7 +852,9 @@ class OptionsScreenService:
             "ordering": ordering,
             "data_note": (
                 "Option quotes are non-atomic and may have different upstream updated timestamps. "
-                "Honor quote.is_real_time; retrieval timestamps are not source timestamps. "
+                "quote.is_real_time is an upstream feed flag, not a freshness guarantee; inspect "
+                "quote.freshness source ages before using bid/ask as execution evidence. "
+                "Retrieval timestamps are not source timestamps. "
                 "market_quality enriches and ranks the complete structural snapshot once, then "
                 "reuses that cached ranking for pagination. structural enriches only the requested "
                 "page and preserves the structural snapshot order."

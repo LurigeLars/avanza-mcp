@@ -1,12 +1,57 @@
 """Stock-related Pydantic models matching Avanza API."""
 
+import time
+from typing import Any
+
 from pydantic import Field
 
 from .common import AvanzaModel
 
 
+class QuoteFreshness(AvanzaModel):
+    """Normalized age evidence for one upstream quote snapshot."""
+
+    observedAt: int
+    sourceUpdatedAt: int | None = None
+    bidAskUpdatedAt: int | None = None
+    lastTradeAt: int | None = None
+    sourceUpdateAgeMs: int | None = None
+    bidAskAgeMs: int | None = None
+    lastTradeAgeMs: int | None = None
+    upstreamIsRealTime: bool | None = None
+    realTimeFlagIsFreshnessGuarantee: bool = False
+
+
+def _timestamp_ms(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)) and value >= 0:
+        return int(value)
+    return None
+
+
+def _age_ms(observed_at: int, source_at: int | None) -> int | None:
+    if source_at is None:
+        return None
+    return max(0, observed_at - source_at)
+
+
+def _bid_ask_updated_at(quote: "Quote") -> int | None:
+    market_maker = quote.model_extra.get("marketMakerQuote")
+    if isinstance(market_maker, dict):
+        candidates = [
+            _timestamp_ms(market_maker.get("latestBuyPriceUpdated")),
+            _timestamp_ms(market_maker.get("updated")),
+        ]
+        reported = [value for value in candidates if value is not None]
+        if reported:
+            # A two-way quote is only as fresh as its older reported side.
+            return min(reported)
+    return _timestamp_ms(quote.updated)
+
+
 class Quote(AvanzaModel):
-    """Latest available stock quote data; inspect isRealTime and source timestamps."""
+    """Latest available quote data with explicit source-age evidence."""
 
     buy: float | None = None
     sell: float | None = None
@@ -22,6 +67,33 @@ class Quote(AvanzaModel):
     updated: int | None = None
     volumeWeightedAveragePrice: float | None = None
     isRealTime: bool | None = None
+    freshness: QuoteFreshness | None = None
+
+    def model_post_init(self, __context: Any) -> None:
+        source_updated_at = _timestamp_ms(self.updated)
+        bid_ask_updated_at = _bid_ask_updated_at(self)
+        last_trade_at = _timestamp_ms(self.timeOfLast)
+        if (
+            source_updated_at is None
+            and bid_ask_updated_at is None
+            and last_trade_at is None
+        ):
+            return
+
+        observed_at = int(time.time() * 1000)
+        freshness = QuoteFreshness(
+            observedAt=observed_at,
+            sourceUpdatedAt=source_updated_at,
+            bidAskUpdatedAt=bid_ask_updated_at,
+            lastTradeAt=last_trade_at,
+            sourceUpdateAgeMs=_age_ms(observed_at, source_updated_at),
+            bidAskAgeMs=_age_ms(observed_at, bid_ask_updated_at),
+            lastTradeAgeMs=_age_ms(observed_at, last_trade_at),
+            upstreamIsRealTime=self.isRealTime,
+            realTimeFlagIsFreshnessGuarantee=False,
+        )
+        object.__setattr__(self, "freshness", freshness)
+        self.__pydantic_fields_set__.add("freshness")
 
 
 class Listing(AvanzaModel):

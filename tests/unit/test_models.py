@@ -64,6 +64,51 @@ class TestStockModels:
         assert quote.buy == 100.5
         assert quote.sell is None
         assert quote.last is None
+        assert quote.freshness is None
+
+    def test_quote_freshness_exposes_source_age_and_feed_semantics(self, monkeypatch):
+        monkeypatch.setattr("avanza_mcp.models.stock.time.time", lambda: 2_000.0)
+        quote = Quote.model_validate(
+            {
+                "buy": 10,
+                "sell": 11,
+                "timeOfLast": 1_500_000,
+                "updated": 1_900_000,
+                "isRealTime": True,
+            }
+        )
+
+        assert quote.freshness.model_dump(mode="json", exclude_none=True) == {
+            "observedAt": 2_000_000,
+            "sourceUpdatedAt": 1_900_000,
+            "bidAskUpdatedAt": 1_900_000,
+            "lastTradeAt": 1_500_000,
+            "sourceUpdateAgeMs": 100_000,
+            "bidAskAgeMs": 100_000,
+            "lastTradeAgeMs": 500_000,
+            "upstreamIsRealTime": True,
+            "realTimeFlagIsFreshnessGuarantee": False,
+        }
+
+    def test_quote_freshness_prefers_older_market_maker_side_timestamp(self, monkeypatch):
+        monkeypatch.setattr("avanza_mcp.models.stock.time.time", lambda: 2_000.0)
+        quote = Quote.model_validate(
+            {
+                "buy": 10,
+                "sell": 11,
+                "updated": 1_990_000,
+                "isRealTime": True,
+                "marketMakerQuote": {
+                    "latestBuyPriceUpdated": 1_700_000,
+                    "updated": 1_800_000,
+                },
+            }
+        )
+
+        assert quote.freshness.sourceUpdatedAt == 1_990_000
+        assert quote.freshness.bidAskUpdatedAt == 1_700_000
+        assert quote.freshness.sourceUpdateAgeMs == 10_000
+        assert quote.freshness.bidAskAgeMs == 300_000
 
     def test_stock_info_complex(self):
         """Test StockInfo with nested objects."""

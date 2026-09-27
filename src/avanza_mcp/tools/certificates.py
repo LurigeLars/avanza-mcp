@@ -66,7 +66,7 @@ async def filter_certificates(
 async def get_certificate_info(
     ctx: Context, order_book_id: OrderBookId
 ) -> CertificateInfo:
-    """Get certificate identity and latest available market data, not guaranteed real-time."""
+    """Get certificate identity and quote with explicit freshness/source-age metadata."""
     with api_errors():
         return await MarketDataService(
             ctx.lifespan_context["client"]
