@@ -477,6 +477,8 @@ async def test_accounts_use_trading_list_only_after_both_overview_surfaces_fail(
             return httpx.Response(200, json={"accounts": None})
         if request.url.path.endswith("/account-overview/accounts/list"):
             return httpx.Response(503, json={"error": "temporary"})
+        if request.url.path.endswith("/trading-critical/rest/lightweightaccounts"):
+            return httpx.Response(503, json={"error": "temporary"})
         if request.url.path.endswith("/trading-critical/rest/accounts"):
             return httpx.Response(
                 200,
@@ -503,6 +505,7 @@ async def test_accounts_use_trading_list_only_after_both_overview_surfaces_fail(
     assert requests == [
         "/_api/account-overview/overview/categorizedAccounts",
         "/_api/account-overview/accounts/list",
+        "/_api/trading-critical/rest/lightweightaccounts",
         "/_api/trading-critical/rest/accounts",
     ]
     assert result.accounts[0].currency_balances[0].amount == "123.45"
@@ -526,3 +529,47 @@ async def test_accounts_auth_expiry_does_not_fall_back():
             await account_client.accounts()
 
     assert requests == ["/_api/account-overview/overview/categorizedAccounts"]
+
+
+
+@respx.mock
+async def test_accounts_try_lightweight_list_before_full_trading_accounts():
+    requests = []
+
+    async def handler(request):
+        requests.append(request.url.path)
+        if request.url.path.endswith("categorizedAccounts"):
+            return httpx.Response(200, json={"accounts": None})
+        if request.url.path.endswith("/account-overview/accounts/list"):
+            return httpx.Response(503, json={"error": "temporary"})
+        if request.url.path.endswith("/trading-critical/rest/lightweightaccounts"):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "name": "ISK",
+                        "accountId": "a1",
+                        "accountTypeName": "ISK",
+                        "accountType": "INVESTMENT_SAVINGS_ACCOUNT",
+                        "isTradable": True,
+                        "urlParameterId": "isk-1",
+                        "secretField": "must-not-leak",
+                    }
+                ],
+            )
+        raise AssertionError(request.url.path)
+
+    mock_avanza(handler)
+    async with client() as account_client:
+        result = await account_client.accounts()
+
+    assert requests == [
+        "/_api/account-overview/overview/categorizedAccounts",
+        "/_api/account-overview/accounts/list",
+        "/_api/trading-critical/rest/lightweightaccounts",
+    ]
+    assert result.accounts[0].account_id == "a1"
+    assert result.accounts[0].name == "ISK"
+    assert result.accounts[0].account_type == "INVESTMENT_SAVINGS_ACCOUNT"
+    assert result.accounts[0].currency_balances == []
+    assert "must-not-leak" not in result.model_dump_json()

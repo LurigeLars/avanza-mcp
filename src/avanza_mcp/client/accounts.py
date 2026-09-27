@@ -43,6 +43,7 @@ from .exceptions import AvanzaAuthError
 
 _ACCOUNTS = "/_api/account-overview/overview/categorizedAccounts"
 _ACCOUNT_LIST = "/_api/account-overview/accounts/list"
+_LIGHTWEIGHT_ACCOUNTS = "/_api/trading-critical/rest/lightweightaccounts"
 _TRADING_ACCOUNTS = "/_api/trading-critical/rest/accounts"
 _POSITIONS = "/_api/position-data/positions"
 _TRANSACTIONS = "/_api/transactions/list"
@@ -62,6 +63,7 @@ _STOP_LOSSES = "/_api/trading/stoploss"
 _ALLOWED_ACCOUNT_EXACT = {
     ("GET", _ACCOUNTS),
     ("GET", _ACCOUNT_LIST),
+    ("GET", _LIGHTWEIGHT_ACCOUNTS),
     ("GET", _TRADING_ACCOUNTS),
     ("GET", _POSITIONS),
     ("GET", _TRANSACTIONS),
@@ -120,6 +122,14 @@ class AccountClient:
         try:
             values = await self._get_list(_ACCOUNT_LIST)
             return Accounts(accounts=[self._summary_account(item) for item in values])
+        except AccountAuthExpired:
+            raise
+        except AccountReadError:
+            pass
+
+        try:
+            values = await self._get_list(_LIGHTWEIGHT_ACCOUNTS)
+            return Accounts(accounts=[self._lightweight_account(item) for item in values])
         except AccountAuthExpired:
             raise
         except AccountReadError:
@@ -556,6 +566,24 @@ class AccountClient:
                 value.get("accountType") or value.get("type") or "UNKNOWN"
             ),
             hidden=bool(value.get("isHidden", False)),
+            total_value=None,
+            balance=None,
+            currency_balances=[],
+        )
+
+    @classmethod
+    def _lightweight_account(cls, value: Any) -> Account:
+        if not isinstance(value, dict):
+            raise AccountReadError
+        return Account(
+            account_id=cls._identifier(value.get("accountId")),
+            name=str(value.get("name") or "Unknown account"),
+            account_type=str(
+                value.get("accountType")
+                or value.get("accountTypeName")
+                or "UNKNOWN"
+            ),
+            hidden=False,
             total_value=None,
             balance=None,
             currency_balances=[],
