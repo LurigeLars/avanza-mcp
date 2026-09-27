@@ -28,6 +28,18 @@ class TestWarrantModels:
         assert item.subType == "TURBO"
         assert item.stopLoss == 100.0
 
+    def test_warrant_list_item_allows_missing_direction(self):
+        """Avanza may omit direction for some warrant list rows."""
+        item = WarrantListItem(
+            orderbookId="2620423",
+            countryCode="SE",
+            name="AAK6L 200SG",
+            issuer="Societe Generale",
+            subType="PLAIN_VANILLA",
+            hasPosition=False,
+        )
+        assert item.direction is None
+
     def test_warrant_filter_creation(self):
         """Test warrant filter."""
         filter_obj = WarrantFilter(
