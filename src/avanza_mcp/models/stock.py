@@ -47,7 +47,7 @@ def _bid_ask_updated_at(quote: "Quote") -> int | None:
         if reported:
             # A two-way quote is only as fresh as its older reported side.
             return min(reported)
-    return _timestamp_ms(quote.updated)
+    return None
 
 
 class Quote(AvanzaModel):
