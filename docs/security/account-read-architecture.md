@@ -73,6 +73,12 @@ accepted. The stock quote/order-depth/trades shapes retain their stricter field
 projection; all worker responses are additionally rejected if credential-shaped keys
 appear in the IPC payload.
 
+Authenticated reuse is opportunistic for these public tools: if a specific approved
+market endpoint cannot be served through the isolated auth worker for a non-auth reason,
+the client retries that same read-only request anonymously so the existing public tool
+still works. Authentication expiry/401 never falls back silently; that remains a hard
+auth failure so delayed public data cannot mask an expired login session.
+
 ## Disconnect semantics
 
 Explicit disconnect uses the local confirmation page. Persistent mode loads and validates the saved session inside an isolated worker, removes the OS credential, and sends Avanza remote logout. A 401 from the logout endpoint is treated as an already-invalid remote session; network/other failures can still be reported as `revocation_unconfirmed` after local credential removal.
