@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from avanza_mcp.client.exceptions import AvanzaRateLimitError
 from avanza_mcp.instrument_catalog import (
     CatalogInstrument,
     InstrumentCatalog,
@@ -193,6 +194,35 @@ async def test_refresher_fetches_complete_families_but_persists_only_structural_
         "leverage",
     ):
         assert stale_field not in final[0]
+
+
+class RateLimitedMarket:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def filter_certificates(self, request):
+        self.calls += 1
+        if self.calls == 1:
+            raise AvanzaRateLimitError(retry_after=7)
+        return SimpleNamespace(certificates=[], totalNumberOfOrderbooks=0)
+
+
+@pytest.mark.asyncio
+async def test_page_retry_honors_retry_after_without_restarting_full_refresh(
+    monkeypatch,
+) -> None:
+    market = RateLimitedMarket()
+    delays: list[int] = []
+
+    async def fake_sleep(delay):
+        delays.append(delay)
+
+    monkeypatch.setattr("avanza_mcp.instrument_catalog.asyncio.sleep", fake_sleep)
+    response = await InstrumentCatalogRefresher(market)._certificate_page(0)
+
+    assert response.totalNumberOfOrderbooks == 0
+    assert market.calls == 2
+    assert delays == [7]
 
 
 class IncompleteMarket:
