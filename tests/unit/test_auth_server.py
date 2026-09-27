@@ -198,3 +198,27 @@ async def test_account_tool_surfaces_only_safe_exception_class():
     async with Client(create_auth_server(DiagnosticBroker())) as client:  # type: ignore[arg-type]
         with pytest.raises(ToolError, match=r"Safe diagnostic: exception_AttributeError"):
             await client.call_tool("get_watchlists", {})
+
+
+async def test_account_tool_surfaces_safe_session_validation_code():
+    class DiagnosticBroker(FakeBroker):
+        async def account(self, operation, arguments):
+            raise AuthWorkerOperationError("network_http_503")
+
+    async with Client(create_auth_server(DiagnosticBroker())) as client:  # type: ignore[arg-type]
+        with pytest.raises(
+            ToolError, match=r"Safe diagnostic: session_validation_network_http_503"
+        ):
+            await client.call_tool("get_watchlists", {})
+
+
+async def test_account_tool_surfaces_safe_server_validation_type():
+    class ValidationBroker(FakeBroker):
+        async def account(self, operation, arguments):
+            return {"watchlists": [{"name": "Missing ID", "order_book_ids": []}]}
+
+    async with Client(create_auth_server(ValidationBroker())) as client:  # type: ignore[arg-type]
+        with pytest.raises(
+            ToolError, match=r"Safe diagnostic: server_validation_missing"
+        ):
+            await client.call_tool("get_watchlists", {})

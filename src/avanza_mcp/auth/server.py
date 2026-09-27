@@ -48,6 +48,46 @@ _READ_TOOL = {
 }
 
 
+_SAFE_SESSION_DIAGNOSTIC_CODES = frozenset(
+    {
+        "cancelled",
+        "denied",
+        "timeout",
+        "network",
+        "malformed_response",
+        "customer_selection",
+        "session_unverified",
+        "protocol",
+        "credential_store",
+    }
+)
+
+
+def _safe_session_diagnostic(code: str) -> str | None:
+    if code in _SAFE_SESSION_DIAGNOSTIC_CODES:
+        return code
+    for prefix in _SAFE_SESSION_DIAGNOSTIC_CODES:
+        marker = f"{prefix}_http_"
+        if code.startswith(marker):
+            status = code.removeprefix(marker)
+            if len(status) == 3 and status.isdigit():
+                return code
+    return None
+
+
+def _safe_model_validation_diagnostic(error: Exception) -> str:
+    if isinstance(error, ValidationError):
+        errors = error.errors(include_url=False, include_context=False, include_input=False)
+        if errors:
+            error_type = str(errors[0].get("type") or "validation_error")
+            if error_type.replace("_", "").isalnum() and len(error_type) <= 64:
+                return error_type
+        return "validation_error"
+    if isinstance(error, TypeError):
+        return "type_error"
+    return "value_error"
+
+
 def create_auth_server(broker: AuthProcessBroker | None = None) -> FastMCP:
     broker = broker or AuthProcessBroker()
 
@@ -109,12 +149,20 @@ def create_auth_server(broker: AuthProcessBroker | None = None) -> FastMCP:
                     raise ToolError(
                         f"{error_message} Safe diagnostic: exception_{exception_name}."
                     ) from None
+            session_code = _safe_session_diagnostic(code)
+            if session_code is not None:
+                raise ToolError(
+                    f"{error_message} Safe diagnostic: session_validation_{session_code}."
+                ) from None
             raise ToolError(error_message) from None
 
         try:
             return model.model_validate(raw)
-        except (ValidationError, TypeError, ValueError):
-            raise ToolError(error_message) from None
+        except (ValidationError, TypeError, ValueError) as exc:
+            diagnostic = _safe_model_validation_diagnostic(exc)
+            raise ToolError(
+                f"{error_message} Safe diagnostic: server_validation_{diagnostic}."
+            ) from None
 
     @server.tool(
         annotations={
