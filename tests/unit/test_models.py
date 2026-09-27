@@ -64,8 +64,7 @@ class TestStockModels:
         assert quote.buy == 100.5
         assert quote.sell is None
         assert quote.last is None
-        assert quote.freshness is not None
-        assert quote.freshness.realTimeFlagIsFreshnessGuarantee is False
+        assert quote.freshness is None
 
     def test_quote_freshness_exposes_source_age_and_feed_semantics(self, monkeypatch):
         monkeypatch.setattr("avanza_mcp.models.stock.time.time", lambda: 2_000.0)
