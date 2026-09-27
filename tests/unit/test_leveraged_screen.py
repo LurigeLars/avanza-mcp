@@ -249,6 +249,16 @@ async def test_remaining_warrant_pages_use_bounded_concurrency_after_first_page(
     assert result["pagination"]["total"] == 901
 
 
+class CatalogCount:
+    def __init__(self, count):
+        self.count = count
+        self.calls = []
+
+    def count_by_underlying(self, underlying_order_book_id, *, direction=None, product_types=None):
+        self.calls.append((underlying_order_book_id, direction, tuple(product_types or ())))
+        return self.count
+
+
 class LargePageWarrantMarket:
     def __init__(self):
         self.warrant_calls = []
@@ -277,16 +287,15 @@ class LargePageWarrantMarket:
 
 @pytest.mark.asyncio
 async def test_large_upstream_page_reduces_request_count_when_supported():
-    service = LeveragedScreenService(object())
+    catalog = CatalogCount(901)
+    service = LeveragedScreenService(object(), catalog=catalog)
     fake = LargePageWarrantMarket()
     service._market = fake
 
     result = await service.screen("4478", "long", ["warrant"], 1)
 
-    assert [(call.offset, call.limit) for call in fake.warrant_calls] == [
-        (0, 500),
-        (500, 500),
-    ]
+    assert [(call.offset, call.limit) for call in fake.warrant_calls] == [(0, 901)]
+    assert catalog.calls == [("4478", "long", ("warrant",))]
     assert result["snapshot"]["scanned_count"] == 901
     assert result["pagination"]["total"] == 901
 
@@ -411,6 +420,16 @@ async def test_public_filter_tools_remain_capped_at_100_rows():
 
     assert tools["filter_certificates"].input_schema["properties"]["limit"]["maximum"] == 100
     assert tools["filter_warrants"].input_schema["properties"]["limit"]["maximum"] == 100
+
+
+def test_internal_leveraged_request_has_no_artificial_maximum():
+    from avanza_mcp.services.leveraged_screen_service import (
+        _LeveragedCertificateFilterRequest,
+        _LeveragedWarrantFilterRequest,
+    )
+
+    assert "maximum" not in _LeveragedCertificateFilterRequest.model_json_schema()["properties"]["limit"]
+    assert "maximum" not in _LeveragedWarrantFilterRequest.model_json_schema()["properties"]["limit"]
 
 
 class FilterOptionsWarrantMarket:
