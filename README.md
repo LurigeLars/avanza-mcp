@@ -48,11 +48,12 @@ Requires [uv](https://docs.astral.sh/uv/) and Python 3.12+.
 | Any client, no checkout | `uvx avanza-mcp` from PyPI | **no** |
 
 **`AVANZA_MCP_AUTH=1` is the switch.** Unset, `main()` serves the 37-tool public
-market-data surface. Set to `1`, it starts the authenticated server instead and adds 14 reviewed
+market-data surface. Set to `1`, it starts the authenticated server instead and adds 15 reviewed
 session/account tools: `connect_avanza`, `disconnect_avanza`, `get_auth_status`, `get_accounts`,
 `get_holdings`, `get_transactions`, `get_watchlists`, `get_price_alerts`,
-`get_portfolio_insights`, `get_instrument_news`, `get_insider_transactions`,
-`get_active_orders`, `get_deals`, and `get_stop_loss_orders`. The combined surface is 51 tools.
+`get_portfolio_insights`, `get_portfolio_snapshot`, `get_instrument_news`,
+`get_insider_transactions`, `get_active_orders`, `get_deals`, and `get_stop_loss_orders`.
+The combined surface is 52 tools.
 The screening tools `screen_options`, `screen_leveraged_instruments`, and
 `enrich_option_snapshot` are already part of the public 37-tool surface. Authentication happens
 when `connect_avanza` is called, through a local browser and BankID; nothing is requested at
@@ -275,14 +276,16 @@ docker compose -f compose.public.yaml up -d
 ```
 
 The public gateway requires a valid Cloudflare Access JWT. Both model-facing gateway
-modes restrict calls to the explicit current 37-tool read-only allowlist, strip client
-credentials before forwarding, compact tool schemas to reduce model-context overhead,
-and remove duplicate structured tool-result payloads when an equivalent text result is
-already present. New MCP tools are not exposed through either model-facing gateway
-until the allowlist is reviewed.
+modes use explicit reviewed allowlists, strip client credentials before forwarding,
+compact tool schemas to reduce model-context overhead, and remove duplicate structured
+tool-result payloads when an equivalent text result is already present. The default
+profile exposes the 37 public read-only market tools; the `@authenticated` profile adds
+the reviewed account/session tools. New MCP tools are not exposed through either
+model-facing gateway until the allowlist is reviewed.
 
-This project does not provide a hosted endpoint. The public connector remains
-credential-free and cannot access Avanza accounts or place orders.
+This project does not provide a hosted endpoint. The default gateway profile is
+credential-free; the optional `@authenticated` profile can expose reviewed read-only
+account tools while Avanza session credentials remain on the Windows host.
 
 Optional authenticated read-only access uses a loopback BankID flow and an isolated
 auth-worker architecture. The long-lived FastMCP/control-plane process does not receive
@@ -387,8 +390,9 @@ The public market-data surface exposes 37 read-only tools. Search first to obtai
 | Additional | `get_short_selling` | Short-selling history |
 | Additional | `get_marketmaker_chart` | Traded-product OHLC and market-maker data |
 
-Authenticated mode keeps the same 37 public market-data tools and adds reviewed read-only
-account/activity tools. With the gateway's `@authenticated` profile, that combined
+Authenticated mode keeps the same 37 public market-data tools and adds 15 reviewed read-only
+account/session tools, including `get_portfolio_snapshot` for one bounded current-state
+portfolio read. With the gateway's `@authenticated` profile, the 52-tool combined
 surface is available behind Cloudflare Access.
 
 ## Prompts
