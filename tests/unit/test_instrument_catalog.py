@@ -75,6 +75,20 @@ def test_catalog_replaces_atomically_and_supports_local_discovery(tmp_path: Path
     assert stats["schema_version"] == 1
 
 
+def test_search_falls_back_to_tokenized_partial_matching_without_fts(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    catalog = InstrumentCatalog(tmp_path / "catalog.sqlite3")
+    catalog.replace_all(
+        [_row("202", "MINI L NVIDIA", issuer="Morgan Stanley")],
+        refreshed_at=datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(InstrumentCatalog, "_create_schema", staticmethod(lambda _connection: False))
+
+    assert [item["order_book_id"] for item in catalog.search("Morg NVID")] == ["202"]
+
+
 def test_catalog_rejects_duplicate_identity_before_mutating_existing_data(tmp_path: Path) -> None:
     catalog = InstrumentCatalog(tmp_path / "catalog.sqlite3")
     catalog.replace_all(
