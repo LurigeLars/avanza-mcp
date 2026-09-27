@@ -294,9 +294,10 @@ an upstream Avanza property and is not fabricated by the MCP.
 Three session modes are available:
 
 - `persistent` (default): the verified Avanza session is stored in the native OS
-  credential store. Each authenticated account operation starts a short-lived worker,
-  which loads and validates the session, performs the approved read, closes its HTTP
-  client, and exits.
+  credential store. Each authenticated operation starts a short-lived worker, which
+  loads the session once and runs session validation concurrently with the approved
+  read. The result is released only after validation succeeds; refreshed material is
+  persisted only when it changed. The worker then closes its HTTP clients and exits.
 - `memory_only`: no reusable Avanza session is written to the OS credential store.
   A dedicated isolated worker keeps the session only in its process memory and performs
   remote logout plus exits after 15 minutes without an authenticated read-only operation.

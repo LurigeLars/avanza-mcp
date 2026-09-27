@@ -35,7 +35,7 @@ Worker commands are operation names plus bounded tool arguments. No generic arbi
 
 ### persistent (default)
 
-The verified session is stored in the native OS credential store. On Windows this is Windows Credential Manager. Each authenticated account operation starts a fresh worker process: load stored session, validate it, perform one approved operation, close the authenticated HTTP client, then exit.
+The verified session is stored in the native OS credential store. On Windows this is Windows Credential Manager. Each authenticated operation still starts a fresh worker process. The worker loads the stored session once, then runs remote session validation and the requested approved read concurrently. The operation result is released only if validation also succeeds; invalid or inconclusive validation fails closed. Refreshed session material is written back only when it actually changed. The authenticated HTTP clients are then closed and the worker exits.
 
 The long-lived MCP process never receives the session. Approved public market-data
 requests use the same short-lived worker pattern, including certificate/warrant filters
@@ -99,7 +99,7 @@ Memory-only and one-shot modes contain no persistent credential. Explicit discon
 - Authenticated account operations are explicit operation names, not arbitrary requests.
 - Account outputs use strict Pydantic projections with `extra="forbid"`.
 - Authenticated upstream error bodies are not surfaced through MCP.
-- Session validation occurs inside the worker before persistent-session use.
+- Persistent-session validation occurs inside the same isolated worker and must succeed before any concurrent operation result is released.
 - Auth expiry fails closed for authenticated requests.
 - The OS credential store is used only in `persistent` mode.
 - Memory-only/one-shot session material disappears when the isolated worker exits.
