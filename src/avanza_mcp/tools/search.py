@@ -6,6 +6,7 @@ from fastmcp import Context
 from fastmcp.exceptions import ToolError
 
 from .. import mcp
+from ..instrument_catalog import fresh_default_instrument_catalog
 from ..models.common import OrderBookId, SearchLimit, SearchQuery
 from ..models.search import InstrumentHit, InstrumentSearch
 from ..services import SearchService
@@ -23,18 +24,21 @@ async def search_instruments(
 ) -> InstrumentSearch:
     """Search names, tickers or ISINs and return compact instrument identities.
 
-    Select by name, type, exchange, ISIN and currency, not rank alone. One page
-    of at most 50 candidates is examined, with stock/fund filtering upstream;
-    other types are filtered locally. All excludes FAQ, unknown types and invalid
+    Select by name, type, exchange, ISIN and currency, not rank alone. Certificate
+    and warrant name/ID discovery uses the fresh local daily catalog when available,
+    falling back to Avanza search when the catalog is absent, stale, or has no match.
+    Other searches examine one upstream page of at most 50 candidates. All excludes
+    FAQ, unknown types and invalid
     IDs. Type/ID filtering precedes limit. totalNumberOfHits counts valid matching
     candidates before limit, not a full filtered universe. candidatesExamined
     includes discarded hits; upstreamTotalNumberOfHits is before local filtering.
     No additional pages are fetched. Search is not an authoritative ID registry.
     """
     with api_errors():
-        return await SearchService(ctx.lifespan_context["client"]).search(
-            query, instrument_type, limit
-        )
+        return await SearchService(
+            ctx.lifespan_context["client"],
+            catalog=fresh_default_instrument_catalog(),
+        ).search(query, instrument_type, limit)
 
 
 @mcp.tool(annotations=READ_ONLY)
