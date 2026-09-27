@@ -179,7 +179,7 @@ async def enrich_option_snapshot(
 async def get_future_forward_info(
     ctx: Context, order_book_id: OrderBookId
 ) -> FutureForwardInfo:
-    """Get future, forward, or option identity and latest available market data.\n\n    The service uses the future/forward market-guide path first and falls back to the\n    option-specific path only when Avanza returns not-found. Values are not guaranteed real-time.\n    """
+    """Get future, forward, or option identity and quote with freshness metadata.\n\n    The service uses the future/forward market-guide path first and falls back to the\n    option-specific path only when Avanza returns not-found. isRealTime is not a freshness guarantee.\n    """
     with api_errors():
         return await MarketDataService(
             ctx.lifespan_context["client"]
