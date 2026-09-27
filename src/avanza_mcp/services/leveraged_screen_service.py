@@ -227,13 +227,17 @@ def _filter_option_display_values(response: Any, key: str) -> list[str]:
     return [values[key] for key in sorted(values)]
 
 
+def _display_value_key(value: str) -> str:
+    return " ".join(value.casefold().replace("_", " ").split())
+
+
 def _merge_display_values(*groups: list[str]) -> list[str]:
     values: dict[str, str] = {}
     for group in groups:
         for raw in group:
             value = str(raw).strip()
             if value:
-                values.setdefault(value.casefold(), value)
+                values.setdefault(_display_value_key(value), value)
     return [values[key] for key in sorted(values)]
 
 
@@ -250,12 +254,12 @@ def _available_filter_values(
     ]
     return {
         "issuers": _merge_display_values(
-            _display_values(candidates, "issuer"),
             upstream_issuers or [],
+            _display_values(candidates, "issuer"),
         ),
         "sub_types": _merge_display_values(
-            _display_values(candidates, "sub_type"),
             upstream_sub_types or [],
+            _display_values(candidates, "sub_type"),
         ),
         "leverage": {
             "reported_count": len(leverage_values),
