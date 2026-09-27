@@ -265,10 +265,7 @@ class LargePageWarrantMarket:
 
     async def filter_warrants(self, request):
         self.warrant_calls.append(request)
-        if request.offset == 0:
-            count = 500
-        else:
-            count = max(0, 901 - request.offset)
+        count = min(request.limit, max(0, 901 - request.offset))
         return SimpleNamespace(
             warrants=[
                 FakeItem(
