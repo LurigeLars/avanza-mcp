@@ -88,6 +88,21 @@ def _safe_model_validation_diagnostic(error: Exception) -> str:
     return "value_error"
 
 
+_SAFE_BROKER_DIAGNOSTICS = {
+    "Could not start isolated auth worker": "broker_start_failed",
+    "Auth worker is unavailable": "broker_unavailable",
+    "Auth worker did not respond": "broker_no_response",
+    "Auth worker closed unexpectedly": "broker_closed",
+    "Auth worker response was too large": "broker_response_too_large",
+    "Auth worker returned invalid data": "broker_invalid_data",
+    "Auth worker returned unsafe data": "broker_unsafe_data",
+    "Invalid auth status from worker": "broker_invalid_status",
+    "Auth broker is closed": "broker_closed",
+    "Disconnect confirmation is pending": "broker_disconnect_pending",
+    "worker_error": "worker_error_generic",
+}
+
+
 def create_auth_server(broker: AuthProcessBroker | None = None) -> FastMCP:
     broker = broker or AuthProcessBroker()
 
@@ -153,6 +168,11 @@ def create_auth_server(broker: AuthProcessBroker | None = None) -> FastMCP:
             if session_code is not None:
                 raise ToolError(
                     f"{error_message} Safe diagnostic: session_validation_{session_code}."
+                ) from None
+            broker_code = _SAFE_BROKER_DIAGNOSTICS.get(code)
+            if broker_code is not None:
+                raise ToolError(
+                    f"{error_message} Safe diagnostic: {broker_code}."
                 ) from None
             raise ToolError(error_message) from None
 
