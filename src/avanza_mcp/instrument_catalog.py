@@ -368,7 +368,7 @@ class InstrumentCatalog:
                     except sqlite3.OperationalError:
                         pass
 
-            tokens = re.findall(r"[\\w.-]+", text, flags=re.UNICODE) or [text]
+            tokens = re.findall(r"[\w.-]+", text, flags=re.UNICODE) or [text]
             like_filters: list[str] = []
             like_params: list[Any] = []
             for token in tokens:
