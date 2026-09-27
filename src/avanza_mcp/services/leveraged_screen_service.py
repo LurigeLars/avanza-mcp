@@ -203,15 +203,64 @@ def _display_values(candidates: list[dict[str, Any]], field: str) -> list[str]:
     return [values[key] for key in sorted(values)]
 
 
-def _available_filter_values(candidates: list[dict[str, Any]]) -> dict[str, Any]:
+def _filter_option_display_values(response: Any, key: str) -> list[str]:
+    if not hasattr(response, "model_dump"):
+        return []
+    payload = response.model_dump(mode="json", by_alias=True, exclude_none=True)
+    options = payload.get("filterOptions")
+    if not isinstance(options, dict):
+        return []
+    entries = options.get(key)
+    if not isinstance(entries, list):
+        return []
+
+    values: dict[str, str] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        count = _number(entry.get("numberOfOrderbooks"))
+        if count is not None and count <= 0:
+            continue
+        display = str(entry.get("displayName") or entry.get("value") or "").strip()
+        if display:
+            values.setdefault(display.casefold(), display)
+    return [values[key] for key in sorted(values)]
+
+
+def _display_value_key(value: str) -> str:
+    return " ".join(value.casefold().replace("_", " ").split())
+
+
+def _merge_display_values(*groups: list[str]) -> list[str]:
+    values: dict[str, str] = {}
+    for group in groups:
+        for raw in group:
+            value = str(raw).strip()
+            if value:
+                values.setdefault(_display_value_key(value), value)
+    return [values[key] for key in sorted(values)]
+
+
+def _available_filter_values(
+    candidates: list[dict[str, Any]],
+    *,
+    upstream_issuers: list[str] | None = None,
+    upstream_sub_types: list[str] | None = None,
+) -> dict[str, Any]:
     leverage_values = [
         value
         for candidate in candidates
         if (value := _number(candidate.get("leverage"))) is not None
     ]
     return {
-        "issuers": _display_values(candidates, "issuer"),
-        "sub_types": _display_values(candidates, "sub_type"),
+        "issuers": _merge_display_values(
+            upstream_issuers or [],
+            _display_values(candidates, "issuer"),
+        ),
+        "sub_types": _merge_display_values(
+            upstream_sub_types or [],
+            _display_values(candidates, "sub_type"),
+        ),
         "leverage": {
             "reported_count": len(leverage_values),
             "min": min(leverage_values) if leverage_values else None,
@@ -312,14 +361,16 @@ def _page(snapshot: _Snapshot, offset: int, page_size: int) -> dict[str, Any]:
         "returned": returned,
         "ranking": _RANKING,
         "data_note": (
-            "The complete underlying/direction/product-family universe was scanned once, then "
-            "the reported filters were applied before ranking. pagination.total is the eligible "
-            "filtered count; snapshot.scanned_count is the full scanned count. "
-            "available_filter_values comes from the full scanned universe. Calls using "
-            "snapshot_id reuse the frozen ranking and do not refetch market data. Initial quote "
-            "collection is non-atomic because upstream pages are fetched over time; after the first "
-            "page establishes the total, remaining pages may be fetched concurrently. If "
-            "pagination.has_more is true, this response is only a partial view of the snapshot."
+            "Upstream-supported structural filters (issuer and warrant sub-type) may be pushed "
+            "down before paging; all filters are still re-applied locally before ranking. "
+            "pagination.total is the eligible filtered count and snapshot.scanned_count is the "
+            "number of candidates actually scanned after structural pushdown. Exact issuer/sub-type "
+            "vocabulary is supplemented from upstream filter metadata when available; leverage "
+            "availability is derived from scanned candidates. Calls using snapshot_id reuse the "
+            "frozen ranking and do not refetch market data. Initial quote collection is non-atomic "
+            "because upstream pages are fetched over time; after the first page establishes the "
+            "total, remaining pages may be fetched concurrently. If pagination.has_more is true, "
+            "this response is only a partial view of the snapshot."
         ),
     }
 
@@ -332,6 +383,7 @@ class LeveragedScreenService:
         self,
         underlying_order_book_id: str,
         direction: Direction,
+        filters: ScreenFilters,
         _legacy_limit: int | None = None,
     ) -> dict[str, Any]:
         async def fetch(offset: int):
@@ -339,6 +391,7 @@ class LeveragedScreenService:
                 CertificateFilterRequest(
                     filter=CertificateFilter(
                         directions=[direction],
+                        issuers=list(filters.issuers),
                         underlyingInstruments=[underlying_order_book_id],
                     ),
                     offset=offset,
@@ -386,12 +439,15 @@ class LeveragedScreenService:
             "quote_complete_count": sum(
                 _has_two_way_quote(item) for item in products
             ),
+            "available_issuers": _filter_option_display_values(first, "issuers"),
+            "available_sub_types": [],
         }
 
     async def _collect_warrants(
         self,
         underlying_order_book_id: str,
         direction: Direction,
+        filters: ScreenFilters,
         _legacy_limit: int | None = None,
     ) -> dict[str, Any]:
         async def fetch(offset: int):
@@ -399,6 +455,8 @@ class LeveragedScreenService:
                 WarrantFilterRequest(
                     filter=WarrantFilter(
                         directions=[direction],
+                        subTypes=list(filters.sub_types),
+                        issuers=list(filters.issuers),
                         underlyingInstruments=[underlying_order_book_id],
                     ),
                     offset=offset,
@@ -446,6 +504,8 @@ class LeveragedScreenService:
             "quote_complete_count": sum(
                 _has_two_way_quote(item) for item in products
             ),
+            "available_issuers": _filter_option_display_values(first, "issuers"),
+            "available_sub_types": _filter_option_display_values(first, "subTypes"),
         }
 
     async def screen(
@@ -471,7 +531,11 @@ class LeveragedScreenService:
         }
         results = await asyncio.gather(
             *(
-                collectors[product_type](underlying_order_book_id, direction)
+                collectors[product_type](
+                    underlying_order_book_id,
+                    direction,
+                    selected_filters,
+                )
                 for product_type in product_types
             ),
             return_exceptions=True,
@@ -480,6 +544,8 @@ class LeveragedScreenService:
 
         families: dict[str, dict[str, Any]] = {}
         all_products: list[dict[str, Any]] = []
+        upstream_issuers: list[str] = []
+        upstream_sub_types: list[str] = []
         scanned_count = quote_complete_count = 0
         for product_type, result in zip(product_types, results, strict=True):
             if isinstance(result, Exception):
@@ -506,8 +572,14 @@ class LeveragedScreenService:
             scanned_count += result["scanned_count"]
             quote_complete_count += result["quote_complete_count"]
             all_products.extend(result["products"])
+            upstream_issuers.extend(result.get("available_issuers", []))
+            upstream_sub_types.extend(result.get("available_sub_types", []))
 
-        available_filter_values = _available_filter_values(all_products)
+        available_filter_values = _available_filter_values(
+            all_products,
+            upstream_issuers=upstream_issuers,
+            upstream_sub_types=upstream_sub_types,
+        )
         products = [
             candidate
             for candidate in all_products

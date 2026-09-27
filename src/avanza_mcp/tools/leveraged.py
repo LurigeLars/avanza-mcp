@@ -97,12 +97,14 @@ async def screen_leveraged_instruments(
 ):
     """Create or page one filtered, ranked leveraged-product snapshot.
 
-    Without snapshot_id, scans the complete matching underlying/direction/product-family
-    universe once, applies the supplied structural/liquidity filters, ranks all eligible
-    products, stores the frozen result for ten minutes, and returns the requested first page.
+    Without snapshot_id, creates one complete ranked result for the requested filters.
+    Issuer and warrant sub-type filters may be pushed to Avanza before paging; all supplied
+    filters are still re-applied locally before ranking. The frozen result is stored for ten
+    minutes and the requested first page is returned.
 
-    The response includes available_filter_values derived from the full scanned universe so
-    callers can reuse exact issuer/sub-type values rather than guessing them.
+    The response includes exact issuer/sub-type vocabulary supplemented from upstream filter
+    metadata when available. The leverage availability summary describes candidates actually
+    scanned after structural pushdown.
 
     With snapshot_id, returns another page from that same frozen ranking without refetching
     Avanza. Omit product/filter arguments when paging, or repeat semantically equivalent values.
