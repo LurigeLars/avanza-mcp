@@ -46,3 +46,17 @@ def test_catalog_refresh_launcher_logs_terminal_status_and_duration() -> None:
     assert "duration_ms=" in source
     assert "traceback.print_exc()" in source
     assert "return 1" in source
+
+
+def test_worktree_helper_protects_runtime_checkout() -> None:
+    source = (WINDOWS / "new-worktree.ps1").read_text(encoding="utf-8")
+
+    assert '$Branch -eq "main"' in source
+    assert '"worktree", "list", "--porcelain"' in source
+    assert '"worktree", "add", "--track", "-b", $Branch' in source
+    assert '"worktree", "add", "-b", $Branch' in source
+    assert '"origin/main"' in source
+    assert "git switch" not in source
+    assert "git checkout" not in source
+    assert "git reset" not in source
+    assert "git restore" not in source
