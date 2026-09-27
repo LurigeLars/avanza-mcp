@@ -33,3 +33,16 @@ def test_local_gateway_uses_dedicated_port_auth_surface_and_kill_on_close_job() 
     assert "JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE" in helper
     assert "Get-NetTCPConnection -LocalPort 8769" in installer
     assert "$launcherArg = '\"{0}\"' -f $launcher" in installer
+
+
+def test_catalog_refresh_launcher_logs_terminal_status_and_duration() -> None:
+    source = (WINDOWS / "run-instrument-catalog-refresh-hidden.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "catalog_refresh_started_at=" in source
+    assert "catalog_refresh_succeeded_at=" in source
+    assert "catalog_refresh_failed_at=" in source
+    assert "duration_ms=" in source
+    assert "traceback.print_exc()" in source
+    assert "return 1" in source
