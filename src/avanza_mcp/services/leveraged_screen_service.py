@@ -13,6 +13,7 @@ from pydantic import Field
 
 from ..client.base import AvanzaClient
 from ..client.exceptions import AvanzaError
+from ..instrument_catalog import InstrumentCatalog, fresh_default_instrument_catalog
 from ..models.certificate import CertificateFilter, CertificateFilterRequest
 from ..models.filter import SortBy
 from ..models.warrant import WarrantFilter, WarrantFilterRequest
@@ -20,7 +21,7 @@ from .market_data_service import MarketDataService
 
 ProductType = Literal["certificate", "warrant"]
 Direction = Literal["long", "short"]
-_PAGE_SIZE = 500
+_FALLBACK_REQUEST_SIZE = 500
 _MAX_CONCURRENT_PAGES = 8
 _SNAPSHOT_TTL = timedelta(minutes=10)
 _RANKING = "two_way_quote, spread_percent_asc, turnover_desc"
@@ -29,13 +30,13 @@ _RANKING = "two_way_quote, spread_percent_asc, turnover_desc"
 class _LeveragedCertificateFilterRequest(CertificateFilterRequest):
     """Internal larger page request; public filter tools remain capped at 100."""
 
-    limit: int = Field(default=20, ge=1, le=_PAGE_SIZE)
+    limit: int = Field(default=20, ge=1)
 
 
 class _LeveragedWarrantFilterRequest(WarrantFilterRequest):
     """Internal larger page request; public filter tools remain capped at 100."""
 
-    limit: int = Field(default=20, ge=1, le=_PAGE_SIZE)
+    limit: int = Field(default=20, ge=1)
 
 
 def _number(value: Any) -> float | None:
@@ -390,8 +391,32 @@ def _page(snapshot: _Snapshot, offset: int, page_size: int) -> dict[str, Any]:
 
 
 class LeveragedScreenService:
-    def __init__(self, client: AvanzaClient) -> None:
+    def __init__(
+        self,
+        client: AvanzaClient,
+        catalog: InstrumentCatalog | None = None,
+    ) -> None:
         self._market = MarketDataService(client)
+        self._catalog = catalog if catalog is not None else fresh_default_instrument_catalog()
+
+    def _request_size(
+        self,
+        underlying_order_book_id: str,
+        direction: Direction,
+        product_type: ProductType,
+    ) -> int:
+        if self._catalog is not None:
+            try:
+                count = self._catalog.count_by_underlying(
+                    underlying_order_book_id,
+                    direction=direction,
+                    product_types=[product_type],
+                )
+            except (OSError, ValueError):
+                count = 0
+            if count > 0:
+                return count
+        return _FALLBACK_REQUEST_SIZE
 
     async def _collect_certificates(
         self,
@@ -400,6 +425,10 @@ class LeveragedScreenService:
         filters: ScreenFilters,
         _legacy_limit: int | None = None,
     ) -> dict[str, Any]:
+        request_size = self._request_size(
+            underlying_order_book_id, direction, "certificate"
+        )
+
         async def fetch(offset: int):
             return await self._market.filter_certificates(
                 _LeveragedCertificateFilterRequest(
@@ -409,7 +438,7 @@ class LeveragedScreenService:
                         underlyingInstruments=[underlying_order_book_id],
                     ),
                     offset=offset,
-                    limit=_PAGE_SIZE,
+                    limit=request_size,
                     sortBy=SortBy(field="name", order="asc"),
                 )
             )
@@ -477,6 +506,10 @@ class LeveragedScreenService:
         filters: ScreenFilters,
         _legacy_limit: int | None = None,
     ) -> dict[str, Any]:
+        request_size = self._request_size(
+            underlying_order_book_id, direction, "warrant"
+        )
+
         async def fetch(offset: int):
             return await self._market.filter_warrants(
                 _LeveragedWarrantFilterRequest(
@@ -487,7 +520,7 @@ class LeveragedScreenService:
                         underlyingInstruments=[underlying_order_book_id],
                     ),
                     offset=offset,
-                    limit=_PAGE_SIZE,
+                    limit=request_size,
                     sortBy=SortBy(field="name", order="asc"),
                 )
             )
