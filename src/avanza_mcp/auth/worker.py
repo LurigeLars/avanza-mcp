@@ -220,6 +220,16 @@ def _only_arguments(arguments: dict[str, Any], allowed: set[str] | frozenset[str
         raise ValueError
 
 
+def _safe_account_read_failure_code(error: AccountReadError) -> str:
+    """Reduce account read failures to a small credential-free diagnostic vocabulary."""
+    raw = str(error)
+    if raw in {"network", "invalid_json", "response_too_large", "request_not_allowed"}:
+        return f"read_error_{raw}"
+    if raw.startswith("http_") and len(raw) == 8 and raw[5:].isdigit():
+        return f"read_error_{raw}"
+    return "read_error_response_shape"
+
+
 async def _account_operation(
     auth: BrowserAuth | _RequestAuth, operation: str, arguments: dict[str, Any]
 ) -> dict[str, Any]:
@@ -314,8 +324,10 @@ async def _account_operation(
     except AccountAuthExpired:
         await auth.invalidate_session()
         return {"ok": False, "code": "auth_expired"}
-    except (AccountReadError, ValueError, KeyError, TypeError):
-        return {"ok": False, "code": "read_error"}
+    except AccountReadError as error:
+        return {"ok": False, "code": _safe_account_read_failure_code(error)}
+    except (ValueError, KeyError, TypeError):
+        return {"ok": False, "code": "read_error_response_shape"}
     except Exception:
         return {"ok": False, "code": "worker_error"}
 
