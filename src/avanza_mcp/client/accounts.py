@@ -1,5 +1,6 @@
 """Fixed-endpoint authenticated account reads with explicit projections."""
 
+import asyncio
 from datetime import date
 from typing import Any
 
@@ -29,6 +30,7 @@ from ..models.account import (
     Money,
     NewsArticle,
     PortfolioInsights,
+    PortfolioSnapshot,
     PriceAlert,
     PriceAlerts,
     StopLossOrder,
@@ -113,18 +115,27 @@ class AccountClient:
 
     async def holdings(self) -> Holdings:
         body = await self._get(_POSITIONS)
-        positions = []
-        for key in ("withOrderbook", "withoutOrderbook"):
-            values = body.get(key, [])
-            if not isinstance(values, list):
-                raise AccountReadError
-            positions.extend(self._holding(item) for item in values)
-        cash = body.get("cashPositions", [])
-        if not isinstance(cash, list):
-            raise AccountReadError
-        return Holdings(
-            holdings=positions,
-            cash_positions=[self._cash(item) for item in cash],
+        return self._holdings_from_positions(body)
+
+    async def portfolio_snapshot(self, limit: int) -> PortfolioSnapshot:
+        positions_body, active_orders, deals, stop_losses = await asyncio.gather(
+            self._get(_POSITIONS),
+            self.active_orders(limit),
+            self.deals(limit),
+            self.stop_losses(limit),
+        )
+        accounts = self._accounts_from_positions(positions_body)
+        holdings = self._holdings_from_positions(positions_body)
+        return PortfolioSnapshot(
+            accounts=accounts.accounts,
+            holdings=holdings.holdings,
+            cash_positions=holdings.cash_positions,
+            active_orders=active_orders.orders,
+            active_orders_truncated=active_orders.truncated,
+            deals=deals.deals,
+            deals_truncated=deals.truncated,
+            stop_loss_orders=stop_losses.orders,
+            stop_loss_orders_truncated=stop_losses.truncated,
         )
 
     async def transactions(
@@ -607,6 +618,22 @@ class AccountClient:
             total_value=None,
             balance=None,
             currency_balances=currency_balances,
+        )
+
+    @classmethod
+    def _holdings_from_positions(cls, body: dict[str, Any]) -> Holdings:
+        positions: list[Holding] = []
+        for key in ("withOrderbook", "withoutOrderbook"):
+            values = body.get(key, [])
+            if not isinstance(values, list):
+                raise AccountReadError
+            positions.extend(cls._holding(item) for item in values)
+        cash = body.get("cashPositions", [])
+        if not isinstance(cash, list):
+            raise AccountReadError
+        return Holdings(
+            holdings=positions,
+            cash_positions=[cls._cash(item) for item in cash],
         )
 
     @classmethod
