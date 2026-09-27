@@ -45,11 +45,29 @@ async def search_instruments(
 async def get_instrument_by_order_book_id(
     ctx: Context, order_book_id: OrderBookId
 ) -> InstrumentHit:
-    """Match an exact order_book_id among at most 50 search candidates.
+    """Match an exact order_book_id, preferring the fresh local leveraged catalog.
 
-    Search is not authoritative: failure to match does not prove the ID is
-    invalid. Never substitutes the first or a similarly named search result.
+    Certificate/warrant IDs are resolved exactly from the local daily catalog when
+    available. Other IDs fall back to at most 50 Avanza search candidates. Failure
+    to match the fallback search does not prove the ID is invalid.
     """
+    catalog = fresh_default_instrument_catalog()
+    if catalog is not None:
+        matches = catalog.find_by_order_book_id(order_book_id)
+        if len(matches) == 1:
+            row = matches[0]
+            return InstrumentHit(
+                order_book_id=row["order_book_id"],
+                name=row["name"],
+                type=str(row["product_type"]).upper(),
+                exchange=row.get("marketplace_code"),
+            )
+        if len(matches) > 1:
+            raise ToolError(
+                "The local catalog contains multiple product types for this order_book_id; "
+                "use search_instruments with an explicit instrument_type."
+            )
+
     with api_errors():
         response = await SearchService(ctx.lifespan_context["client"]).search(
             order_book_id, limit=50
