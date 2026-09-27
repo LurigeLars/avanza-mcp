@@ -97,7 +97,12 @@ def create_auth_server(broker: AuthProcessBroker | None = None) -> FastMCP:
             raise ToolError(
                 "AVANZA_AUTH_EXPIRED: Call connect_avanza, complete BankID locally, then retry."
             ) from None
-        except AuthWorkerOperationError:
+        except AuthWorkerOperationError as exc:
+            code = str(exc)
+            if code.startswith("read_error_") and code.replace("_", "").isalnum():
+                raise ToolError(
+                    f"{error_message} Safe diagnostic: {code.removeprefix('read_error_')}."
+                ) from None
             raise ToolError(error_message) from None
 
         try:
