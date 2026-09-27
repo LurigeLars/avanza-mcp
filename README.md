@@ -36,26 +36,55 @@ The author of this software is not responsible for any indirect damages (foresee
 
 ## Setup
 
-Requires [uv](https://docs.astral.sh/uv/) and Python 3.12+. Local clients launch the server over stdio.
+Requires [uv](https://docs.astral.sh/uv/) and Python 3.12+.
+
+### Which connection, and what it gives you
+
+| Client | Connection | Account access |
+|---|---|---|
+| Claude Desktop, Cursor, VS Code | local stdio from a checkout | **yes**, with `AVANZA_MCP_AUTH=1` |
+| Claude Code, Codex | local loopback gateway `127.0.0.1:8769` | yes, when the background stack runs with auth |
+| ChatGPT and other cloud chats | Cloudflare Access -> public gateway -> `127.0.0.1:8767` | no |
+| Any client, no checkout | `uvx avanza-mcp` from PyPI | **no** |
+
+**`AVANZA_MCP_AUTH=1` is the switch.** Unset, `main()` serves public market data only. Set to `1`,
+it starts the authenticated server instead, which adds `connect_avanza`, `get_auth_status`,
+`get_accounts`, `get_holdings`, `get_deals`, `get_transactions`, `get_active_orders`,
+`get_stop_loss_orders`, `get_price_alerts`, `get_watchlists`, `get_portfolio_insights`,
+`get_insider_transactions`, `get_instrument_news`, `screen_options`,
+`screen_leveraged_instruments` and `enrich_option_snapshot` on top of the public surface --
+51 tools against 34. Authentication happens when `connect_avanza` is called, through a local
+browser and BankID; nothing is requested at startup and banking credentials never pass through the
+chat. Read-only throughout: no order placement, editing, transfers or withdrawals.
+
+`uvx avanza-mcp` installs the published PyPI package, which is **not this fork** and has no account
+access. Use it only when you have no checkout, and do not expect holdings from it.
 
 <details>
 <summary>Claude Desktop and Cursor</summary>
 
-Both use this configuration:
+Both launch the server over stdio from a checkout. Replace the path with your own:
 
 ```json
 {
   "mcpServers": {
     "avanza": {
-      "command": "uvx",
-      "args": ["avanza-mcp"]
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/avanza-mcp", "--frozen", "avanza-mcp"],
+      "env": { "AVANZA_MCP_AUTH": "1" }
     }
   }
 }
 ```
 
-- **Claude Desktop:** open Settings > Developer > Edit Config, merge the configuration, then fully restart Claude Desktop.
-- **Cursor:** add it to `.cursor/mcp.json` in your project, or `~/.cursor/mcp.json` globally. Enable the server in Cursor's MCP settings.
+- **Claude Desktop:** open Settings > Developer > Edit Config, merge the configuration, then fully
+  restart Claude Desktop. On Windows give `command` the absolute path to `uv.exe`, since Desktop
+  does not resolve it from `PATH`.
+- **Cursor:** add it to `.cursor/mcp.json` in your project, or `~/.cursor/mcp.json` globally. Enable
+  the server in Cursor's MCP settings.
+
+Drop the `env` block for public market data only. To check which surface you got, look at the
+server name in the handshake: `Avanza MCP Authenticated Server` against `Avanza MCP`.
 
 </details>
 
@@ -74,10 +103,17 @@ This keeps the canonical FastMCP server on port 8767 while presenting the compac
 37-tool catalog on port 8769. Use `/mcp` in Claude Code or `codex mcp list` to
 verify the connection.
 
-The portable stdio form remains available when no background HTTP stack is installed:
+The portable stdio form remains available when no background HTTP stack is installed. It is the
+PyPI package, so it serves public market data only:
 
 ```bash
 claude mcp add avanza -- uvx avanza-mcp
+```
+
+For the account surface without the background stack, point the client at a checkout instead:
+
+```bash
+claude mcp add avanza --env AVANZA_MCP_AUTH=1 -- uv run --directory /path/to/avanza-mcp --frozen avanza-mcp
 ```
 
 The stdio form talks directly to FastMCP and therefore exposes the full raw schemas.
@@ -94,8 +130,9 @@ Add to `.vscode/mcp.json`, or open **MCP: Open User Configuration** for global s
   "servers": {
     "avanza": {
       "type": "stdio",
-      "command": "uvx",
-      "args": ["avanza-mcp"]
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/avanza-mcp", "--frozen", "avanza-mcp"],
+      "env": { "AVANZA_MCP_AUTH": "1" }
     }
   }
 }
