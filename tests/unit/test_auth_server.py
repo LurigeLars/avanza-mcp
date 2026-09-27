@@ -244,3 +244,24 @@ async def test_account_tool_surfaces_only_fixed_broker_diagnostics(
     async with Client(create_auth_server(DiagnosticBroker())) as client:  # type: ignore[arg-type]
         with pytest.raises(ToolError, match=rf"Safe diagnostic: {diagnostic}"):
             await client.call_tool("get_watchlists", {})
+
+
+async def test_portfolio_snapshot_tool_is_bounded_and_delegates_once():
+    broker = FakeBroker()
+    broker.account_results["portfolio_snapshot"] = {
+        "accounts": [],
+        "holdings": [],
+        "cash_positions": [],
+        "active_orders": [],
+        "active_orders_truncated": False,
+        "deals": [],
+        "deals_truncated": False,
+        "stop_loss_orders": [],
+        "stop_loss_orders_truncated": False,
+    }
+
+    async with Client(create_auth_server(broker)) as client:  # type: ignore[arg-type]
+        result = await client.call_tool("get_portfolio_snapshot", {"limit": 25})
+
+    assert result.structured_content == broker.account_results["portfolio_snapshot"]
+    assert broker.account_calls == [("portfolio_snapshot", {"limit": 25})]
