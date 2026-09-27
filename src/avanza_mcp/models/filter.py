@@ -17,7 +17,7 @@ class PaginationRequest(AvanzaModel):
     """Pagination parameters for filter endpoints."""
 
     offset: int = Field(default=0, ge=0)
-    limit: int = Field(default=20, ge=1, le=500)
+    limit: int = Field(default=20, ge=1, le=100)
 
 
 class UnderlyingInstrument(AvanzaModel):
