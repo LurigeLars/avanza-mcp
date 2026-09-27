@@ -1,5 +1,6 @@
 """Bounded instrument search contracts using mixed public-search payloads."""
 
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 
 import pytest
@@ -9,6 +10,7 @@ from jsonschema import validate
 
 from avanza_mcp import mcp
 from avanza_mcp.client import AvanzaClient
+from avanza_mcp.instrument_catalog import CatalogInstrument, InstrumentCatalog
 
 
 @pytest.fixture
@@ -172,3 +174,84 @@ async def test_candidate_bound_and_empty_response(upstream):
             "searchQuery": "Volvo",
             "returned": 0,
         }
+
+
+async def test_leveraged_search_prefers_fresh_local_catalog(
+    upstream, tmp_path, monkeypatch
+):
+    path = tmp_path / "instrument-catalog.sqlite3"
+    InstrumentCatalog(path).replace_all(
+        [
+            CatalogInstrument(
+                product_type="warrant",
+                order_book_id="907742",
+                name="MINI L NVIDIA AVA 13",
+                direction="long",
+                issuer="Morgan Stanley",
+                sub_type="MINI_FUTURE",
+                country_code="SE",
+                marketplace_code="FNSE",
+                underlying_order_book_id="4478",
+                underlying_name="NVIDIA",
+                underlying_instrument_type="STOCK",
+                underlying_country_code="US",
+            )
+        ],
+        refreshed_at=datetime.now(timezone.utc),
+    )
+    monkeypatch.setenv("AVANZA_MCP_INSTRUMENT_CATALOG", str(path))
+
+    async with Client(mcp) as client:
+        result = await client.call_tool(
+            "search_instruments",
+            {"query": "NVIDIA", "instrument_type": "warrant", "limit": 10},
+        )
+
+    data = result.structured_content
+    assert data["returned"] == 1
+    assert data["hits"] == [
+        {
+            "order_book_id": "907742",
+            "name": "MINI L NVIDIA AVA 13",
+            "type": "WARRANT",
+            "exchange": "FNSE",
+            "isin": None,
+            "currency": None,
+        }
+    ]
+    upstream.post.assert_not_awaited()
+
+
+async def test_stale_leveraged_catalog_falls_back_to_avanza_search(
+    upstream, tmp_path, monkeypatch
+):
+    path = tmp_path / "instrument-catalog.sqlite3"
+    InstrumentCatalog(path).replace_all(
+        [
+            CatalogInstrument(
+                product_type="certificate",
+                order_book_id="999999",
+                name="BULL VOLVO STALE",
+                direction="long",
+                issuer="Issuer",
+                country_code="SE",
+                marketplace_code="NMTF",
+                underlying_order_book_id="5269",
+                underlying_name="Volvo B",
+                underlying_instrument_type="STOCK",
+                underlying_country_code="SE",
+            )
+        ],
+        refreshed_at=datetime.now(timezone.utc) - timedelta(days=3),
+    )
+    monkeypatch.setenv("AVANZA_MCP_INSTRUMENT_CATALOG", str(path))
+
+    async with Client(mcp) as client:
+        result = await client.call_tool(
+            "search_instruments",
+            {"query": "Volvo", "instrument_type": "certificate", "limit": 10},
+        )
+
+    data = result.structured_content
+    assert [hit["order_book_id"] for hit in data["hits"]] == ["1360525"]
+    upstream.post.assert_awaited_once()
