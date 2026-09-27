@@ -11,7 +11,7 @@ from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
 import avanza_mcp
-from avanza_mcp.auth.broker import AuthWorkerRequired
+from avanza_mcp.auth.broker import AuthWorkerOperationError, AuthWorkerRequired
 from avanza_mcp.auth.browser import AuthStatus
 from avanza_mcp.auth.server import create_auth_server, run_auth_server
 
@@ -166,3 +166,25 @@ assert 'avanza_mcp.auth.server' not in sys.modules
     env = os.environ.copy()
     env.pop("AVANZA_MCP_AUTH", None)
     subprocess.run([sys.executable, "-c", script], check=True, env=env)
+
+
+async def test_account_tool_surfaces_only_safe_diagnostic_class():
+    class DiagnosticBroker(FakeBroker):
+        async def account(self, operation, arguments):
+            raise AuthWorkerOperationError("read_error_http_404")
+
+    async with Client(create_auth_server(DiagnosticBroker())) as client:  # type: ignore[arg-type]
+        with pytest.raises(ToolError, match=r"Safe diagnostic: http_404"):
+            await client.call_tool("get_watchlists", {})
+
+
+async def test_account_tool_does_not_surface_unclassified_worker_text():
+    class UnsafeTextBroker(FakeBroker):
+        async def account(self, operation, arguments):
+            raise AuthWorkerOperationError("secret=must-not-leak")
+
+    async with Client(create_auth_server(UnsafeTextBroker())) as client:  # type: ignore[arg-type]
+        with pytest.raises(ToolError) as exc:
+            await client.call_tool("get_watchlists", {})
+
+    assert "must-not-leak" not in str(exc.value)
