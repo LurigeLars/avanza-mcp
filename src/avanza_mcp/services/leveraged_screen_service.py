@@ -19,7 +19,7 @@ from .market_data_service import MarketDataService
 ProductType = Literal["certificate", "warrant"]
 Direction = Literal["long", "short"]
 _PAGE_SIZE = 100
-_MAX_CONCURRENT_PAGES = 4
+_MAX_CONCURRENT_PAGES = 8
 _SNAPSHOT_TTL = timedelta(minutes=10)
 _RANKING = "two_way_quote, spread_percent_asc, turnover_desc"
 

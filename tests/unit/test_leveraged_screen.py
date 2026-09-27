@@ -193,14 +193,14 @@ class ConcurrentPaginatedWarrantMarket:
                     )
                     for index in range(100)
                 ],
-                totalNumberOfOrderbooks=401,
+                totalNumberOfOrderbooks=901,
             )
 
         self.in_flight += 1
         self.max_in_flight = max(self.max_in_flight, self.in_flight)
         try:
             await asyncio.sleep(0.01)
-            remaining = min(100, 401 - request.offset)
+            remaining = min(100, 901 - request.offset)
             return SimpleNamespace(
                 warrants=[
                     FakeItem(
@@ -213,7 +213,7 @@ class ConcurrentPaginatedWarrantMarket:
                     )
                     for index in range(remaining)
                 ],
-                totalNumberOfOrderbooks=401,
+                totalNumberOfOrderbooks=901,
             )
         finally:
             self.in_flight -= 1
@@ -227,11 +227,22 @@ async def test_remaining_warrant_pages_use_bounded_concurrency_after_first_page(
 
     result = await service.screen("4478", "long", ["warrant"], 1)
 
-    assert {call.offset for call in fake.warrant_calls} == {0, 100, 200, 300, 400}
-    assert fake.max_in_flight == 4
-    assert result["snapshot"]["scanned_count"] == 401
-    assert result["families"]["warrant"]["scanned_count"] == 401
-    assert result["pagination"]["total"] == 401
+    assert {call.offset for call in fake.warrant_calls} == {
+        0,
+        100,
+        200,
+        300,
+        400,
+        500,
+        600,
+        700,
+        800,
+        900,
+    }
+    assert fake.max_in_flight == 8
+    assert result["snapshot"]["scanned_count"] == 901
+    assert result["families"]["warrant"]["scanned_count"] == 901
+    assert result["pagination"]["total"] == 901
 
 
 class PaginatedWarrantMarket:
