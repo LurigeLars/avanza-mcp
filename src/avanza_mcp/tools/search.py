@@ -6,10 +6,11 @@ from fastmcp import Context
 from fastmcp.exceptions import ToolError
 
 from .. import mcp
+from ..client.exceptions import AvanzaNotFoundError
 from ..instrument_catalog import fresh_default_instrument_catalog
 from ..models.common import OrderBookId, SearchLimit, SearchQuery
 from ..models.search import InstrumentHit, InstrumentSearch
-from ..services import SearchService
+from ..services import MarketDataService, SearchService
 from ._helpers import READ_ONLY, api_errors
 
 
@@ -48,8 +49,9 @@ async def get_instrument_by_order_book_id(
     """Match an exact order_book_id, preferring the fresh local leveraged catalog.
 
     Certificate/warrant IDs are resolved exactly from the local daily catalog when
-    available. Other IDs fall back to at most 50 Avanza search candidates. Failure
-    to match the fallback search does not prove the ID is invalid.
+    available. Other IDs use Avanza's exact market-guide identity response, which
+    reports the actual instrument type for stocks, funds, ETFs and traded products.
+    The bounded search path is retained only as a final fallback on not-found.
     """
     catalog = fresh_default_instrument_catalog()
     if catalog is not None:
@@ -69,9 +71,27 @@ async def get_instrument_by_order_book_id(
             )
 
     with api_errors():
+        try:
+            info = await MarketDataService(
+                ctx.lifespan_context["client"]
+            ).get_stock_info(order_book_id)
+        except AvanzaNotFoundError:
+            info = None
+
+        if info is not None:
+            return InstrumentHit(
+                order_book_id=info.orderbookId,
+                name=info.name,
+                type=info.type or "STOCK",
+                exchange=info.listing.marketPlaceName,
+                isin=info.isin,
+                currency=info.listing.currency,
+            )
+
         response = await SearchService(ctx.lifespan_context["client"]).search(
             order_book_id, limit=50
         )
+
     for hit in response.hits:
         if hit.order_book_id == order_book_id:
             return hit
