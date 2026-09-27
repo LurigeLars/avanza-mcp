@@ -323,7 +323,7 @@ async def test_additional_private_reads_use_fixed_routes_and_explicit_projection
                     ]
                 },
             )
-        if path.endswith("/stoploss"):
+        if path.endswith("/stoploss/"):
             return httpx.Response(
                 200,
                 json=[
@@ -507,3 +507,31 @@ async def test_accounts_auth_expiry_from_positions_is_not_masked():
             await account_client.accounts()
 
     assert requests == ["/_api/position-data/positions"]
+
+
+@respx.mock
+async def test_price_alert_404_means_no_configured_alerts():
+    async def handler(request):
+        assert request.url.path.endswith("/alert/4478")
+        return httpx.Response(404, json={"ignored": "must-not-leak"})
+
+    mock_avanza(handler)
+    async with client() as account_client:
+        result = await account_client.price_alerts("4478")
+
+    assert result.alerts == []
+    assert "must-not-leak" not in result.model_dump_json()
+
+
+@respx.mock
+async def test_stop_loss_read_uses_canonical_trailing_slash():
+    async def handler(request):
+        assert request.url.path == "/_api/trading/stoploss/"
+        return httpx.Response(200, json=[])
+
+    mock_avanza(handler)
+    async with client() as account_client:
+        result = await account_client.stop_losses(100)
+
+    assert result.orders == []
+    assert result.truncated is False
