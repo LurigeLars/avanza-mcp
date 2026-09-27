@@ -10,12 +10,14 @@ import asyncio
 import json
 import re
 import sqlite3
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Literal
 
 from .client.base import AvanzaClient
+from .client.exceptions import AvanzaRateLimitError
 from .models.certificate import CertificateFilter, CertificateFilterRequest
 from .models.filter import SortBy
 from .models.warrant import WarrantFilter, WarrantFilterRequest
@@ -24,7 +26,10 @@ from .services.market_data_service import MarketDataService
 ProductType = Literal["certificate", "warrant"]
 
 _PAGE_SIZE = 100
-_MAX_CONCURRENT_PAGES = 4
+_MAX_CONCURRENT_PAGES = 2
+_RATE_LIMIT_ATTEMPTS = 4
+_RATE_LIMIT_FALLBACK_SECONDS = 5
+_MAX_RATE_LIMIT_DELAY_SECONDS = 60
 _VALID_PRODUCT_TYPES = frozenset({"certificate", "warrant"})
 
 
@@ -434,27 +439,55 @@ class InstrumentCatalogRefresher:
         self._market = market
         self._page_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_PAGES)
 
+    async def _with_rate_limit_retry(
+        self,
+        operation: Callable[[], Awaitable[Any]],
+    ) -> Any:
+        """Retry one catalog page on explicit Avanza rate limiting."""
+
+        for attempt in range(_RATE_LIMIT_ATTEMPTS):
+            try:
+                return await operation()
+            except AvanzaRateLimitError as exc:
+                if attempt + 1 >= _RATE_LIMIT_ATTEMPTS:
+                    raise
+                delay = (
+                    exc.retry_after
+                    if exc.retry_after is not None
+                    else _RATE_LIMIT_FALLBACK_SECONDS * (attempt + 1)
+                )
+                await asyncio.sleep(
+                    max(1, min(delay, _MAX_RATE_LIMIT_DELAY_SECONDS))
+                )
+        raise AssertionError("unreachable rate-limit retry state")
+
     async def _certificate_page(self, offset: int):
         async with self._page_semaphore:
-            return await self._market.filter_certificates(
-                CertificateFilterRequest(
-                    filter=CertificateFilter(),
-                    offset=offset,
-                    limit=_PAGE_SIZE,
-                    sortBy=SortBy(field="name", order="asc"),
+            async def request():
+                return await self._market.filter_certificates(
+                    CertificateFilterRequest(
+                        filter=CertificateFilter(),
+                        offset=offset,
+                        limit=_PAGE_SIZE,
+                        sortBy=SortBy(field="name", order="asc"),
+                    )
                 )
-            )
+
+            return await self._with_rate_limit_retry(request)
 
     async def _warrant_page(self, offset: int):
         async with self._page_semaphore:
-            return await self._market.filter_warrants(
-                WarrantFilterRequest(
-                    filter=WarrantFilter(),
-                    offset=offset,
-                    limit=_PAGE_SIZE,
-                    sortBy=SortBy(field="name", order="asc"),
+            async def request():
+                return await self._market.filter_warrants(
+                    WarrantFilterRequest(
+                        filter=WarrantFilter(),
+                        offset=offset,
+                        limit=_PAGE_SIZE,
+                        sortBy=SortBy(field="name", order="asc"),
+                    )
                 )
-            )
+
+            return await self._with_rate_limit_retry(request)
 
     async def _collect_family(self, product_type: ProductType) -> tuple[list[Any], int | None]:
         fetch = self._certificate_page if product_type == "certificate" else self._warrant_page
