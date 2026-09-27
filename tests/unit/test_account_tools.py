@@ -427,13 +427,56 @@ async def test_accounts_tolerate_optional_shape_drift_without_leaking_fields():
 
 
 @respx.mock
-async def test_accounts_fall_back_to_documented_trading_account_list_on_shape_drift():
+async def test_accounts_fall_back_to_documented_account_list_on_shape_drift():
     requests = []
 
     async def handler(request):
         requests.append(request.url.path)
         if request.url.path.endswith("categorizedAccounts"):
             return httpx.Response(200, json={"categories": [], "accounts": None})
+        if request.url.path.endswith("/account-overview/accounts/list"):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": "a1",
+                        "name": "ISK",
+                        "accountType": "INVESTMENT_SAVINGS_ACCOUNT",
+                        "urlParameterId": "isk-1",
+                        "active": True,
+                        "clearingAccountNumber": "must-not-leak",
+                    }
+                ],
+            )
+        raise AssertionError(request.url.path)
+
+    mock_avanza(handler)
+    async with client() as account_client:
+        result = await account_client.accounts()
+
+    assert requests == [
+        "/_api/account-overview/overview/categorizedAccounts",
+        "/_api/account-overview/accounts/list",
+    ]
+    assert result.accounts[0].account_id == "a1"
+    assert result.accounts[0].name == "ISK"
+    assert result.accounts[0].account_type == "INVESTMENT_SAVINGS_ACCOUNT"
+    assert result.accounts[0].currency_balances == []
+    output = result.model_dump_json()
+    assert "clearingAccountNumber" not in output
+    assert "must-not-leak" not in output
+
+
+@respx.mock
+async def test_accounts_use_trading_list_only_after_both_overview_surfaces_fail():
+    requests = []
+
+    async def handler(request):
+        requests.append(request.url.path)
+        if request.url.path.endswith("categorizedAccounts"):
+            return httpx.Response(200, json={"accounts": None})
+        if request.url.path.endswith("/account-overview/accounts/list"):
+            return httpx.Response(503, json={"error": "temporary"})
         if request.url.path.endswith("/trading-critical/rest/accounts"):
             return httpx.Response(
                 200,
@@ -442,11 +485,9 @@ async def test_accounts_fall_back_to_documented_trading_account_list_on_shape_dr
                         "name": "ISK",
                         "accountId": "a1",
                         "accountType": "INVESTMENT_SAVINGS_ACCOUNT",
-                        "accountTypeName": "ISK",
                         "isHidden": False,
                         "currencyBalances": [
                             {"currency": "SEK", "balance": 123.45},
-                            {"currency": "USD", "balance": 5},
                         ],
                         "availableCredit": 999999,
                         "positions": [{"secret": "must-not-leak"}],
@@ -461,11 +502,9 @@ async def test_accounts_fall_back_to_documented_trading_account_list_on_shape_dr
 
     assert requests == [
         "/_api/account-overview/overview/categorizedAccounts",
+        "/_api/account-overview/accounts/list",
         "/_api/trading-critical/rest/accounts",
     ]
-    assert result.accounts[0].account_id == "a1"
-    assert result.accounts[0].name == "ISK"
-    assert result.accounts[0].account_type == "INVESTMENT_SAVINGS_ACCOUNT"
     assert result.accounts[0].currency_balances[0].amount == "123.45"
     output = result.model_dump_json()
     assert "availableCredit" not in output

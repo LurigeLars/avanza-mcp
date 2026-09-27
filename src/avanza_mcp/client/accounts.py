@@ -42,6 +42,7 @@ from .base import AvanzaClient
 from .exceptions import AvanzaAuthError
 
 _ACCOUNTS = "/_api/account-overview/overview/categorizedAccounts"
+_ACCOUNT_LIST = "/_api/account-overview/accounts/list"
 _TRADING_ACCOUNTS = "/_api/trading-critical/rest/accounts"
 _POSITIONS = "/_api/position-data/positions"
 _TRANSACTIONS = "/_api/transactions/list"
@@ -60,6 +61,7 @@ _STOP_LOSSES = "/_api/trading/stoploss"
 
 _ALLOWED_ACCOUNT_EXACT = {
     ("GET", _ACCOUNTS),
+    ("GET", _ACCOUNT_LIST),
     ("GET", _TRADING_ACCOUNTS),
     ("GET", _POSITIONS),
     ("GET", _TRANSACTIONS),
@@ -113,11 +115,18 @@ class AccountClient:
         except AccountAuthExpired:
             raise
         except AccountReadError:
-            # Avanza has more than one documented read-only account surface.
-            # If the categorized overview drifts, fall back to the trading
-            # account list and keep projecting into the same narrow model.
-            values = await self._get_list(_TRADING_ACCOUNTS)
-            return Accounts(accounts=[self._trading_account(item) for item in values])
+            pass
+
+        try:
+            values = await self._get_list(_ACCOUNT_LIST)
+            return Accounts(accounts=[self._summary_account(item) for item in values])
+        except AccountAuthExpired:
+            raise
+        except AccountReadError:
+            pass
+
+        values = await self._get_list(_TRADING_ACCOUNTS)
+        return Accounts(accounts=[self._trading_account(item) for item in values])
 
     async def holdings(self) -> Holdings:
         body = await self._get(_POSITIONS)
@@ -534,6 +543,22 @@ class AccountClient:
             total_value=cls._money(value.get("totalValue")),
             balance=cls._money(value.get("balance")),
             currency_balances=currency_balances,
+        )
+
+    @classmethod
+    def _summary_account(cls, value: Any) -> Account:
+        if not isinstance(value, dict):
+            raise AccountReadError
+        return Account(
+            account_id=cls._identifier(value.get("id") or value.get("accountId")),
+            name=str(value.get("name") or "Unknown account"),
+            account_type=str(
+                value.get("accountType") or value.get("type") or "UNKNOWN"
+            ),
+            hidden=bool(value.get("isHidden", False)),
+            total_value=None,
+            balance=None,
+            currency_balances=[],
         )
 
     @classmethod
