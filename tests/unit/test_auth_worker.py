@@ -183,3 +183,14 @@ def test_account_read_failure_codes_are_safely_bounded():
     assert _safe_account_read_failure_code(AccountReadError("network")) == "read_error_network"
     assert _safe_account_read_failure_code(AccountReadError("invalid_json")) == "read_error_invalid_json"
     assert _safe_account_read_failure_code(AccountReadError("secret=must-not-leak")) == "read_error_response_shape"
+
+
+def test_unexpected_account_failure_exposes_only_exception_class():
+    class SyntheticFailure(Exception):
+        pass
+
+    error = SyntheticFailure("secret=must-not-leak")
+    name = type(error).__name__
+    assert name == "SyntheticFailure"
+    assert name.isidentifier()
+    assert "must-not-leak" not in f"worker_error_{name}"
