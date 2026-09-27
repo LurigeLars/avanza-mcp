@@ -222,3 +222,24 @@ async def test_account_tool_surfaces_safe_server_validation_type():
             ToolError, match=r"Safe diagnostic: server_validation_missing"
         ):
             await client.call_tool("get_watchlists", {})
+
+
+@pytest.mark.parametrize(
+    ("worker_error", "diagnostic"),
+    [
+        ("Auth worker closed unexpectedly", "broker_closed"),
+        ("Auth worker returned invalid data", "broker_invalid_data"),
+        ("Auth worker returned unsafe data", "broker_unsafe_data"),
+        ("worker_error", "worker_error_generic"),
+    ],
+)
+async def test_account_tool_surfaces_only_fixed_broker_diagnostics(
+    worker_error, diagnostic
+):
+    class DiagnosticBroker(FakeBroker):
+        async def account(self, operation, arguments):
+            raise AuthWorkerOperationError(worker_error)
+
+    async with Client(create_auth_server(DiagnosticBroker())) as client:  # type: ignore[arg-type]
+        with pytest.raises(ToolError, match=rf"Safe diagnostic: {diagnostic}"):
+            await client.call_tool("get_watchlists", {})

@@ -10,7 +10,7 @@ import sys
 import threading
 import time
 from datetime import date
-from typing import Any
+from typing import Any, TextIO
 
 from ..client.accounts import AccountAuthExpired, AccountClient, AccountReadError
 from ..client.bankid import BankIDClient, BankIDError, SessionMaterial
@@ -135,9 +135,34 @@ _PORTFOLIO_PERIODS = frozenset(
 )
 
 
-def _emit(value: dict[str, Any]) -> None:
-    sys.stdout.write(json.dumps(value, separators=(",", ":"), ensure_ascii=False) + "\n")
+_PROTOCOL_STDOUT: TextIO | None = None
+
+
+def _isolate_protocol_stdout() -> None:
+    """Reserve the original stdout pipe for worker protocol frames only.
+
+    Third-party code may write diagnostics to stdout. Duplicate the broker pipe,
+    then redirect ordinary fd 1 to stderr so such output cannot corrupt IPC.
+    """
+    global _PROTOCOL_STDOUT
+    if _PROTOCOL_STDOUT is not None:
+        return
     sys.stdout.flush()
+    protocol_fd = os.dup(sys.stdout.fileno())
+    _PROTOCOL_STDOUT = os.fdopen(
+        protocol_fd,
+        "w",
+        encoding="utf-8",
+        buffering=1,
+        closefd=True,
+    )
+    os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
+
+
+def _emit(value: dict[str, Any]) -> None:
+    stream = _PROTOCOL_STDOUT or sys.stdout
+    stream.write(json.dumps(value, separators=(",", ":"), ensure_ascii=False) + "\n")
+    stream.flush()
 
 
 def _safe_status(status: AuthStatus) -> dict[str, Any]:
@@ -667,6 +692,7 @@ async def _async_main(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
+    _isolate_protocol_stdout()
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--kind", choices=("once", "ui", "daemon"), required=True)
     parser.add_argument(
