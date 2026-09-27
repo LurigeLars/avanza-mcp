@@ -108,45 +108,6 @@ class AccountClient:
         self._client = client
 
     async def accounts(self) -> Accounts:
-        try:
-            body = await self._get(_ACCOUNTS)
-            records = body.get("accounts")
-            if not isinstance(records, list):
-                raise AccountReadError("categorized_shape")
-            return Accounts(accounts=[self._account(item) for item in records])
-        except AccountAuthExpired:
-            raise
-        except AccountReadError:
-            pass
-
-        try:
-            values = await self._get_list(_ACCOUNT_LIST)
-            return Accounts(accounts=[self._summary_account(item) for item in values])
-        except AccountAuthExpired:
-            raise
-        except AccountReadError:
-            pass
-
-        try:
-            values = await self._get_list(_LIGHTWEIGHT_ACCOUNTS)
-            return Accounts(accounts=[self._lightweight_account(item) for item in values])
-        except AccountAuthExpired:
-            raise
-        except AccountReadError:
-            pass
-
-        try:
-            values = await self._get_list(_TRADING_ACCOUNTS)
-            return Accounts(accounts=[self._trading_account(item) for item in values])
-        except AccountAuthExpired:
-            raise
-        except AccountReadError:
-            pass
-
-        # Last resort: the positions endpoint is already required by get_holdings
-        # and carries the account id/name/type alongside every position. This can
-        # omit a completely empty account, so it is deliberately used only after
-        # all dedicated account-list endpoints have failed.
         body = await self._get(_POSITIONS)
         return self._accounts_from_positions(body)
 
