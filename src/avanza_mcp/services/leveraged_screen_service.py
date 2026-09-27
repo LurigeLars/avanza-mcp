@@ -431,8 +431,9 @@ class LeveragedScreenService:
                 for response in responses:
                     items.extend(response.certificates)
         else:
-            offset = len(first.certificates)
-            while first.certificates and (total is None or offset < total):
+            page_step = len(first.certificates)
+            offset = page_step
+            while first.certificates and page_step > 0 and (total is None or offset < total):
                 response = await fetch(offset)
                 page = response.certificates
                 if not page:
@@ -441,7 +442,7 @@ class LeveragedScreenService:
                 if response.totalNumberOfOrderbooks is not None:
                     total = response.totalNumberOfOrderbooks
                 offset += len(page)
-                if len(page) < _PAGE_SIZE:
+                if len(page) < page_step:
                     break
         products = [_normalize_candidate(item, "certificate") for item in items]
         return {
@@ -508,8 +509,9 @@ class LeveragedScreenService:
                 for response in responses:
                     items.extend(response.warrants)
         else:
-            offset = len(first.warrants)
-            while first.warrants and (total is None or offset < total):
+            page_step = len(first.warrants)
+            offset = page_step
+            while first.warrants and page_step > 0 and (total is None or offset < total):
                 response = await fetch(offset)
                 page = response.warrants
                 if not page:
@@ -518,7 +520,7 @@ class LeveragedScreenService:
                 if response.totalNumberOfOrderbooks is not None:
                     total = response.totalNumberOfOrderbooks
                 offset += len(page)
-                if len(page) < _PAGE_SIZE:
+                if len(page) < page_step:
                     break
         products = [_normalize_candidate(item, "warrant") for item in items]
         return {
