@@ -173,3 +173,13 @@ async def test_auth_expired_operation_retries_once_with_refreshed_session(
     assert seen == ["old-token", "new-token"]
     assert store.saves == 1
     assert store.deletes == 0
+
+
+def test_account_read_failure_codes_are_safely_bounded():
+    from avanza_mcp.auth.worker import _safe_account_read_failure_code
+    from avanza_mcp.client.accounts import AccountReadError
+
+    assert _safe_account_read_failure_code(AccountReadError("http_404")) == "read_error_http_404"
+    assert _safe_account_read_failure_code(AccountReadError("network")) == "read_error_network"
+    assert _safe_account_read_failure_code(AccountReadError("invalid_json")) == "read_error_invalid_json"
+    assert _safe_account_read_failure_code(AccountReadError("secret=must-not-leak")) == "read_error_response_shape"
