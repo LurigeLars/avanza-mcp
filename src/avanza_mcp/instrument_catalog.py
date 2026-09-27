@@ -310,6 +310,28 @@ class InstrumentCatalog:
             raise ValueError(f"Unsupported product type(s): {sorted(invalid)}")
         return values
 
+    def find_by_order_book_id(self, order_book_id: str) -> list[dict[str, Any]]:
+        """Return exact leveraged-instrument matches for one order-book ID."""
+
+        if not order_book_id.isascii() or not order_book_id.isdecimal():
+            raise ValueError("order_book_id must contain only ASCII numeric digits")
+
+        connection = self._connect()
+        try:
+            self._create_schema(connection)
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM instruments
+                WHERE order_book_id = ?
+                ORDER BY product_type
+                """,
+                (order_book_id,),
+            ).fetchall()
+            return [self._row_to_dict(row) for row in rows]
+        finally:
+            connection.close()
+
     def find_by_underlying(
         self,
         underlying_order_book_id: str,
