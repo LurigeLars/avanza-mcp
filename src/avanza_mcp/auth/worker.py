@@ -13,6 +13,7 @@ from datetime import date
 from typing import Any
 
 from ..client.accounts import AccountAuthExpired, AccountClient, AccountReadError
+from ..client.bankid import BankIDClient, BankIDError, SessionMaterial
 from ..client.base import (
     AvanzaClient,
     _authenticated_market_kind,
@@ -57,6 +58,63 @@ _FORBIDDEN_MARKET_RESULT_KEYS = frozenset(
         "set_cookie",
     }
 )
+
+
+class _RequestAuth:
+    """One operation-local session holder; persistence is owned by the worker."""
+
+    def __init__(self, session: SessionMaterial) -> None:
+        self.session: SessionMaterial | None = session
+
+    async def invalidate_session(self) -> None:
+        self.session = None
+
+
+def _cookie_state(cookie: Any) -> tuple[Any, ...]:
+    return (
+        cookie.version,
+        cookie.name,
+        cookie.value,
+        cookie.port,
+        cookie.port_specified,
+        cookie.domain,
+        cookie.domain_specified,
+        cookie.domain_initial_dot,
+        cookie.path,
+        cookie.path_specified,
+        cookie.secure,
+        cookie.expires,
+        cookie.discard,
+        cookie.comment,
+        cookie.comment_url,
+        tuple(sorted(cookie._rest.items())),
+        cookie.rfc2109,
+    )
+
+
+def _same_session_material(left: SessionMaterial, right: SessionMaterial) -> bool:
+    return (
+        left._security_token == right._security_token
+        and tuple(_cookie_state(item) for item in left._cookies)
+        == tuple(_cookie_state(item) for item in right._cookies)
+    )
+
+
+async def _validate_saved_session(
+    session: SessionMaterial,
+) -> tuple[SessionMaterial | None, str | None]:
+    attempt = BankIDClient()
+    try:
+        return await attempt.validate_session(session), None
+    except BankIDError as error:
+        code = (
+            f"{error.code.value}_http_{error.upstream_status}"
+            if error.upstream_status is not None
+            else error.code.value
+        )
+        return None, code
+    finally:
+        await attempt.aclose()
 
 
 def _contains_forbidden_market_result(value: Any) -> bool:
@@ -163,7 +221,7 @@ def _only_arguments(arguments: dict[str, Any], allowed: set[str] | frozenset[str
 
 
 async def _account_operation(
-    auth: BrowserAuth, operation: str, arguments: dict[str, Any]
+    auth: BrowserAuth | _RequestAuth, operation: str, arguments: dict[str, Any]
 ) -> dict[str, Any]:
     if operation not in _ALLOWED_ACCOUNT_OPERATIONS:
         return {"ok": False, "code": "operation_not_allowed"}
@@ -264,7 +322,7 @@ async def _account_operation(
     return {"ok": True, "result": result.model_dump(mode="json")}
 
 async def _market_operation(
-    auth: BrowserAuth, command: dict[str, Any]
+    auth: BrowserAuth | _RequestAuth, command: dict[str, Any]
 ) -> dict[str, Any]:
     method = str(command.get("method", ""))
     path = str(command.get("path", ""))
@@ -314,43 +372,92 @@ async def _market_operation(
 
 async def _run_once(command: dict[str, Any]) -> None:
     store = create_session_store()
-    auth = BrowserAuth(
-        store=store,
-        session_idle_seconds=_INTERNAL_BROWSER_IDLE_SECONDS,
-    )
-    try:
-        state, status = await _restore_persistent(auth, store)
-        action = command.get("action")
-        if action == "status":
+    action = command.get("action")
+
+    if action == "status":
+        auth = BrowserAuth(
+            store=store,
+            session_idle_seconds=_INTERNAL_BROWSER_IDLE_SECONDS,
+        )
+        try:
+            _, status = await _restore_persistent(auth, store)
             _emit(_safe_status(status))
             return
-        if state == "none":
-            _emit({"ok": False, "code": "no_session"})
-            return
-        if state == "expired":
-            _emit({"ok": False, "code": "auth_expired"})
-            return
-        if state != "connected":
-            _emit({"ok": False, "code": status.error_code or "worker_error"})
-            return
+        finally:
+            await auth.aclose()
 
-        if action == "account":
-            operation = command.get("operation")
-            arguments = command.get("arguments", {})
-            if not isinstance(operation, str) or not isinstance(arguments, dict):
-                _emit({"ok": False, "code": "protocol_error"})
-                return
-            _emit(await _account_operation(auth, operation, arguments))
+    if action == "account":
+        operation = command.get("operation")
+        arguments = command.get("arguments", {})
+        if not isinstance(operation, str) or not isinstance(arguments, dict):
+            _emit({"ok": False, "code": "protocol_error"})
             return
-
-        if action == "market":
-            _emit(await _market_operation(auth, command))
-            return
-
+    elif action != "market":
         _emit({"ok": False, "code": "operation_not_allowed"})
-    finally:
-        await auth.aclose()
+        return
 
+    try:
+        saved = await store.load()
+    except AuthStoreError:
+        _emit({"ok": False, "code": "credential_store"})
+        return
+    if saved is None:
+        _emit({"ok": False, "code": "no_session"})
+        return
+
+    request_auth = _RequestAuth(saved)
+    validation_task = asyncio.create_task(_validate_saved_session(saved))
+    if action == "account":
+        operation_task = asyncio.create_task(
+            _account_operation(request_auth, operation, arguments)
+        )
+    else:
+        operation_task = asyncio.create_task(_market_operation(request_auth, command))
+
+    validated, result = await asyncio.gather(validation_task, operation_task)
+    refreshed, validation_error = validated
+
+    if validation_error is not None:
+        # Preserve the existing fail-closed behavior when session validation
+        # itself cannot be completed. Never return an operation result whose
+        # concurrent validation was inconclusive.
+        _emit({"ok": False, "code": validation_error})
+        return
+
+    if refreshed is None:
+        try:
+            await store.delete()
+        except AuthStoreError:
+            _emit({"ok": False, "code": "credential_store"})
+            return
+        _emit({"ok": False, "code": "auth_expired"})
+        return
+
+    if not _same_session_material(saved, refreshed):
+        try:
+            await store.save(refreshed)
+        except AuthStoreError:
+            _emit({"ok": False, "code": "credential_store"})
+            return
+
+    if result.get("code") == "auth_expired":
+        # The session-info request may have refreshed cookies/token that the
+        # concurrently started operation did not yet have. Retry once with the
+        # verified material before declaring the saved session expired.
+        retry_auth = _RequestAuth(refreshed)
+        if action == "account":
+            result = await _account_operation(retry_auth, operation, arguments)
+        else:
+            result = await _market_operation(retry_auth, command)
+
+        if result.get("code") == "auth_expired":
+            try:
+                await store.delete()
+            except AuthStoreError:
+                _emit({"ok": False, "code": "credential_store"})
+                return
+
+    _emit(result)
 
 async def _run_ui(command: dict[str, Any], parent_pid: int) -> None:
     store = create_session_store()
