@@ -122,4 +122,4 @@ Write-Host "  HEAD:   $($head.Output | Select-Object -First 1)"
 Write-Host ""
 $status.Output | ForEach-Object { Write-Host $_ }
 Write-Host ""
-Write-Host "Use this path for the parallel chat. Keep '$Repo' on main for the scheduled Avanza MCP runtime."
+Write-Host "Use this path for parallel development. Keep '$Repo' on main as the canonical runtime checkout."
