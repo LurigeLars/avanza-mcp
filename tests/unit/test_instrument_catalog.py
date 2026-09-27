@@ -197,17 +197,19 @@ async def test_refresher_fetches_complete_families_but_persists_only_structural_
 
 class IncompleteMarket:
     async def filter_certificates(self, request):
-        return SimpleNamespace(
-            certificates=[
-                FakeItem(
-                    orderbookId="1",
-                    name="INCOMPLETE",
-                    direction="long",
-                    issuer="Issuer",
-                )
-            ],
-            totalNumberOfOrderbooks=2,
-        )
+        if request.offset == 0:
+            return SimpleNamespace(
+                certificates=[
+                    FakeItem(
+                        orderbookId="1",
+                        name="INCOMPLETE",
+                        direction="long",
+                        issuer="Issuer",
+                    )
+                ],
+                totalNumberOfOrderbooks=2,
+            )
+        return SimpleNamespace(certificates=[], totalNumberOfOrderbooks=2)
 
     async def filter_warrants(self, request):
         return SimpleNamespace(warrants=[], totalNumberOfOrderbooks=0)
@@ -238,11 +240,11 @@ def test_windows_catalog_task_is_daily_limited_and_uses_local_appdata() -> None:
     )
 
     assert "local_appdata_dir()" in launcher
-    assert 'instrument-catalog.sqlite3' in launcher
+    assert "instrument-catalog.sqlite3" in launcher
     assert "refresh_instrument_catalog(CATALOG_FILE)" in launcher
     assert "subprocess" not in launcher
 
-    assert 'AvanzaMcpInstrumentCatalogRefresh' in installer
+    assert "AvanzaMcpInstrumentCatalogRefresh" in installer
     assert "New-ScheduledTaskTrigger -Daily" in installer
     assert "-StartWhenAvailable" in installer
     assert "-RunLevel Limited" in installer
