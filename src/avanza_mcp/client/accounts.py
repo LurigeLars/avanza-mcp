@@ -57,7 +57,7 @@ _FORUM = "/_api/market-guide/forum/{order_book_id}"
 _INSIDER_TRANSACTIONS = "/_api/market-insider-transactions/transactions/{order_book_id}"
 _DEALS = "/_api/trading/rest/deals"
 _ORDERS = "/_api/trading/rest/orders"
-_STOP_LOSSES = "/_api/trading/stoploss"
+_STOP_LOSSES = "/_api/trading/stoploss/"
 
 
 _ALLOWED_ACCOUNT_EXACT = {
@@ -202,7 +202,15 @@ class AccountClient:
     async def price_alerts(self, order_book_id: str) -> PriceAlerts:
         if not order_book_id.isascii() or not order_book_id.isdecimal():
             raise ValueError("order_book_id must contain only ASCII numeric digits")
-        values = await self._get_list(_PRICE_ALERTS.format(order_book_id=order_book_id))
+        try:
+            values = await self._get_list(
+                _PRICE_ALERTS.format(order_book_id=order_book_id)
+            )
+        except AccountReadError as error:
+            # Avanza returns 404 when a valid order book has no configured alerts.
+            if str(error) == "http_404":
+                return PriceAlerts(alerts=[])
+            raise
         return PriceAlerts(
             alerts=[
                 PriceAlert(
