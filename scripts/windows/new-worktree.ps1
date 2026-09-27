@@ -45,6 +45,12 @@ if (-not $Repo) {
     throw "Could not resolve the repository root."
 }
 
+$currentBranchProbe = Invoke-Git -Arguments @("-C", $Repo, "branch", "--show-current")
+$currentBranch = ($currentBranchProbe.Output | Select-Object -First 1).Trim()
+if ($currentBranch -ne "main") {
+    throw "Run this helper from the canonical runtime checkout while it is on main. Current branch: '$currentBranch'"
+}
+
 if ($Branch -eq "main") {
     throw "The canonical runtime checkout keeps main. Create or attach a non-main worktree branch instead."
 }
