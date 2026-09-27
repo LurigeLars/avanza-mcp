@@ -255,3 +255,45 @@ async def test_stale_leveraged_catalog_falls_back_to_avanza_search(
     data = result.structured_content
     assert [hit["order_book_id"] for hit in data["hits"]] == ["1360525"]
     upstream.post.assert_awaited_once()
+
+
+async def test_exact_lookup_prefers_fresh_leveraged_catalog(
+    upstream, tmp_path, monkeypatch
+):
+    path = tmp_path / "instrument-catalog.sqlite3"
+    InstrumentCatalog(path).replace_all(
+        [
+            CatalogInstrument(
+                product_type="warrant",
+                order_book_id="907742",
+                name="MINI L NVIDIA AVA 13",
+                direction="long",
+                issuer="Morgan Stanley",
+                sub_type="MINI_FUTURE",
+                country_code="SE",
+                marketplace_code=None,
+                underlying_order_book_id="4478",
+                underlying_name="NVIDIA",
+                underlying_instrument_type="STOCK",
+                underlying_country_code="US",
+            )
+        ],
+        refreshed_at=datetime.now(timezone.utc),
+    )
+    monkeypatch.setenv("AVANZA_MCP_INSTRUMENT_CATALOG", str(path))
+
+    async with Client(mcp) as client:
+        result = await client.call_tool(
+            "get_instrument_by_order_book_id",
+            {"order_book_id": "907742"},
+        )
+
+    assert result.structured_content == {
+        "order_book_id": "907742",
+        "name": "MINI L NVIDIA AVA 13",
+        "type": "WARRANT",
+        "exchange": None,
+        "isin": None,
+        "currency": None,
+    }
+    upstream.post.assert_not_awaited()
