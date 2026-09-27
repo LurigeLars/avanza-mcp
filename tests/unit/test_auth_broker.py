@@ -273,8 +273,8 @@ async def test_market_family_backoff_expires(monkeypatch):
             {"ok": True, "result": {"ok": True}},
         ]
     )
-    clock = iter([100.0, 120.0, 161.0])
-    monkeypatch.setattr("avanza_mcp.auth.broker.monotonic", lambda: next(clock))
+    now = [100.0]
+    monkeypatch.setattr("avanza_mcp.auth.broker.monotonic", lambda: now[0])
     try:
         assert (
             await broker.market_request(
@@ -284,6 +284,7 @@ async def test_market_family_backoff_expires(monkeypatch):
             )
             is None
         )
+        now[0] = 120.0
         assert (
             await broker.market_request(
                 "POST",
@@ -292,6 +293,7 @@ async def test_market_family_backoff_expires(monkeypatch):
             )
             is None
         )
+        now[0] = 161.0
         retried = await broker.market_request(
             "POST",
             "/_api/market-warrant-filter/",
