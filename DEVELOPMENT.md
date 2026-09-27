@@ -26,6 +26,40 @@ launches a subprocess, use its documented configuration format. A common format 
 
 Do not write diagnostic output to stdout on stdio transport.
 
+## Parallel development with worktrees
+
+Keep the canonical Windows checkout (for example `C:\\ClaudeCode\\avanza-mcp`) on
+`main`. The scheduled Avanza MCP runtime resolves code from that path, so parallel
+development chats must not switch it to feature or benchmark branches.
+
+Use a separate Git worktree per parallel branch:
+
+```powershell
+Set-Location "C:\ClaudeCode\avanza-mcp"
+
+pwsh -File scripts/windows/new-worktree.ps1 `
+  -Branch benchmark/leveraged-upstream-page-500-20260927 `
+  -Name leveraged-benchmark
+```
+
+The helper fetches `origin`, refuses `main`, refuses a branch already checked out
+elsewhere, and creates the worktree under
+`C:\ClaudeCode\avanza-mcp-worktrees\<name>` by default. If the branch exists only
+on `origin`, it creates the local tracking branch automatically.
+
+For a new branch that does not exist yet:
+
+```powershell
+pwsh -File scripts/windows/new-worktree.ps1 `
+  -Branch feat/example `
+  -Name example `
+  -Create
+```
+
+`-Create` starts from `origin/main` unless `-CreateFrom` is supplied. Give each
+parallel chat its worktree path explicitly and keep runtime restarts, `main` pulls,
+and the local `compose.public.yaml` override in the canonical checkout only.
+
 For loopback HTTP using the FastMCP CLI:
 
 ```bash

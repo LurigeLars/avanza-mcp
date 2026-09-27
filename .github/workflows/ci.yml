@@ -67,5 +67,24 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --locked --all-extras
+      - name: Parse Windows PowerShell scripts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Get-ChildItem scripts/windows -Filter *.ps1 | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName,
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -gt 0) {
+              $messages = $errors | ForEach-Object {
+                "$($_.Extent.File):$($_.Extent.StartLineNumber): $($_.Message)"
+              }
+              throw ($messages -join [Environment]::NewLine)
+            }
+          }
       - name: Verify Windows launcher lifecycle
         run: uv run --locked pytest -q tests/unit/test_windows_launchers.py tests/unit/test_windows_job_object.py

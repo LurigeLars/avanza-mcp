@@ -108,8 +108,8 @@ async def get_stock_analysis(
 async def get_stock_quote(ctx: Context, order_book_id: OrderBookId) -> Quote:
     """Get latest available stock prices and trading data, without company details.
 
-    Not guaranteed real-time; inspect isRealTime and upstream timestamps.
-    Null is unknown; zero is a reported value.
+    isRealTime is an upstream feed flag, not a freshness guarantee. Inspect quote.freshness
+    source ages before treating bid/ask or last as current. Null is unknown; zero is reported.
     """
     with api_errors():
         return await MarketDataService(ctx.lifespan_context["client"]).get_stock_quote(

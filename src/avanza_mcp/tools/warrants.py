@@ -60,7 +60,7 @@ async def filter_warrants(
 
 @mcp.tool(annotations=READ_ONLY)
 async def get_warrant_info(ctx: Context, order_book_id: OrderBookId) -> WarrantInfo:
-    """Get warrant identity and latest available market data, not guaranteed real-time."""
+    """Get warrant identity and quote with explicit freshness/source-age metadata."""
     with api_errors():
         return await MarketDataService(ctx.lifespan_context["client"]).get_warrant_info(
             order_book_id
