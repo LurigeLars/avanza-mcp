@@ -59,6 +59,10 @@ class TestAvanzaClientInit:
         assert client._max_keepalive_connections == 5
         assert client._max_retries == 3
         assert client._request_timeout == 30.0
+        assert client._max_in_flight_requests == 4
+        assert client._min_request_interval == 0.125
+        assert client._request_jitter == 0.025
+        assert client._rate_limit_cooldown == 5.0
 
     def test_custom_values(self):
         """Test custom configuration values."""
@@ -779,3 +783,126 @@ async def test_post_public_bypasses_authenticated_session_reuse():
     assert route.call_count == 1
     assert provider_calls == 0
     assert "x-securitytoken" not in route.calls.last.request.headers
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"max_in_flight_requests": 0}, "max_in_flight_requests"),
+        ({"max_in_flight_requests": True}, "max_in_flight_requests"),
+        ({"min_request_interval": -0.1}, "min_request_interval"),
+        ({"request_jitter": float("inf")}, "request_jitter"),
+        ({"rate_limit_cooldown": -1.0}, "rate_limit_cooldown"),
+    ],
+)
+def test_invalid_request_governor_configuration(kwargs, message):
+    with pytest.raises(ValueError, match=message):
+        AvanzaClient(**kwargs)
+
+
+@pytest.mark.asyncio
+async def test_request_governor_bounds_total_upstream_concurrency():
+    active = 0
+    peak = 0
+    active_lock = asyncio.Lock()
+
+    async def fake_send(*_args, **_kwargs):
+        nonlocal active, peak
+        async with active_lock:
+            active += 1
+            peak = max(peak, active)
+        await asyncio.sleep(0.02)
+        async with active_lock:
+            active -= 1
+        return httpx.Response(200, json={"ok": True}), False
+
+    client = AvanzaClient(
+        base_url="https://test.avanza.se",
+        max_retries=1,
+        max_in_flight_requests=2,
+        min_request_interval=0,
+        request_jitter=0,
+    )
+
+    async with client:
+        client._send_request_unpaced = AsyncMock(side_effect=fake_send)
+        results = await asyncio.gather(*(client.get("/test") for _ in range(6)))
+
+    assert all(result == {"ok": True} for result in results)
+    assert peak == 2
+
+
+@pytest.mark.asyncio
+async def test_request_governor_spaces_request_starts():
+    starts = []
+
+    async def fake_send(*_args, **_kwargs):
+        starts.append(asyncio.get_running_loop().time())
+        return httpx.Response(200, json={"ok": True}), False
+
+    client = AvanzaClient(
+        base_url="https://test.avanza.se",
+        max_retries=1,
+        max_in_flight_requests=4,
+        min_request_interval=0.02,
+        request_jitter=0,
+    )
+
+    async with client:
+        client._send_request_unpaced = AsyncMock(side_effect=fake_send)
+        await asyncio.gather(*(client.get("/test") for _ in range(3)))
+
+    assert len(starts) == 3
+    assert starts[1] - starts[0] >= 0.015
+    assert starts[2] - starts[1] >= 0.015
+
+
+@pytest.mark.asyncio
+async def test_request_governor_honors_rate_limit_cooldown():
+    starts = []
+
+    async def fake_send(*_args, **_kwargs):
+        starts.append(asyncio.get_running_loop().time())
+        return httpx.Response(200, json={"ok": True}), False
+
+    client = AvanzaClient(
+        base_url="https://test.avanza.se",
+        max_retries=1,
+        min_request_interval=0,
+        request_jitter=0,
+    )
+
+    async with client:
+        client._send_request_unpaced = AsyncMock(side_effect=fake_send)
+        loop = asyncio.get_running_loop()
+        before = loop.time()
+        client._note_rate_limit(0.03)
+        await client.get("/test")
+
+    assert starts[0] - before >= 0.025
+
+
+@pytest.mark.asyncio
+async def test_429_retry_after_extends_shared_cooldown():
+    client = AvanzaClient(
+        base_url="https://test.avanza.se",
+        max_retries=1,
+        min_request_interval=0,
+        request_jitter=0,
+    )
+
+    async with client:
+        client._client.request = AsyncMock(
+            return_value=httpx.Response(
+                429,
+                json={"message": "Rate limited"},
+                headers={"Retry-After": "2"},
+            )
+        )
+        loop = asyncio.get_running_loop()
+        with pytest.raises(AvanzaRateLimitError) as exc:
+            await client.get("/test")
+        remaining = client._rate_limit_until - loop.time()
+
+    assert exc.value.retry_after == 2
+    assert 1.8 <= remaining <= 2.0
