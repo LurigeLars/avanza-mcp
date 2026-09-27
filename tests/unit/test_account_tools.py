@@ -58,7 +58,12 @@ async def test_accounts_holdings_and_transactions_are_explicit_and_bounded():
                     "withOrderbook": [
                         {
                             "id": "p1",
-                            "account": {"id": 1},
+                            "account": {
+                                "id": 1,
+                                "name": "ISK",
+                                "type": "INVESTMENT_SAVINGS_ACCOUNT",
+                                "secretField": "must-not-leak",
+                            },
                             "instrument": {
                                 "id": 2,
                                 "name": "Synthetic",
@@ -109,7 +114,10 @@ async def test_accounts_holdings_and_transactions_are_explicit_and_bounded():
             from_date=date(2026, 1, 1), to_date=date(2026, 1, 31), limit=1
         )
 
-    assert accounts.accounts[0].balance.amount == "10.00"
+    assert accounts.accounts[0].account_id == "1"
+    assert accounts.accounts[0].name == "ISK"
+    assert accounts.accounts[0].account_type == "INVESTMENT_SAVINGS_ACCOUNT"
+    assert accounts.accounts[0].balance is None
     assert holdings.holdings[0].instrument.order_book_id == "3"
     assert holdings.cash_positions[0].balance.amount == "10"
     assert transactions.returned == 1 and transactions.truncated is True
@@ -119,7 +127,7 @@ async def test_accounts_holdings_and_transactions_are_explicit_and_bounded():
         "to": "2026-01-31",
     }
     output = accounts.model_dump_json() + transactions.model_dump_json()
-    assert "personalNumber" not in output and "noteId" not in output
+    assert "secretField" not in output and "noteId" not in output
 
 
 @respx.mock
@@ -379,35 +387,25 @@ async def test_unapproved_account_request_is_rejected_before_network():
 
 
 @respx.mock
-async def test_accounts_tolerate_optional_shape_drift_without_leaking_fields():
+async def test_accounts_project_only_minimal_position_account_fields():
     async def handler(request):
-        assert request.url.path.endswith("categorizedAccounts")
+        assert request.url.path.endswith("/position-data/positions")
         return httpx.Response(
             200,
             json={
-                "accounts": [
+                "withOrderbook": [
                     {
-                        "id": "a1",
-                        "name": {"defaultName": "ISK", "userDefinedName": None},
-                        "type": "INVESTERINGSSPARKONTO",
-                        "settings": None,
-                        "currencyBalances": None,
-                        "balance": {"value": 10, "unit": "SEK"},
-                        "totalValue": {"value": 20, "unit": "SEK"},
-                        "personalNumber": "must-not-leak",
-                    },
-                    {
-                        "accountId": "a2",
-                        "name": "Kapitalförsäkring",
-                        "accountType": "KAPITALFORSAKRING",
-                        "isHidden": True,
-                        "currencyBalances": [
-                            {"currency": "SEK", "balance": 5},
-                            None,
-                        ],
-                        "secretField": "must-not-leak",
-                    },
-                ]
+                        "account": {
+                            "id": "a1",
+                            "name": "ISK",
+                            "type": "INVESTERINGSSPARKONTO",
+                            "hasCredit": True,
+                            "personalNumber": "must-not-leak",
+                        }
+                    }
+                ],
+                "withoutOrderbook": [],
+                "cashPositions": [],
             },
         )
 
@@ -415,15 +413,17 @@ async def test_accounts_tolerate_optional_shape_drift_without_leaking_fields():
     async with client() as account_client:
         result = await account_client.accounts()
 
-    assert [item.account_id for item in result.accounts] == ["a1", "a2"]
+    assert len(result.accounts) == 1
+    assert result.accounts[0].account_id == "a1"
     assert result.accounts[0].name == "ISK"
+    assert result.accounts[0].account_type == "INVESTERINGSSPARKONTO"
     assert result.accounts[0].hidden is False
-    assert result.accounts[1].name == "Kapitalförsäkring"
-    assert result.accounts[1].account_type == "KAPITALFORSAKRING"
-    assert result.accounts[1].hidden is True
-    assert result.accounts[1].currency_balances[0].amount == "5"
-    assert "must-not-leak" not in result.model_dump_json()
-
+    assert result.accounts[0].balance is None
+    assert result.accounts[0].currency_balances == []
+    output = result.model_dump_json()
+    assert "hasCredit" not in output
+    assert "personalNumber" not in output
+    assert "must-not-leak" not in output
 
 
 @respx.mock
