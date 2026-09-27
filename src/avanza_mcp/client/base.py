@@ -503,6 +503,22 @@ class AvanzaClient:
         """
         return await self._request("POST", path, json=json)
 
+    async def post_public(
+        self, path: str, json: dict[str, Any] | None = None
+    ) -> dict[str, Any] | list[Any]:
+        """Send one read-only POST without reusing authenticated session state.
+
+        Use this only for endpoints whose response does not need login state. It
+        shares the normal public connection pool, retry policy, validation, and
+        error handling while bypassing the authenticated delegate/client lock.
+        """
+        return await self._request(
+            "POST",
+            path,
+            json=json,
+            allow_authenticated_public=False,
+        )
+
     async def _request(
         self,
         method: str,
@@ -510,13 +526,17 @@ class AvanzaClient:
         *,
         params: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
+        allow_authenticated_public: bool = True,
     ) -> dict[str, Any] | list[Any]:
         """Send a request through the shared retry and response pipeline."""
         request_id = str(uuid.uuid4())[:8]
         post_prefix = "POST " if method == "POST" else ""
 
         auth_market_kind = _authenticated_market_kind(method, path)
-        auth_public_allowed = authenticated_public_request_allowed(method, path)
+        auth_public_allowed = (
+            allow_authenticated_public
+            and authenticated_public_request_allowed(method, path)
+        )
 
         @retry(
             retry=retry_if_exception(

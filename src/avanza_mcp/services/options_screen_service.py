@@ -478,7 +478,9 @@ class OptionsScreenService:
             limit=limit,
             sortBy=SortBy(field="strikePrice", order="asc"),
         )
-        return _dump(await self._market.list_futures_forwards(request))
+        return _dump(
+            await self._market.list_futures_forwards(request, public_only=True)
+        )
 
     async def _discover(
         self,

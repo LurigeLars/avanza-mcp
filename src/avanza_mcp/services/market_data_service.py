@@ -277,11 +277,15 @@ class MarketDataService:
     # === Futures/Forwards ===
 
     async def list_futures_forwards(
-        self, request: FutureForwardMatrixRequest
+        self,
+        request: FutureForwardMatrixRequest,
+        *,
+        public_only: bool = False,
     ) -> FutureForwardMatrixResponse:
         """List futures and forwards using the matrix endpoint."""
         endpoint = PublicEndpoint.FUTURE_FORWARD_MATRIX.value
-        raw_data = await self._client.post(
+        post = self._client.post_public if public_only else self._client.post
+        raw_data = await post(
             endpoint,
             json=request.model_dump(mode="json", by_alias=True, exclude_none=True),
         )

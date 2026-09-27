@@ -754,3 +754,28 @@ def test_authenticated_public_market_family_normalizes_dynamic_ids():
     assert authenticated_public_request_family(
         "POST", "/_api/trading/rest/orders"
     ) is None
+
+
+@respx.mock
+async def test_post_public_bypasses_authenticated_session_reuse():
+    active = SessionMaterial((), "sentinel-token")
+    provider_calls = 0
+
+    def provider():
+        nonlocal provider_calls
+        provider_calls += 1
+        return active
+
+    path = PublicEndpoint.FUTURE_FORWARD_MATRIX.value
+    route = respx.post(f"https://www.avanza.se{path}").mock(
+        return_value=httpx.Response(200, json={"matchedOptions": []})
+    )
+    client = AvanzaClient(session_provider=provider, max_retries=1)
+
+    async with client:
+        result = await client.post_public(path, json={"filter": {}})
+
+    assert result == {"matchedOptions": []}
+    assert route.call_count == 1
+    assert provider_calls == 0
+    assert "x-securitytoken" not in route.calls.last.request.headers
