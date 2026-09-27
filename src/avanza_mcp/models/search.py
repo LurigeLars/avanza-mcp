@@ -134,7 +134,7 @@ class InstrumentSearch(BaseModel):
         description="Number of upstream hits examined, including discarded hits; at most 50."
     )
     upstreamTotalNumberOfHits: int = Field(
-        description="Upstream total before local validation/filtering; may include FAQ or other types."
+        description="Source total before local validation/filtering. For catalog-backed leveraged search, this is the bounded catalog match count examined."
     )
     hits: list[InstrumentHit]
     searchQuery: str
