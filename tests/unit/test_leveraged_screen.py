@@ -227,7 +227,18 @@ async def test_remaining_warrant_pages_use_bounded_concurrency_after_first_page(
 
     result = await service.screen("4478", "long", ["warrant"], 1)
 
-    assert {call.offset for call in fake.warrant_calls} == {0, 100, 200, 300, 400, 500, 600, 700, 800, 900}
+    assert {call.offset for call in fake.warrant_calls} == {
+        0,
+        100,
+        200,
+        300,
+        400,
+        500,
+        600,
+        700,
+        800,
+        900,
+    }
     assert fake.max_in_flight == 8
     assert result["snapshot"]["scanned_count"] == 901
     assert result["families"]["warrant"]["scanned_count"] == 901
