@@ -9,8 +9,11 @@ from time import perf_counter
 from typing import Any, Literal
 from uuid import uuid4
 
+from pydantic import Field
+
 from ..client.base import AvanzaClient
 from ..client.exceptions import AvanzaError
+from ..instrument_catalog import InstrumentCatalog, fresh_default_instrument_catalog
 from ..models.certificate import CertificateFilter, CertificateFilterRequest
 from ..models.filter import SortBy
 from ..models.warrant import WarrantFilter, WarrantFilterRequest
@@ -18,10 +21,22 @@ from .market_data_service import MarketDataService
 
 ProductType = Literal["certificate", "warrant"]
 Direction = Literal["long", "short"]
-_PAGE_SIZE = 100
+_FALLBACK_REQUEST_SIZE = 500
 _MAX_CONCURRENT_PAGES = 8
 _SNAPSHOT_TTL = timedelta(minutes=10)
 _RANKING = "two_way_quote, spread_percent_asc, turnover_desc"
+
+
+class _LeveragedCertificateFilterRequest(CertificateFilterRequest):
+    """Internal larger page request; public filter tools remain capped at 100."""
+
+    limit: int = Field(default=20, ge=1)
+
+
+class _LeveragedWarrantFilterRequest(WarrantFilterRequest):
+    """Internal larger page request; public filter tools remain capped at 100."""
+
+    limit: int = Field(default=20, ge=1)
 
 
 def _number(value: Any) -> float | None:
@@ -376,8 +391,32 @@ def _page(snapshot: _Snapshot, offset: int, page_size: int) -> dict[str, Any]:
 
 
 class LeveragedScreenService:
-    def __init__(self, client: AvanzaClient) -> None:
+    def __init__(
+        self,
+        client: AvanzaClient,
+        catalog: InstrumentCatalog | None = None,
+    ) -> None:
         self._market = MarketDataService(client)
+        self._catalog = catalog if catalog is not None else fresh_default_instrument_catalog()
+
+    def _request_size(
+        self,
+        underlying_order_book_id: str,
+        direction: Direction,
+        product_type: ProductType,
+    ) -> int:
+        if self._catalog is not None:
+            try:
+                count = self._catalog.count_by_underlying(
+                    underlying_order_book_id,
+                    direction=direction,
+                    product_types=[product_type],
+                )
+            except (OSError, ValueError):
+                count = 0
+            if count > 0:
+                return count
+        return _FALLBACK_REQUEST_SIZE
 
     async def _collect_certificates(
         self,
@@ -386,16 +425,20 @@ class LeveragedScreenService:
         filters: ScreenFilters,
         _legacy_limit: int | None = None,
     ) -> dict[str, Any]:
+        request_size = self._request_size(
+            underlying_order_book_id, direction, "certificate"
+        )
+
         async def fetch(offset: int):
             return await self._market.filter_certificates(
-                CertificateFilterRequest(
+                _LeveragedCertificateFilterRequest(
                     filter=CertificateFilter(
                         directions=[direction],
                         issuers=list(filters.issuers),
                         underlyingInstruments=[underlying_order_book_id],
                     ),
                     offset=offset,
-                    limit=_PAGE_SIZE,
+                    limit=request_size,
                     sortBy=SortBy(field="name", order="asc"),
                 )
             )
@@ -404,14 +447,26 @@ class LeveragedScreenService:
         items: list[Any] = list(first.certificates)
         total = first.totalNumberOfOrderbooks
 
-        if total is not None and len(first.certificates) == _PAGE_SIZE:
+        if total is not None and len(first.certificates) < total:
+            # Avanza may accept the requested page size or cap it server-side.
+            # Advance by the number of rows actually returned to avoid gaps.
+            page_step = len(first.certificates)
+            if page_step <= 0:
+                return {
+                    "products": [],
+                    "upstream_total": total,
+                    "scanned_count": 0,
+                    "quote_complete_count": 0,
+                    "available_issuers": _filter_option_display_values(first, "issuers"),
+                    "available_sub_types": [],
+                }
             semaphore = asyncio.Semaphore(_MAX_CONCURRENT_PAGES)
 
             async def fetch_bounded(offset: int):
                 async with semaphore:
                     return await fetch(offset)
 
-            offsets = list(range(_PAGE_SIZE, total, _PAGE_SIZE))
+            offsets = list(range(page_step, total, page_step))
             if offsets:
                 responses = await asyncio.gather(
                     *(fetch_bounded(offset) for offset in offsets)
@@ -419,8 +474,9 @@ class LeveragedScreenService:
                 for response in responses:
                     items.extend(response.certificates)
         else:
-            offset = len(first.certificates)
-            while first.certificates and (total is None or offset < total):
+            page_step = len(first.certificates)
+            offset = page_step
+            while first.certificates and page_step > 0 and (total is None or offset < total):
                 response = await fetch(offset)
                 page = response.certificates
                 if not page:
@@ -429,7 +485,7 @@ class LeveragedScreenService:
                 if response.totalNumberOfOrderbooks is not None:
                     total = response.totalNumberOfOrderbooks
                 offset += len(page)
-                if len(page) < _PAGE_SIZE:
+                if len(page) < page_step:
                     break
         products = [_normalize_candidate(item, "certificate") for item in items]
         return {
@@ -450,9 +506,13 @@ class LeveragedScreenService:
         filters: ScreenFilters,
         _legacy_limit: int | None = None,
     ) -> dict[str, Any]:
+        request_size = self._request_size(
+            underlying_order_book_id, direction, "warrant"
+        )
+
         async def fetch(offset: int):
             return await self._market.filter_warrants(
-                WarrantFilterRequest(
+                _LeveragedWarrantFilterRequest(
                     filter=WarrantFilter(
                         directions=[direction],
                         subTypes=list(filters.sub_types),
@@ -460,7 +520,7 @@ class LeveragedScreenService:
                         underlyingInstruments=[underlying_order_book_id],
                     ),
                     offset=offset,
-                    limit=_PAGE_SIZE,
+                    limit=request_size,
                     sortBy=SortBy(field="name", order="asc"),
                 )
             )
@@ -469,14 +529,26 @@ class LeveragedScreenService:
         items: list[Any] = list(first.warrants)
         total = first.totalNumberOfOrderbooks
 
-        if total is not None and len(first.warrants) == _PAGE_SIZE:
+        if total is not None and len(first.warrants) < total:
+            # Avanza may accept the requested page size or cap it server-side.
+            # Advance by the number of rows actually returned to avoid gaps.
+            page_step = len(first.warrants)
+            if page_step <= 0:
+                return {
+                    "products": [],
+                    "upstream_total": total,
+                    "scanned_count": 0,
+                    "quote_complete_count": 0,
+                    "available_issuers": _filter_option_display_values(first, "issuers"),
+                    "available_sub_types": _filter_option_display_values(first, "subTypes"),
+                }
             semaphore = asyncio.Semaphore(_MAX_CONCURRENT_PAGES)
 
             async def fetch_bounded(offset: int):
                 async with semaphore:
                     return await fetch(offset)
 
-            offsets = list(range(_PAGE_SIZE, total, _PAGE_SIZE))
+            offsets = list(range(page_step, total, page_step))
             if offsets:
                 responses = await asyncio.gather(
                     *(fetch_bounded(offset) for offset in offsets)
@@ -484,8 +556,9 @@ class LeveragedScreenService:
                 for response in responses:
                     items.extend(response.warrants)
         else:
-            offset = len(first.warrants)
-            while first.warrants and (total is None or offset < total):
+            page_step = len(first.warrants)
+            offset = page_step
+            while first.warrants and page_step > 0 and (total is None or offset < total):
                 response = await fetch(offset)
                 page = response.warrants
                 if not page:
@@ -494,7 +567,7 @@ class LeveragedScreenService:
                 if response.totalNumberOfOrderbooks is not None:
                     total = response.totalNumberOfOrderbooks
                 offset += len(page)
-                if len(page) < _PAGE_SIZE:
+                if len(page) < page_step:
                     break
         products = [_normalize_candidate(item, "warrant") for item in items]
         return {

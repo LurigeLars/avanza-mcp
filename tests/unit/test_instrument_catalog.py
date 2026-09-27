@@ -69,6 +69,13 @@ def test_catalog_replaces_atomically_and_supports_local_discovery(tmp_path: Path
     search = catalog.search("Morgan NVIDIA")
     assert [item["order_book_id"] for item in search] == ["202"]
 
+    assert catalog.count_by_underlying(
+        "4478", direction="long", product_types=["certificate", "warrant"]
+    ) == 2
+    assert catalog.count_by_underlying(
+        "4478", product_types=["certificate"]
+    ) == 1
+
     stats = catalog.stats()
     assert stats["row_count"] == 3
     assert stats["refreshed_at"] == "2026-09-27T12:00:00+00:00"

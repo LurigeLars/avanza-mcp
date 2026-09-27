@@ -13,7 +13,7 @@ import statistics
 import time
 
 from avanza_mcp.client import AvanzaClient
-from avanza_mcp.services.leveraged_screen_service import LeveragedScreenService
+from avanza_mcp.services.leveraged_screen_service import LeveragedScreenService, ScreenFilters
 
 
 def _availability(products: list[dict]) -> dict[str, int]:
@@ -56,11 +56,12 @@ async def _run(
         for index in range(repeats):
             if index % 2 == 0:
                 start = time.perf_counter()
+                filters = ScreenFilters()
                 await service._collect_certificates(
-                    underlying_order_book_id, direction
+                    underlying_order_book_id, direction, filters
                 )
                 await service._collect_warrants(
-                    underlying_order_book_id, direction
+                    underlying_order_book_id, direction, filters
                 )
                 sequential_ms.append((time.perf_counter() - start) * 1000)
 
@@ -83,11 +84,12 @@ async def _run(
                 aggregate_ms.append((time.perf_counter() - start) * 1000)
 
                 start = time.perf_counter()
+                filters = ScreenFilters()
                 await service._collect_certificates(
-                    underlying_order_book_id, direction
+                    underlying_order_book_id, direction, filters
                 )
                 await service._collect_warrants(
-                    underlying_order_book_id, direction
+                    underlying_order_book_id, direction, filters
                 )
                 sequential_ms.append((time.perf_counter() - start) * 1000)
 

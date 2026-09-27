@@ -230,6 +230,7 @@ async def test_remaining_warrant_pages_use_bounded_concurrency_after_first_page(
 
     result = await service.screen("4478", "long", ["warrant"], 1)
 
+    assert fake.warrant_calls[0].limit == 500
     assert {call.offset for call in fake.warrant_calls} == {
         0,
         100,
@@ -245,6 +246,54 @@ async def test_remaining_warrant_pages_use_bounded_concurrency_after_first_page(
     assert fake.max_in_flight == 8
     assert result["snapshot"]["scanned_count"] == 901
     assert result["families"]["warrant"]["scanned_count"] == 901
+    assert result["pagination"]["total"] == 901
+
+
+class CatalogCount:
+    def __init__(self, count):
+        self.count = count
+        self.calls = []
+
+    def count_by_underlying(self, underlying_order_book_id, *, direction=None, product_types=None):
+        self.calls.append((underlying_order_book_id, direction, tuple(product_types or ())))
+        return self.count
+
+
+class LargePageWarrantMarket:
+    def __init__(self):
+        self.warrant_calls = []
+
+    async def filter_warrants(self, request):
+        self.warrant_calls.append(request)
+        count = min(request.limit, max(0, 901 - request.offset))
+        return SimpleNamespace(
+            warrants=[
+                FakeItem(
+                    orderbookId=str(request.offset + index),
+                    name=f"ROW {request.offset + index:04d}",
+                    direction="long",
+                    issuer="Issuer A",
+                    buyPrice=10.0,
+                    sellPrice=10.1,
+                )
+                for index in range(count)
+            ],
+            totalNumberOfOrderbooks=901,
+        )
+
+
+@pytest.mark.asyncio
+async def test_large_upstream_page_reduces_request_count_when_supported():
+    catalog = CatalogCount(901)
+    service = LeveragedScreenService(object(), catalog=catalog)
+    fake = LargePageWarrantMarket()
+    service._market = fake
+
+    result = await service.screen("4478", "long", ["warrant"], 1)
+
+    assert [(call.offset, call.limit) for call in fake.warrant_calls] == [(0, 901)]
+    assert catalog.calls == [("4478", "long", ("warrant",))]
+    assert result["snapshot"]["scanned_count"] == 901
     assert result["pagination"]["total"] == 901
 
 
@@ -359,6 +408,25 @@ async def test_screen_tool_has_unbounded_page_size_and_filter_contract():
         "min_turnover",
     ):
         assert field in props
+
+
+@pytest.mark.asyncio
+async def test_public_filter_tools_remain_capped_at_100_rows():
+    async with Client(mcp) as client:
+        tools = {item.name: item for item in await client.list_tools()}
+
+    assert tools["filter_certificates"].input_schema["properties"]["limit"]["maximum"] == 100
+    assert tools["filter_warrants"].input_schema["properties"]["limit"]["maximum"] == 100
+
+
+def test_internal_leveraged_request_has_no_artificial_maximum():
+    from avanza_mcp.services.leveraged_screen_service import (
+        _LeveragedCertificateFilterRequest,
+        _LeveragedWarrantFilterRequest,
+    )
+
+    assert "maximum" not in _LeveragedCertificateFilterRequest.model_json_schema()["properties"]["limit"]
+    assert "maximum" not in _LeveragedWarrantFilterRequest.model_json_schema()["properties"]["limit"]
 
 
 class FilterOptionsWarrantMarket:
