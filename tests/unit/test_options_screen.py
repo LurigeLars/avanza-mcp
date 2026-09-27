@@ -254,7 +254,21 @@ async def test_option_enrichment_pages_existing_snapshot_without_matrix_refetch(
     assert enriched["enrichment"]["not_found_count"] == 0
     assert enriched["enrichment"]["atomic"] is False
     assert enriched["options"][0]["market_data"]["instrument_type"] == "OPTION"
-    assert enriched["options"][0]["market_data"]["quote"] == {
+    quote = enriched["options"][0]["market_data"]["quote"]
+    assert {
+        key: quote[key]
+        for key in (
+            "bid",
+            "ask",
+            "last",
+            "upstream_spread_percent",
+            "total_value_traded",
+            "total_volume_traded",
+            "updated",
+            "is_real_time",
+            "spread_percent_from_quote_prices",
+        )
+    } == {
         "bid": 10.0,
         "ask": 10.5,
         "last": 10.2,
@@ -265,7 +279,14 @@ async def test_option_enrichment_pages_existing_snapshot_without_matrix_refetch(
         "is_real_time": False,
         "spread_percent_from_quote_prices": 4.878049,
     }
-    assert enriched["options"][0]["market_data"]["underlying_quote"]["is_real_time"] is False
+    assert quote["freshness"]["source_updated_at"] == 123456789
+    assert quote["freshness"]["bid_ask_updated_at"] == 123456789
+    assert quote["freshness"]["upstream_is_real_time"] is False
+    assert quote["freshness"]["real_time_flag_is_freshness_guarantee"] is False
+    underlying_quote = enriched["options"][0]["market_data"]["underlying_quote"]
+    assert underlying_quote["is_real_time"] is False
+    assert underlying_quote["freshness"]["source_updated_at"] == 123456700
+    assert underlying_quote["freshness"]["real_time_flag_is_freshness_guarantee"] is False
 
 
 @pytest.mark.asyncio
