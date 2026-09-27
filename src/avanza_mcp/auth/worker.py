@@ -7,11 +7,10 @@ import asyncio
 import json
 import os
 import sys
-from typing import TextIO
 import threading
 import time
 from datetime import date
-from typing import Any
+from typing import Any, TextIO
 
 from ..client.accounts import AccountAuthExpired, AccountClient, AccountReadError
 from ..client.bankid import BankIDClient, BankIDError, SessionMaterial
@@ -148,6 +147,7 @@ def _isolate_protocol_stdout() -> None:
     global _PROTOCOL_STDOUT
     if _PROTOCOL_STDOUT is not None:
         return
+    sys.stdout.flush()
     protocol_fd = os.dup(sys.stdout.fileno())
     _PROTOCOL_STDOUT = os.fdopen(
         protocol_fd,
