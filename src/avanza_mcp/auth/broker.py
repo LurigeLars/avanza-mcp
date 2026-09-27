@@ -192,7 +192,11 @@ class AuthProcessBroker:
                             return None
                         response = await self._command(process, command)
         except AuthWorkerOperationError:
-            return httpx.Response(502, content=b"")
+            # Public market-data tools are allowed to degrade to the anonymous
+            # endpoint when the isolated auth worker itself cannot serve the
+            # request. Auth expiry is handled explicitly below and never falls
+            # back silently.
+            return None
 
         if response.get("ok") is True:
             return httpx.Response(200, json=response.get("result"))
@@ -201,7 +205,11 @@ class AuthProcessBroker:
             return None
         if code in {"auth_required", "auth_expired"}:
             return httpx.Response(401, content=b"")
-        return httpx.Response(502, content=b"")
+        # Endpoint-specific authenticated failures (for example unsupported
+        # auth behavior or a credential-shaped upstream payload) must not break
+        # the existing public read-only tool. Returning None instructs the
+        # shared client to retry the same approved request anonymously.
+        return None
 
     async def aclose(self) -> None:
         if self._closed:
