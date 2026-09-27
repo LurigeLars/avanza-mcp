@@ -213,10 +213,10 @@ def _quote_freshness(quote: dict[str, Any]) -> dict[str, Any] | None:
         for key, value in {
             "observed_at": observed_at,
             "source_updated_at": source_updated_at,
-            "bid_ask_updated_at": source_updated_at,
+            "bid_ask_updated_at": None,
             "last_trade_at": last_trade_at,
             "source_update_age_ms": age(source_updated_at),
-            "bid_ask_age_ms": age(source_updated_at),
+            "bid_ask_age_ms": None,
             "last_trade_age_ms": age(last_trade_at),
             "upstream_is_real_time": quote.get("is_real_time"),
             "real_time_flag_is_freshness_guarantee": False,

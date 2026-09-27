@@ -81,10 +81,8 @@ class TestStockModels:
         assert quote.freshness.model_dump(mode="json", exclude_none=True) == {
             "observedAt": 2_000_000,
             "sourceUpdatedAt": 1_900_000,
-            "bidAskUpdatedAt": 1_900_000,
             "lastTradeAt": 1_500_000,
             "sourceUpdateAgeMs": 100_000,
-            "bidAskAgeMs": 100_000,
             "lastTradeAgeMs": 500_000,
             "upstreamIsRealTime": True,
             "realTimeFlagIsFreshnessGuarantee": False,

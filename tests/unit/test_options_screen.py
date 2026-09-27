@@ -280,12 +280,12 @@ async def test_option_enrichment_pages_existing_snapshot_without_matrix_refetch(
         "spread_percent_from_quote_prices": 4.878049,
     }
     assert quote["freshness"]["source_updated_at"] == 123456789
-    assert quote["freshness"]["bid_ask_updated_at"] == 123456789
     assert quote["freshness"]["upstream_is_real_time"] is False
     assert quote["freshness"]["real_time_flag_is_freshness_guarantee"] is False
     underlying_quote = enriched["options"][0]["market_data"]["underlying_quote"]
     assert underlying_quote["is_real_time"] is False
     assert underlying_quote["freshness"]["source_updated_at"] == 123456700
+    assert "bid_ask_updated_at" not in underlying_quote["freshness"]
     assert underlying_quote["freshness"]["real_time_flag_is_freshness_guarantee"] is False
 
 
