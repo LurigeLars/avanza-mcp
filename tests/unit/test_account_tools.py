@@ -477,6 +477,8 @@ async def test_accounts_use_trading_list_only_after_both_overview_surfaces_fail(
             return httpx.Response(200, json={"accounts": None})
         if request.url.path.endswith("/account-overview/accounts/list"):
             return httpx.Response(503, json={"error": "temporary"})
+        if request.url.path.endswith("/trading-critical/rest/lightweightaccounts"):
+            return httpx.Response(503, json={"error": "temporary"})
         if request.url.path.endswith("/trading-critical/rest/accounts"):
             return httpx.Response(
                 200,
@@ -503,6 +505,7 @@ async def test_accounts_use_trading_list_only_after_both_overview_surfaces_fail(
     assert requests == [
         "/_api/account-overview/overview/categorizedAccounts",
         "/_api/account-overview/accounts/list",
+        "/_api/trading-critical/rest/lightweightaccounts",
         "/_api/trading-critical/rest/accounts",
     ]
     assert result.accounts[0].currency_balances[0].amount == "123.45"
