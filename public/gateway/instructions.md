@@ -4,6 +4,7 @@ Avanza MCP provides public market data plus opt-in authenticated read-only Avanz
 - Authentication uses connect_avanza, which opens the BankID flow only in the user's local browser. Never ask the user to paste BankID data, QR payloads, cookies, X-SecurityToken values or other banking credentials into chat.
 - get_auth_status is safe connection-state metadata. Account tools require an authenticated session and fail closed when it expires.
 - Authenticated account tools expose accounts, holdings, transactions, watchlists, price alerts, portfolio insights, instrument news, insider transactions, active orders, executed deals and stop-loss state as read-only data.
+- For one current portfolio-state read, prefer get_portfolio_snapshot over separate accounts/holdings/orders/deals/stop-loss calls. It uses the same reviewed read-only endpoints in one isolated worker and keeps each activity list bounded.
 - get_credit_info, get_current_offers and get_forum_posts are intentionally not exposed.
 - Existing stock quote, order-book and recent-trades tools may reuse the authenticated session only for their exact approved stock endpoints. Preserve isRealTime, source timestamps and delay/freshness fields; never substitute anonymous delayed data after authenticated expiry.
 - Preserve listing identity, currency, source dates and delay flags; retrieval time is not a source timestamp.

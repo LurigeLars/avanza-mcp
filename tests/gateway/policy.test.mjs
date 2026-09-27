@@ -22,14 +22,15 @@ test('default public allowlist contains the current 37 read-only Avanza tools', 
   assert.equal(DEFAULT_ALLOWED_TOOLS.split(',').length, 37);
 });
 
-test('authenticated profile adds exactly the 14 approved account/session tools', () => {
+test('authenticated profile adds exactly the 15 approved account/session tools', () => {
   const allowed = parseAllowedTools('@authenticated');
-  assert.equal(AUTHENTICATED_EXTRA_TOOLS.split(',').length, 14);
-  assert.equal(AUTHENTICATED_ALLOWED_TOOLS.split(',').length, 51);
-  assert.equal(allowed.size, 51);
+  assert.equal(AUTHENTICATED_EXTRA_TOOLS.split(',').length, 15);
+  assert.equal(AUTHENTICATED_ALLOWED_TOOLS.split(',').length, 52);
+  assert.equal(allowed.size, 52);
   assert.equal(allowed.has('connect_avanza'), true);
   assert.equal(allowed.has('get_accounts'), true);
   assert.equal(allowed.has('get_active_orders'), true);
+  assert.equal(allowed.has('get_portfolio_snapshot'), true);
   assert.equal(allowed.has('get_stop_loss_orders'), true);
   assert.equal(allowed.has('get_credit_info'), false);
   assert.equal(allowed.has('get_current_offers'), false);

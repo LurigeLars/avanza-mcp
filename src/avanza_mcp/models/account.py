@@ -253,3 +253,15 @@ class StopLossOrder(PrivateModel):
 class StopLossOrders(PrivateModel):
     orders: list[StopLossOrder]
     truncated: bool
+
+
+class PortfolioSnapshot(PrivateModel):
+    accounts: list[Account]
+    holdings: list[Holding]
+    cash_positions: list[CashPosition]
+    active_orders: list[ActiveOrder]
+    active_orders_truncated: bool
+    deals: list[Deal]
+    deals_truncated: bool
+    stop_loss_orders: list[StopLossOrder]
+    stop_loss_orders_truncated: bool

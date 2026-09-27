@@ -25,6 +25,7 @@ from ..models.account import (
     InsiderTransactions,
     InstrumentNews,
     PortfolioInsights,
+    PortfolioSnapshot,
     PriceAlerts,
     StopLossOrders,
     Transactions,
@@ -285,6 +286,18 @@ def create_auth_server(broker: AuthProcessBroker | None = None) -> FastMCP:
             PortfolioInsights,
             "Avanza could not provide portfolio insights. Retry later.",
             {"time_period": time_period},
+        )
+
+    @server.tool(annotations=_READ_TOOL)
+    async def get_portfolio_snapshot(
+        limit: Annotated[int, Field(ge=1, le=100)] = 100,
+    ) -> PortfolioSnapshot:
+        """Get one bounded current account/portfolio state snapshot."""
+        return await account_result(
+            "portfolio_snapshot",
+            PortfolioSnapshot,
+            "Avanza could not provide a portfolio snapshot. Retry later.",
+            {"limit": limit},
         )
 
     @server.tool(annotations=_READ_TOOL)

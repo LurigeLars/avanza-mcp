@@ -57,7 +57,7 @@ async def test_auth_server_mounts_public_contract_and_adds_auth_tools():
     server = create_auth_server(broker)  # type: ignore[arg-type]
     async with Client(server) as client:
         tools = {tool.name for tool in await client.list_tools()}
-        assert len(tools) == 51
+        assert len(tools) == 52
         assert {
             "connect_avanza",
             "disconnect_avanza",
@@ -68,6 +68,7 @@ async def test_auth_server_mounts_public_contract_and_adds_auth_tools():
             "get_watchlists",
             "get_price_alerts",
             "get_portfolio_insights",
+            "get_portfolio_snapshot",
             "get_instrument_news",
             "get_insider_transactions",
             "get_active_orders",
@@ -243,3 +244,24 @@ async def test_account_tool_surfaces_only_fixed_broker_diagnostics(
     async with Client(create_auth_server(DiagnosticBroker())) as client:  # type: ignore[arg-type]
         with pytest.raises(ToolError, match=rf"Safe diagnostic: {diagnostic}"):
             await client.call_tool("get_watchlists", {})
+
+
+async def test_portfolio_snapshot_tool_is_bounded_and_delegates_once():
+    broker = FakeBroker()
+    broker.account_results["portfolio_snapshot"] = {
+        "accounts": [],
+        "holdings": [],
+        "cash_positions": [],
+        "active_orders": [],
+        "active_orders_truncated": False,
+        "deals": [],
+        "deals_truncated": False,
+        "stop_loss_orders": [],
+        "stop_loss_orders_truncated": False,
+    }
+
+    async with Client(create_auth_server(broker)) as client:  # type: ignore[arg-type]
+        result = await client.call_tool("get_portfolio_snapshot", {"limit": 25})
+
+    assert result.structured_content == broker.account_results["portfolio_snapshot"]
+    assert broker.account_calls == [("portfolio_snapshot", {"limit": 25})]

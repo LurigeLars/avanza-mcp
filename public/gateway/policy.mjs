@@ -51,6 +51,7 @@ export const AUTHENTICATED_EXTRA_TOOLS = [
   'get_watchlists',
   'get_price_alerts',
   'get_portfolio_insights',
+  'get_portfolio_snapshot',
   'get_instrument_news',
   'get_insider_transactions',
   'get_active_orders',

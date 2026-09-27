@@ -535,3 +535,124 @@ async def test_stop_loss_read_uses_canonical_trailing_slash():
 
     assert result.orders == []
     assert result.truncated is False
+
+
+@respx.mock
+async def test_portfolio_snapshot_reuses_positions_and_projects_bounded_state():
+    requests = []
+
+    async def handler(request):
+        requests.append(request.url.path)
+        path = request.url.path
+        if path.endswith("/position-data/positions"):
+            return httpx.Response(
+                200,
+                json={
+                    "withOrderbook": [
+                        {
+                            "id": "p1",
+                            "account": {
+                                "id": "a1",
+                                "name": "ISK",
+                                "type": "INVESTMENT_SAVINGS_ACCOUNT",
+                                "secretField": "must-not-leak",
+                            },
+                            "instrument": {
+                                "id": "i1",
+                                "name": "Synthetic",
+                                "type": "STOCK",
+                                "currency": "SEK",
+                                "orderbook": {"id": "123"},
+                            },
+                            "volume": {"value": "2"},
+                            "value": {"value": "20", "unit": "SEK"},
+                        }
+                    ],
+                    "withoutOrderbook": [],
+                    "cashPositions": [
+                        {
+                            "account": {
+                                "id": "a1",
+                                "name": "ISK",
+                                "type": "INVESTMENT_SAVINGS_ACCOUNT",
+                            },
+                            "totalBalance": {"value": "10", "unit": "SEK"},
+                        }
+                    ],
+                },
+            )
+        if path.endswith("/trading/rest/orders"):
+            return httpx.Response(
+                200,
+                json={
+                    "orders": [
+                        {
+                            "orderId": f"order-{index}",
+                            "accountId": "a1",
+                            "orderbookId": "123",
+                            "side": "BUY",
+                            "state": "ACTIVE",
+                            "modifiable": True,
+                        }
+                        for index in range(2)
+                    ]
+                },
+            )
+        if path.endswith("/trading/rest/deals"):
+            return httpx.Response(
+                200,
+                json={
+                    "deals": [
+                        {
+                            "dealId": f"deal-{index}",
+                            "account": {"id": "a1"},
+                            "orderbook": {"id": "123"},
+                            "side": "BUY",
+                            "price": 10,
+                            "volume": 1,
+                            "internalNote": "must-not-leak",
+                        }
+                        for index in range(2)
+                    ]
+                },
+            )
+        if path.endswith("/trading/stoploss/"):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": f"stop-{index}",
+                        "account": {"id": "a1"},
+                        "orderbook": {"id": "123"},
+                        "status": "ACTIVE",
+                        "trigger": {"type": "LESS_OR_EQUAL", "value": 9},
+                        "order": {"type": "SELL", "price": 8, "volume": 1},
+                        "editable": True,
+                    }
+                    for index in range(2)
+                ],
+            )
+        raise AssertionError(path)
+
+    mock_avanza(handler)
+    async with client() as account_client:
+        result = await account_client.portfolio_snapshot(limit=1)
+
+    assert requests.count("/_api/position-data/positions") == 1
+    assert len(requests) == 4
+    assert len(result.accounts) == 1
+    assert len(result.holdings) == 1
+    assert len(result.cash_positions) == 1
+    assert len(result.active_orders) == 1
+    assert result.active_orders_truncated is True
+    assert len(result.deals) == 1
+    assert result.deals_truncated is True
+    assert len(result.stop_loss_orders) == 1
+    assert result.stop_loss_orders_truncated is True
+
+    output = result.model_dump_json()
+    assert "secretField" not in output
+    assert "internalNote" not in output
+    assert "modifiable" not in output
+    assert "editable" not in output
+    assert "must-not-leak" not in output
