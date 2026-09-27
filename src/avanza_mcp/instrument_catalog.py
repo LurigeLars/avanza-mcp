@@ -363,17 +363,22 @@ class InstrumentCatalog:
                             """,
                             [fts_query, *params, limit],
                         ).fetchall()
-                        return [self._row_to_dict(row) for row in rows]
+                        if rows:
+                            return [self._row_to_dict(row) for row in rows]
                     except sqlite3.OperationalError:
                         pass
 
-            like = f"%{text.casefold()}%"
-            like_filters = [
-                "(LOWER(i.name) LIKE ? OR LOWER(i.issuer) LIKE ? "
-                "OR LOWER(COALESCE(i.underlying_name, '')) LIKE ? "
-                "OR i.order_book_id LIKE ?)"
-            ]
-            like_params: list[Any] = [like, like, like, f"%{text}%"]
+            tokens = re.findall(r"[\\w.-]+", text, flags=re.UNICODE) or [text]
+            like_filters: list[str] = []
+            like_params: list[Any] = []
+            for token in tokens:
+                like = f"%{token.casefold()}%"
+                like_filters.append(
+                    "(LOWER(i.name) LIKE ? OR LOWER(i.issuer) LIKE ? "
+                    "OR LOWER(COALESCE(i.underlying_name, '')) LIKE ? "
+                    "OR LOWER(i.order_book_id) LIKE ?)"
+                )
+                like_params.extend((like, like, like, like))
             if direction is not None:
                 like_filters.append("i.direction = ?")
                 like_params.append(direction)
