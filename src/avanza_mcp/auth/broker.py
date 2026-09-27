@@ -7,11 +7,12 @@ import json
 import os
 import subprocess
 import sys
+from time import monotonic
 from typing import Any, Literal
 
 import httpx
 
-from ..client.endpoints import authenticated_public_request_allowed
+from ..client.endpoints import authenticated_public_request_family
 from .browser import AuthStatus
 
 SessionMode = Literal["persistent", "memory_only", "one_shot"]
@@ -20,6 +21,7 @@ SESSION_MODES = frozenset({"persistent", "memory_only", "one_shot"})
 _PIPE_LIMIT = 4 * 1024 * 1024
 _COMMAND_TIMEOUT = 90.0
 _UI_RESPONSE_TIMEOUT = 10.0
+_MARKET_AUTH_FAILURE_BACKOFF_SECONDS = 60.0
 _FORBIDDEN_RESULT_KEYS = frozenset(
     {
         "cookies",
@@ -90,6 +92,7 @@ class AuthProcessBroker:
         self._ui_status: AuthStatus | None = None
         self._ui_action: str | None = None
         self._ui_reaper: asyncio.Task[None] | None = None
+        self._market_auth_backoff_until: dict[str, float] = {}
         self._closed = False
 
     async def connect(self) -> AuthStatus:
@@ -165,8 +168,16 @@ class AuthProcessBroker:
         self, method: str, path: str, kwargs: dict[str, Any]
     ) -> httpx.Response | None:
         """Use isolated auth for approved public read-only market-data requests."""
-        if not authenticated_public_request_allowed(method, path):
+        family = authenticated_public_request_family(method, path)
+        if family is None:
             return None
+
+        retry_after = self._market_auth_backoff_until.get(family)
+        now = monotonic()
+        if retry_after is not None:
+            if retry_after > now:
+                return None
+            self._market_auth_backoff_until.pop(family, None)
 
         command = {
             "action": "market",
@@ -192,13 +203,17 @@ class AuthProcessBroker:
                             return None
                         response = await self._command(process, command)
         except AuthWorkerOperationError:
-            # Public market-data tools are allowed to degrade to the anonymous
-            # endpoint when the isolated auth worker itself cannot serve the
-            # request. Auth expiry is handled explicitly below and never falls
-            # back silently.
+            # Avoid paying the same failed auth-worker cost on every page of a
+            # batch. This cache contains only endpoint-family names, never
+            # credentials or market payloads, and expires quickly so transient
+            # failures are retried later.
+            self._market_auth_backoff_until[family] = (
+                monotonic() + _MARKET_AUTH_FAILURE_BACKOFF_SECONDS
+            )
             return None
 
         if response.get("ok") is True:
+            self._market_auth_backoff_until.pop(family, None)
             return httpx.Response(200, json=response.get("result"))
         code = response.get("code")
         if code == "no_session":
@@ -207,8 +222,12 @@ class AuthProcessBroker:
             return httpx.Response(401, content=b"")
         # Endpoint-specific authenticated failures (for example unsupported
         # auth behavior or a credential-shaped upstream payload) must not break
-        # the existing public read-only tool. Returning None instructs the
-        # shared client to retry the same approved request anonymously.
+        # the existing public read-only tool. Back off this endpoint family for
+        # a short window so batch pagination can continue anonymously without
+        # repeatedly spawning failed auth workers.
+        self._market_auth_backoff_until[family] = (
+            monotonic() + _MARKET_AUTH_FAILURE_BACKOFF_SECONDS
+        )
         return None
 
     async def aclose(self) -> None:

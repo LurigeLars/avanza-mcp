@@ -82,44 +82,110 @@ class PublicEndpoint(Enum):
         return self.value.format(**kwargs)
 
 
-_AUTHENTICATED_PUBLIC_EXACT = frozenset(
-    {
-        ("POST", PublicEndpoint.SEARCH.value),
-        ("POST", PublicEndpoint.CERTIFICATE_FILTER.value),
-        ("POST", PublicEndpoint.WARRANT_FILTER.value),
-        ("POST", PublicEndpoint.ETF_FILTER.value),
-        ("POST", PublicEndpoint.FUTURE_FORWARD_MATRIX.value),
-        ("GET", PublicEndpoint.FUTURE_FORWARD_FILTER_OPTIONS.value),
-    }
+_AUTHENTICATED_PUBLIC_EXACT_FAMILIES = {
+    ("POST", PublicEndpoint.SEARCH.value): "search",
+    ("POST", PublicEndpoint.CERTIFICATE_FILTER.value): "certificate_filter",
+    ("POST", PublicEndpoint.WARRANT_FILTER.value): "warrant_filter",
+    ("POST", PublicEndpoint.ETF_FILTER.value): "etf_filter",
+    ("POST", PublicEndpoint.FUTURE_FORWARD_MATRIX.value): "future_forward_matrix",
+    (
+        "GET",
+        PublicEndpoint.FUTURE_FORWARD_FILTER_OPTIONS.value,
+    ): "future_forward_filter_options",
+}
+
+_AUTHENTICATED_PUBLIC_GET_FAMILIES = (
+    ("stock_info", re.compile(r"^/_api/market-guide/stock/[0-9]+$")),
+    ("stock_analysis", re.compile(r"^/_api/market-guide/stock/[0-9]+/analysis$")),
+    ("stock_quote", re.compile(r"^/_api/market-guide/stock/[0-9]+/quote$")),
+    (
+        "stock_marketplace",
+        re.compile(r"^/_api/market-guide/stock/[0-9]+/marketplace$"),
+    ),
+    (
+        "stock_orderdepth",
+        re.compile(r"^/_api/market-guide/stock/[0-9]+/orderdepth$"),
+    ),
+    ("stock_trades", re.compile(r"^/_api/market-guide/stock/[0-9]+/trades$")),
+    (
+        "stock_broker_trades",
+        re.compile(r"^/_api/market-guide/stock/[0-9]+/broker-trade-summaries$"),
+    ),
+    ("stock_chart", re.compile(r"^/_api/price-chart/stock/[0-9]+$")),
+    (
+        "marketmaker_chart",
+        re.compile(r"^/_api/price-chart/marketmaker/[0-9]+$"),
+    ),
+    ("fund_info", re.compile(r"^/_api/fund-guide/guide/[0-9]+$")),
+    (
+        "fund_sustainability",
+        re.compile(r"^/_api/fund-reference/sustainability/[0-9]+$"),
+    ),
+    (
+        "fund_chart",
+        re.compile(r"^/_api/fund-guide/chart/[0-9]+/[a-z_]+$"),
+    ),
+    (
+        "fund_chart_periods",
+        re.compile(r"^/_api/fund-guide/chart/timeperiods/[0-9]+$"),
+    ),
+    (
+        "fund_description",
+        re.compile(r"^/_api/fund-guide/description/[0-9]+$"),
+    ),
+    (
+        "certificate_info",
+        re.compile(r"^/_api/market-guide/certificate/[0-9]+$"),
+    ),
+    (
+        "certificate_details",
+        re.compile(r"^/_api/market-guide/certificate/[0-9]+/details$"),
+    ),
+    ("warrant_info", re.compile(r"^/_api/market-guide/warrant/[0-9]+$")),
+    (
+        "warrant_details",
+        re.compile(r"^/_api/market-guide/warrant/[0-9]+/details$"),
+    ),
+    ("etf_info", re.compile(r"^/_api/market-etf/[0-9]+$")),
+    ("etf_details", re.compile(r"^/_api/market-etf/[0-9]+/details$")),
+    (
+        "future_forward_info",
+        re.compile(r"^/_api/market-guide/futureforward/[0-9]+$"),
+    ),
+    (
+        "future_forward_details",
+        re.compile(r"^/_api/market-guide/futureforward/[0-9]+/details$"),
+    ),
+    ("option_info", re.compile(r"^/_api/market-guide/option/[0-9]+$")),
+    (
+        "option_details",
+        re.compile(r"^/_api/market-guide/option/[0-9]+/details$"),
+    ),
+    (
+        "number_of_owners",
+        re.compile(r"^/_api/market-guide/number-of-owners/[0-9]+$"),
+    ),
+    (
+        "short_selling",
+        re.compile(r"^/_api/market-guide/short-selling/[0-9]+$"),
+    ),
 )
 
-_AUTHENTICATED_PUBLIC_GET_PATTERNS = (
-    re.compile(
-        r"^/_api/market-guide/stock/[0-9]+"
-        r"(?:/analysis|/quote|/marketplace|/orderdepth|/trades|/broker-trade-summaries)?$"
-    ),
-    re.compile(r"^/_api/price-chart/stock/[0-9]+$"),
-    re.compile(r"^/_api/price-chart/marketmaker/[0-9]+$"),
-    re.compile(r"^/_api/fund-guide/guide/[0-9]+$"),
-    re.compile(r"^/_api/fund-reference/sustainability/[0-9]+$"),
-    re.compile(r"^/_api/fund-guide/chart/[0-9]+/[a-z_]+$"),
-    re.compile(r"^/_api/fund-guide/chart/timeperiods/[0-9]+$"),
-    re.compile(r"^/_api/fund-guide/description/[0-9]+$"),
-    re.compile(r"^/_api/market-guide/certificate/[0-9]+(?:/details)?$"),
-    re.compile(r"^/_api/market-guide/warrant/[0-9]+(?:/details)?$"),
-    re.compile(r"^/_api/market-etf/[0-9]+(?:/details)?$"),
-    re.compile(r"^/_api/market-guide/futureforward/[0-9]+(?:/details)?$"),
-    re.compile(r"^/_api/market-guide/option/[0-9]+(?:/details)?$"),
-    re.compile(r"^/_api/market-guide/number-of-owners/[0-9]+$"),
-    re.compile(r"^/_api/market-guide/short-selling/[0-9]+$"),
-)
+
+def authenticated_public_request_family(method: str, path: str) -> str | None:
+    """Return the reviewed read-only endpoint family for auth reuse, if any."""
+    normalized_method = method.upper()
+    exact = _AUTHENTICATED_PUBLIC_EXACT_FAMILIES.get((normalized_method, path))
+    if exact is not None:
+        return exact
+    if normalized_method != "GET":
+        return None
+    for family, pattern in _AUTHENTICATED_PUBLIC_GET_FAMILIES:
+        if pattern.fullmatch(path):
+            return family
+    return None
 
 
 def authenticated_public_request_allowed(method: str, path: str) -> bool:
     """Return whether an existing public read-only endpoint may reuse login state."""
-    normalized_method = method.upper()
-    if (normalized_method, path) in _AUTHENTICATED_PUBLIC_EXACT:
-        return True
-    if normalized_method != "GET":
-        return False
-    return any(pattern.fullmatch(path) for pattern in _AUTHENTICATED_PUBLIC_GET_PATTERNS)
+    return authenticated_public_request_family(method, path) is not None

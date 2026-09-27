@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock
 from avanza_mcp.client.endpoints import (
     PublicEndpoint,
     authenticated_public_request_allowed,
+    authenticated_public_request_family,
 )
 from avanza_mcp.client.bankid import SessionMaterial
 from avanza_mcp.client.exceptions import (
@@ -722,3 +723,34 @@ def test_authenticated_public_market_allowlist(method, path):
 )
 def test_authenticated_public_market_allowlist_rejects_non_public_or_removed_paths(method, path):
     assert not authenticated_public_request_allowed(method, path)
+
+
+
+def test_authenticated_public_market_family_normalizes_dynamic_ids():
+    assert (
+        authenticated_public_request_family(
+            "GET", "/_api/market-guide/warrant/1704709"
+        )
+        == "warrant_info"
+    )
+    assert (
+        authenticated_public_request_family(
+            "GET", "/_api/market-guide/warrant/1709700"
+        )
+        == "warrant_info"
+    )
+    assert (
+        authenticated_public_request_family(
+            "GET", "/_api/market-guide/warrant/1704709/details"
+        )
+        == "warrant_details"
+    )
+    assert (
+        authenticated_public_request_family(
+            "POST", "/_api/market-warrant-filter/"
+        )
+        == "warrant_filter"
+    )
+    assert authenticated_public_request_family(
+        "POST", "/_api/trading/rest/orders"
+    ) is None

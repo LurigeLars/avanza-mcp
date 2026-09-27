@@ -79,6 +79,12 @@ the client retries that same read-only request anonymously so the existing publi
 still works. Authentication expiry/401 never falls back silently; that remains a hard
 auth failure so delayed public data cannot mask an expired login session.
 
+To avoid repeating an expensive failed auth attempt on every page of a batch, the
+credential-free broker keeps a 60-second negative capability cache by endpoint family.
+The cache stores only a family name and monotonic expiry time: no credentials, request
+payloads, responses, instrument IDs, or account data. Successful auth clears the family
+backoff, and auth-expiry/401 is never added to this cache.
+
 ## Disconnect semantics
 
 Explicit disconnect uses the local confirmation page. Persistent mode loads and validates the saved session inside an isolated worker, removes the OS credential, and sends Avanza remote logout. A 401 from the logout endpoint is treated as an already-invalid remote session; network/other failures can still be reported as `revocation_unconfirmed` after local credential removal.
