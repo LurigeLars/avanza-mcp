@@ -13,7 +13,7 @@ class WarrantListItem(AvanzaModel):
     orderbookId: str
     countryCode: str
     name: str
-    direction: str
+    direction: str | None = None
     issuer: str
     subType: str
     hasPosition: bool
