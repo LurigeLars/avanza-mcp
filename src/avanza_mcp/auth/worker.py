@@ -328,7 +328,10 @@ async def _account_operation(
         return {"ok": False, "code": _safe_account_read_failure_code(error)}
     except (ValueError, KeyError, TypeError):
         return {"ok": False, "code": "read_error_response_shape"}
-    except Exception:
+    except Exception as error:
+        name = type(error).__name__
+        if name.isidentifier() and len(name) <= 64:
+            return {"ok": False, "code": f"worker_error_{name}"}
         return {"ok": False, "code": "worker_error"}
 
     return {"ok": True, "result": result.model_dump(mode="json")}
