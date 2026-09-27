@@ -1,6 +1,7 @@
 """Persistent auth-worker concurrency and fail-closed tests."""
 
 import asyncio
+import io
 import json
 
 from avanza_mcp.auth import worker
@@ -194,3 +195,15 @@ def test_unexpected_account_failure_exposes_only_exception_class():
     assert name == "SyntheticFailure"
     assert name.isidentifier()
     assert "must-not-leak" not in f"worker_error_{name}"
+
+
+def test_emit_uses_dedicated_protocol_stream(monkeypatch):
+    protocol = io.StringIO()
+    ordinary = io.StringIO()
+    monkeypatch.setattr(worker, "_PROTOCOL_STDOUT", protocol)
+    monkeypatch.setattr(worker.sys, "stdout", ordinary)
+
+    worker._emit({"ok": True, "result": {"value": 1}})
+
+    assert ordinary.getvalue() == ""
+    assert json.loads(protocol.getvalue()) == {"ok": True, "result": {"value": 1}}
