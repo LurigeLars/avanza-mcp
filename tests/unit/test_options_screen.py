@@ -21,10 +21,12 @@ class FakeResponse:
 class FakeMarket:
     def __init__(self):
         self.calls = []
+        self.public_only_calls = []
         self.option_info_calls = []
 
-    async def list_futures_forwards(self, request):
+    async def list_futures_forwards(self, request, *, public_only=False):
         self.calls.append(request)
+        self.public_only_calls.append(public_only)
         expiry = request.filter.endDates[0] if request.filter.endDates else None
 
         filter_options = {
@@ -183,6 +185,8 @@ async def test_options_screen_discovers_expiry_flattens_pairs_and_filters():
         ),
     )
 
+    assert fake.public_only_calls
+    assert all(fake.public_only_calls)
     assert result["snapshot"]["comparison_complete"] is True
     assert result["snapshot"]["market_data_enriched"] is False
     assert result["snapshot"]["scanned_pair_rows"] == 2
