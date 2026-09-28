@@ -573,6 +573,17 @@ class AvanzaClient:
         """
         return await self._request("GET", path, params=params)
 
+    async def get_public(
+        self, path: str, params: dict[str, Any] | None = None
+    ) -> dict[str, Any] | list[Any]:
+        """Send one read-only GET without reusing authenticated session state."""
+        return await self._request(
+            "GET",
+            path,
+            params=params,
+            allow_authenticated_public=False,
+        )
+
     async def post(
         self, path: str, json: dict[str, Any] | None = None
     ) -> dict[str, Any] | list[Any]:
