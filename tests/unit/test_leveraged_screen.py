@@ -158,6 +158,52 @@ def test_execution_rank_uses_bid_ask_freshness_not_last_trade_age():
     assert [item["order_book_id"] for item in ranked] == ["fresh", "stale"]
 
 
+
+def test_execution_rank_prefers_target_leverage_before_spread_when_requested():
+    exact_target_wider_spread = {
+        "order_book_id": "exact",
+        "suitability": {"leverage_deviation": 0.0},
+        "live_market_data": {
+            "quote": {
+                "bid": 10.0,
+                "ask": 10.02,
+                "spread_percent_from_live_prices": 0.1998,
+                "freshness": {"bid_ask_age_ms": 2_000},
+            }
+        },
+    }
+    off_target_tighter_spread = {
+        "order_book_id": "off-target",
+        "suitability": {"leverage_deviation": 0.8},
+        "live_market_data": {
+            "quote": {
+                "bid": 10.0,
+                "ask": 10.001,
+                "spread_percent_from_live_prices": 0.0099995,
+                "freshness": {"bid_ask_age_ms": 1_000},
+            }
+        },
+    }
+
+    default_ranked = sorted(
+        [exact_target_wider_spread, off_target_tighter_spread],
+        key=_execution_rank,
+    )
+    assert [item["order_book_id"] for item in default_ranked] == [
+        "off-target",
+        "exact",
+    ]
+
+    target_ranked = sorted(
+        [exact_target_wider_spread, off_target_tighter_spread],
+        key=lambda item: _execution_rank(item, prefer_target_leverage=True),
+    )
+    assert [item["order_book_id"] for item in target_ranked] == [
+        "exact",
+        "off-target",
+    ]
+
+
 @pytest.mark.asyncio
 async def test_snapshot_pagination_reuses_same_ranked_data_without_refetching():
     service = LeveragedScreenService(object())
@@ -316,6 +362,36 @@ async def test_target_leverage_suitability_falls_back_from_catalog_to_filter_fee
     assert len(fake.warrant_calls) == 1
     assert result["pagination"]["total"] == 1
     assert result["products"][0]["suitability"]["leverage_deviation"] == pytest.approx(0.1)
+
+
+
+@pytest.mark.asyncio
+async def test_target_leverage_controls_execution_order_before_spread():
+    service = LeveragedScreenService(object(), catalog=LocalUniverseCatalog())
+    fake = FakeMarket()
+    service._market = fake
+
+    first = await service.screen(
+        "4478",
+        "long",
+        ["certificate", "warrant"],
+        10,
+        suitability=SuitabilityCriteria(
+            target_leverage=5.0,
+            max_leverage_deviation=1.0,
+        ),
+    )
+    enriched = await service.enrich_snapshot(
+        first["snapshot_id"], "4478", "long", 0, 10
+    )
+
+    assert enriched["execution_ranking"].startswith(
+        "fresh_two_way_quote, leverage_deviation_asc"
+    )
+    assert [item["order_book_id"] for item in enriched["products"][:2]] == [
+        "202",
+        "101",
+    ]
 
 
 @pytest.mark.asyncio
