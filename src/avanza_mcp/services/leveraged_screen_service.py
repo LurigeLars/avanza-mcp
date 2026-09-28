@@ -30,6 +30,7 @@ _EXECUTION_RANKING = (
     "fresh_two_way_quote, spread_percent_asc, bid_ask_age_ms_asc, turnover_desc"
 )
 _EXECUTION_STALE_AFTER_MS = 30_000
+_EXECUTION_BATCH_SIZE = 150
 _AVANZA_MARKET_TIMEZONE = ZoneInfo("Europe/Stockholm")
 
 
@@ -460,6 +461,10 @@ class _Snapshot:
     discovery_source: str = "avanza_filter_feed"
     execution_products: list[dict[str, Any]] | None = None
     execution_metadata: dict[str, Any] | None = None
+    execution_next_index: int = 0
+    execution_started_at: datetime | None = None
+    execution_duration_ms: float = 0.0
+    execution_auth_worker_calls: int = 0
 
 
 class _SnapshotStore:
@@ -904,7 +909,7 @@ class LeveragedScreenService:
         offset: int,
         page_size: int,
     ) -> dict[str, Any]:
-        """Enrich and globally rank the complete snapshot, then page the result."""
+        """Progressively enrich the complete snapshot, then globally rank and page it."""
         if offset < 0:
             raise ValueError("offset must be >= 0")
         if page_size < 1:
@@ -919,108 +924,151 @@ class LeveragedScreenService:
                 "snapshot_id does not match the supplied underlying_order_book_id and direction"
             )
 
+        total = len(snapshot.products)
         if snapshot.execution_products is None:
-            started_at = datetime.now(timezone.utc)
-            timer = perf_counter()
-            selected_products = snapshot.products
-            order_book_ids = [str(product["order_book_id"]) for product in selected_products]
-            batch_error: str | None = None
-            try:
-                quotes = await self._market.get_authenticated_market_data_quotes(order_book_ids)
-            except AvanzaAuthError:
-                quotes = [None] * len(selected_products)
-                batch_error = "auth_required"
-            except AvanzaError:
-                quotes = [None] * len(selected_products)
-                batch_error = "upstream_unavailable"
+            snapshot.execution_products = []
+        if snapshot.execution_started_at is None:
+            snapshot.execution_started_at = datetime.now(timezone.utc)
 
-            products: list[dict[str, Any]] = []
-            for product, quote in zip(selected_products, quotes, strict=True):
-                retrieved_at = datetime.now(timezone.utc).isoformat()
-                if quote is None:
-                    products.append(
+        cache_hit = snapshot.execution_next_index >= total
+        current_call_attempted_count = 0
+        current_call_duration_ms = 0.0
+        batch_error: str | None = None
+
+        if not cache_hit:
+            start_index = snapshot.execution_next_index
+            end_index = min(total, start_index + _EXECUTION_BATCH_SIZE)
+            selected_products = snapshot.products[start_index:end_index]
+            order_book_ids = [
+                str(product["order_book_id"]) for product in selected_products
+            ]
+            timer = perf_counter()
+
+            try:
+                quotes = await self._market.get_authenticated_market_data_quotes(
+                    order_book_ids
+                )
+            except AvanzaAuthError:
+                batch_error = "auth_required"
+                quotes = []
+            except AvanzaError:
+                batch_error = "upstream_unavailable"
+                quotes = []
+
+            current_call_duration_ms = round((perf_counter() - timer) * 1000, 3)
+
+            # A whole-batch failure is retryable. Do not advance the cursor or
+            # poison the frozen snapshot with synthetic missing quotes.
+            if batch_error is None:
+                current_call_attempted_count = len(selected_products)
+                for product, quote in zip(selected_products, quotes, strict=True):
+                    retrieved_at = datetime.now(timezone.utc).isoformat()
+                    if quote is None:
+                        snapshot.execution_products.append(
+                            {
+                                **product,
+                                "live_market_data_error": "upstream_unavailable",
+                                "live_market_data_retrieved_at": retrieved_at,
+                            }
+                        )
+                        continue
+                    snapshot.execution_products.append(
                         {
                             **product,
-                            "live_market_data_error": batch_error or "upstream_unavailable",
+                            "live_market_data": _compact_live_quote(quote),
                             "live_market_data_retrieved_at": retrieved_at,
                         }
                     )
-                    continue
-                products.append(
-                    {
-                        **product,
-                        "live_market_data": _compact_live_quote(quote),
-                        "live_market_data_retrieved_at": retrieved_at,
-                    }
-                )
+                snapshot.execution_next_index = end_index
+                snapshot.execution_duration_ms += current_call_duration_ms
+                snapshot.execution_auth_worker_calls += 1
 
-            products.sort(key=_execution_rank)
-            completed_at = datetime.now(timezone.utc)
-            authenticated_quote_count = sum(
-                product.get("live_market_data", {}).get("quote", {}).get("source")
-                == "authenticated_trading_critical"
-                for product in products
-            )
-            live_two_way_count = sum(
-                _has_two_way_quote(
-                    {
-                        "discovery_bid": product.get("live_market_data", {})
-                        .get("quote", {})
-                        .get("bid"),
-                        "discovery_ask": product.get("live_market_data", {})
-                        .get("quote", {})
-                        .get("ask"),
-                    }
-                )
-                for product in products
-            )
-            fresh_two_way_count = sum(
-                bool(
-                    product.get("live_market_data", {})
-                    .get("quote", {})
-                    .get("freshness", {})
-                    .get("execution_is_fresh")
-                )
-                for product in products
-            )
-            snapshot.execution_products = products
-            snapshot.execution_metadata = {
-                "started_at": started_at.isoformat(),
-                "completed_at": completed_at.isoformat(),
-                "duration_ms": round((perf_counter() - timer) * 1000, 3),
-                "attempted_count": len(products),
-                "enriched_count": sum("live_market_data" in product for product in products),
-                "not_found_count": sum(
-                    product.get("live_market_data_error") == "not_found" for product in products
-                ),
-                "upstream_error_count": sum(
-                    product.get("live_market_data_error") == "upstream_unavailable"
-                    for product in products
-                ),
-                "authenticated_quote_count": authenticated_quote_count,
-                "two_way_quote_count": live_two_way_count,
-                "fresh_two_way_quote_count": fresh_two_way_count,
-                "auth_worker_calls": 1 if products else 0,
-                "source": "authenticated_trading_critical_market_data_batch",
-                "scope": "complete_snapshot",
-                "cache_hit": False,
-                "current_call_upstream_requests": len(products),
-            }
-        else:
-            assert snapshot.execution_metadata is not None
-            snapshot.execution_metadata = {**snapshot.execution_metadata, "cache_hit": True}
+        scan_complete = snapshot.execution_next_index >= total
+        if scan_complete and snapshot.execution_products is not None:
+            snapshot.execution_products.sort(key=_execution_rank)
 
         products = snapshot.execution_products or []
-        total = len(products)
-        page = products[offset : offset + page_size]
-        returned = len(page)
-        has_more = offset + returned < total
+        authenticated_quote_count = sum(
+            product.get("live_market_data", {}).get("quote", {}).get("source")
+            == "authenticated_trading_critical"
+            for product in products
+        )
+        live_two_way_count = sum(
+            _has_two_way_quote(
+                {
+                    "discovery_bid": product.get("live_market_data", {})
+                    .get("quote", {})
+                    .get("bid"),
+                    "discovery_ask": product.get("live_market_data", {})
+                    .get("quote", {})
+                    .get("ask"),
+                }
+            )
+            for product in products
+        )
+        fresh_two_way_count = sum(
+            bool(
+                product.get("live_market_data", {})
+                .get("quote", {})
+                .get("freshness", {})
+                .get("execution_is_fresh")
+            )
+            for product in products
+        )
+        upstream_error_count = sum(
+            product.get("live_market_data_error") == "upstream_unavailable"
+            for product in products
+        )
+
+        completed_at = datetime.now(timezone.utc)
+        metadata = {
+            "started_at": snapshot.execution_started_at.isoformat(),
+            "completed_at": completed_at.isoformat() if scan_complete else None,
+            "duration_ms": round(snapshot.execution_duration_ms, 3),
+            "total_count": total,
+            "attempted_count": snapshot.execution_next_index,
+            "remaining_count": max(0, total - snapshot.execution_next_index),
+            "scan_complete": scan_complete,
+            "batch_size": _EXECUTION_BATCH_SIZE,
+            "current_call_attempted_count": current_call_attempted_count,
+            "current_call_duration_ms": current_call_duration_ms,
+            "enriched_count": sum("live_market_data" in product for product in products),
+            "not_found_count": sum(
+                product.get("live_market_data_error") == "not_found"
+                for product in products
+            ),
+            "upstream_error_count": upstream_error_count,
+            "authenticated_quote_count": authenticated_quote_count,
+            "two_way_quote_count": live_two_way_count,
+            "fresh_two_way_quote_count": fresh_two_way_count,
+            "auth_worker_calls": snapshot.execution_auth_worker_calls,
+            "source": "authenticated_trading_critical_market_data_batch",
+            "scope": "complete_snapshot_progressive",
+            "cache_hit": cache_hit,
+            "current_call_upstream_requests": current_call_attempted_count,
+        }
+        if batch_error is not None:
+            metadata["error"] = batch_error
+        snapshot.execution_metadata = metadata
+
+        if scan_complete:
+            page = products[offset : offset + page_size]
+            returned = len(page)
+            has_more = offset + returned < total
+            ordering = "execution_ranking"
+        else:
+            # Never expose a provisional winner from a partially scanned universe.
+            page = []
+            returned = 0
+            has_more = False
+            ordering = "pending_global_execution_ranking"
+
         return {
             "snapshot_id": snapshot.snapshot_id,
             "underlying_order_book_id": snapshot.underlying_order_book_id,
             "direction": snapshot.direction,
             "structural_snapshot": {
-                "eligible_count": len(snapshot.products),
+                "eligible_count": total,
                 "expires_at": snapshot.expires_at.isoformat(),
                 "ranking": _RANKING,
                 "ranking_quote_source": (
@@ -1030,7 +1078,7 @@ class LeveragedScreenService:
                 ),
                 "discovery_source": snapshot.discovery_source,
             },
-            "enrichment": snapshot.execution_metadata,
+            "enrichment": metadata,
             "pagination": {
                 "total": total,
                 "offset": offset,
@@ -1041,14 +1089,15 @@ class LeveragedScreenService:
             },
             "products": page,
             "returned": returned,
-            "ordering": "execution_ranking",
-            "execution_ranking": _EXECUTION_RANKING,
+            "ordering": ordering,
+            "execution_ranking": _EXECUTION_RANKING if scan_complete else None,
             "execution_freshness_basis": "bid_ask_updated_at",
             "last_trade_role": "informational_only_for_leveraged_products",
             "data_note": (
-                "The complete structural snapshot is authenticated before paging and globally "
-                "re-ranked from live bid/ask quality and freshness. page_size only controls "
-                "response pagination; it never limits the candidate universe."
+                "The complete structural snapshot is progressively authenticated in bounded "
+                "internal batches. No execution ranking is returned until every eligible "
+                "candidate has been attempted. Once complete, the full universe is globally "
+                "re-ranked and page_size only controls response pagination."
             ),
         }
 
