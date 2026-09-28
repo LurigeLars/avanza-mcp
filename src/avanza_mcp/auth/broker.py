@@ -87,6 +87,8 @@ class AuthProcessBroker:
         self.mode: SessionMode = mode or session_mode_from_environment()
         self._daemon: asyncio.subprocess.Process | None = None
         self._daemon_lock = asyncio.Lock()
+        self._market_daemon: asyncio.subprocess.Process | None = None
+        self._market_daemon_lock = asyncio.Lock()
         self._operation_lock = asyncio.Lock()
         self._ui_process: asyncio.subprocess.Process | None = None
         self._ui_status: AuthStatus | None = None
@@ -98,7 +100,9 @@ class AuthProcessBroker:
     async def connect(self) -> AuthStatus:
         self._ensure_open()
         if self.mode == "persistent":
-            return await self._start_persistent_ui("connect")
+            async with self._operation_lock:
+                await self._stop_market_daemon()
+                return await self._start_persistent_ui("connect")
         async with self._daemon_lock:
             process = await self._ensure_daemon_locked()
             response = await self._command(process, {"action": "connect"})
@@ -111,6 +115,7 @@ class AuthProcessBroker:
             # opening the disconnect confirmation. New operations are blocked by
             # _ui_action until the UI worker reaches a terminal state.
             async with self._operation_lock:
+                await self._stop_market_daemon()
                 return await self._start_persistent_ui("disconnect")
         async with self._daemon_lock:
             process = self._live_daemon()
@@ -149,6 +154,7 @@ class AuthProcessBroker:
             if self.mode == "persistent":
                 if self._persistent_disconnect_active():
                     raise AuthWorkerOperationError("Disconnect confirmation is pending")
+                await self._stop_market_daemon()
                 response = await self._run_once(command)
             else:
                 async with self._daemon_lock:
@@ -191,7 +197,7 @@ class AuthProcessBroker:
                 if self.mode == "persistent":
                     if self._persistent_disconnect_active():
                         return None
-                    response = await self._run_once(command)
+                    response = await self._persistent_market_command(command)
                 else:
                     async with self._daemon_lock:
                         process = self._live_daemon()
@@ -261,7 +267,7 @@ class AuthProcessBroker:
                 if self.mode == "persistent":
                     if self._persistent_disconnect_active():
                         return None
-                    response = await self._run_once(command)
+                    response = await self._persistent_market_command(command)
                 else:
                     async with self._daemon_lock:
                         process = self._live_daemon()
@@ -300,6 +306,8 @@ class AuthProcessBroker:
         if self._closed:
             return
         self._closed = True
+
+        await self._stop_market_daemon()
 
         async with self._daemon_lock:
             process = self._live_daemon()
@@ -385,6 +393,43 @@ class AuthProcessBroker:
             and self._ui_process is not None
             and self._ui_process.returncode is None
         )
+
+    async def _persistent_market_command(
+        self, command: dict[str, Any]
+    ) -> dict[str, Any]:
+        async with self._market_daemon_lock:
+            process = self._live_market_daemon()
+            if process is None:
+                process = await self._spawn("market-daemon", "persistent")
+                self._market_daemon = process
+            try:
+                return await self._command(process, command)
+            except AuthWorkerOperationError:
+                if self._market_daemon is process:
+                    self._market_daemon = None
+                await self._stop_process(process)
+                raise
+
+    def _live_market_daemon(self) -> asyncio.subprocess.Process | None:
+        process = self._market_daemon
+        if process is None:
+            return None
+        if process.returncode is not None:
+            self._market_daemon = None
+            return None
+        return process
+
+    async def _stop_market_daemon(self) -> None:
+        async with self._market_daemon_lock:
+            process = self._live_market_daemon()
+            self._market_daemon = None
+            if process is None:
+                return
+            try:
+                await self._command(process, {"action": "shutdown"}, timeout=5.0)
+            except AuthWorkerError:
+                pass
+            await self._stop_process(process)
 
     async def _ensure_daemon_locked(self) -> asyncio.subprocess.Process:
         process = self._live_daemon()

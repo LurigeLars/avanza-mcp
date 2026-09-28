@@ -27,6 +27,7 @@ from .store import AuthStoreError, create_session_store
 _INTERNAL_BROWSER_IDLE_SECONDS = 365 * 24 * 60 * 60
 _MARKET_BATCH_CONCURRENCY = 16
 _MARKET_BATCH_MIN_REQUEST_INTERVAL = 0.05
+_MARKET_SESSION_REVALIDATE_SECONDS = 15 * 60
 _MEMORY_ONLY_IDLE_SECONDS = 15 * 60
 _ONE_SHOT_IDLE_SECONDS = 5 * 60
 _TERMINAL_STATES = frozenset({"connected", "disconnected", "denied", "timed_out", "error"})
@@ -372,7 +373,9 @@ async def _account_operation(
     return {"ok": True, "result": result.model_dump(mode="json")}
 
 async def _market_operation(
-    auth: BrowserAuth | _RequestAuth, command: dict[str, Any]
+    auth: BrowserAuth | _RequestAuth,
+    command: dict[str, Any],
+    client: AvanzaClient | None = None,
 ) -> dict[str, Any]:
     method = str(command.get("method", ""))
     path = str(command.get("path", ""))
@@ -388,12 +391,9 @@ async def _market_operation(
     if json_body is not None and not isinstance(json_body, dict):
         return {"ok": False, "code": "protocol_error"}
 
-    try:
-        async with AvanzaClient(
-            session_provider=lambda: auth.session,
-            session_invalidated=auth.invalidate_session,
-        ) as client:
-            response = await client.request_authenticated(
+    async def execute(active_client: AvanzaClient) -> dict[str, Any]:
+        try:
+            response = await active_client.request_authenticated(
                 method,
                 path,
                 params=params,
@@ -412,18 +412,29 @@ async def _market_operation(
                 result = _project_authenticated_market_payload(kind, result)
             elif _contains_forbidden_market_result(result):
                 return {"ok": False, "code": "unsafe_upstream_payload"}
-    except AvanzaAuthError:
-        await auth.invalidate_session()
-        return {"ok": False, "code": "auth_expired"}
-    except Exception:
-        return {"ok": False, "code": "read_error"}
-    return {"ok": True, "result": result}
+        except AvanzaAuthError:
+            await auth.invalidate_session()
+            return {"ok": False, "code": "auth_expired"}
+        except Exception:
+            return {"ok": False, "code": "read_error"}
+        return {"ok": True, "result": result}
+
+    if client is not None:
+        return await execute(client)
+
+    async with AvanzaClient(
+        session_provider=lambda: auth.session,
+        session_invalidated=auth.invalidate_session,
+    ) as transient_client:
+        return await execute(transient_client)
 
 
 async def _market_batch_operation(
-    auth: BrowserAuth | _RequestAuth, command: dict[str, Any]
+    auth: BrowserAuth | _RequestAuth,
+    command: dict[str, Any],
+    client: AvanzaClient | None = None,
 ) -> dict[str, Any]:
-    """Fetch trading-critical quotes concurrently inside one validated auth worker."""
+    """Fetch trading-critical quotes concurrently inside one isolated auth worker."""
     paths = command.get("paths")
     if not isinstance(paths, list) or any(not isinstance(path, str) for path in paths):
         return {"ok": False, "code": "protocol_error"}
@@ -436,50 +447,55 @@ async def _market_batch_operation(
     if auth.session is None:
         return {"ok": False, "code": "no_session"}
 
-    try:
-        async with AvanzaClient(
-            session_provider=lambda: auth.session,
-            session_invalidated=auth.invalidate_session,
-            max_connections=_MARKET_BATCH_CONCURRENCY,
-            max_keepalive_connections=_MARKET_BATCH_CONCURRENCY,
-            max_in_flight_requests=_MARKET_BATCH_CONCURRENCY,
-            min_request_interval=_MARKET_BATCH_MIN_REQUEST_INTERVAL,
-        ) as client:
-            responses = await client.request_authenticated_batch(
+    async def execute(active_client: AvanzaClient) -> dict[str, Any]:
+        try:
+            responses = await active_client.request_authenticated_batch(
                 paths,
                 max_concurrency=_MARKET_BATCH_CONCURRENCY,
             )
-    except AvanzaAuthError:
-        await auth.invalidate_session()
-        return {"ok": False, "code": "auth_expired"}
-    except Exception:
-        return {"ok": False, "code": "read_error"}
-
-    results: list[dict[str, Any] | None] = []
-    for response in responses:
-        if response is None:
-            results.append(None)
-            continue
-        if response.status_code == 401:
+        except AvanzaAuthError:
             await auth.invalidate_session()
             return {"ok": False, "code": "auth_expired"}
-        if response.status_code != 200:
-            results.append(None)
-            continue
-        try:
-            payload = response.json()
-            projected = _project_authenticated_market_payload("marketdata", payload)
-        except (ValueError, TypeError):
-            results.append(None)
-            continue
-        if _contains_forbidden_market_result(projected):
-            return {"ok": False, "code": "unsafe_upstream_payload"}
-        if not isinstance(projected, dict):
-            results.append(None)
-            continue
-        results.append(projected)
+        except Exception:
+            return {"ok": False, "code": "read_error"}
 
-    return {"ok": True, "result": results}
+        results: list[dict[str, Any] | None] = []
+        for response in responses:
+            if response is None:
+                results.append(None)
+                continue
+            if response.status_code == 401:
+                await auth.invalidate_session()
+                return {"ok": False, "code": "auth_expired"}
+            if response.status_code != 200:
+                results.append(None)
+                continue
+            try:
+                payload = response.json()
+                projected = _project_authenticated_market_payload("marketdata", payload)
+            except (ValueError, TypeError):
+                results.append(None)
+                continue
+            if _contains_forbidden_market_result(projected):
+                return {"ok": False, "code": "unsafe_upstream_payload"}
+            if not isinstance(projected, dict):
+                results.append(None)
+                continue
+            results.append(projected)
+        return {"ok": True, "result": results}
+
+    if client is not None:
+        return await execute(client)
+
+    async with AvanzaClient(
+        session_provider=lambda: auth.session,
+        session_invalidated=auth.invalidate_session,
+        max_connections=_MARKET_BATCH_CONCURRENCY,
+        max_keepalive_connections=_MARKET_BATCH_CONCURRENCY,
+        max_in_flight_requests=_MARKET_BATCH_CONCURRENCY,
+        min_request_interval=_MARKET_BATCH_MIN_REQUEST_INTERVAL,
+    ) as transient_client:
+        return await execute(transient_client)
 
 
 async def _run_once(command: dict[str, Any]) -> None:
@@ -630,6 +646,138 @@ def _start_stdin_reader(
     threading.Thread(target=reader, name="avanza-auth-stdin", daemon=True).start()
 
 
+async def _load_validated_market_session(
+    store: Any,
+) -> tuple[SessionMaterial | None, str | None]:
+    try:
+        saved = await store.load()
+    except AuthStoreError:
+        return None, "credential_store"
+    if saved is None:
+        return None, "no_session"
+
+    refreshed, validation_error = await _validate_saved_session(saved)
+    if validation_error is not None:
+        return None, validation_error
+    if refreshed is None:
+        try:
+            await store.delete()
+        except AuthStoreError:
+            return None, "credential_store"
+        return None, "auth_expired"
+    if not _same_session_material(saved, refreshed):
+        try:
+            await store.save(refreshed)
+        except AuthStoreError:
+            return None, "credential_store"
+    return refreshed, None
+
+
+async def _run_persistent_market_daemon(parent_pid: int) -> None:
+    """Keep market-only session material in one isolated reusable child process."""
+    store = create_session_store()
+    queue: asyncio.Queue[str | None] = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+    _start_stdin_reader(loop, queue)
+
+    auth: _RequestAuth | None = None
+    client: AvanzaClient | None = None
+    last_validated = 0.0
+
+    async def ensure_session(*, force: bool = False) -> str | None:
+        nonlocal auth, client, last_validated
+        now = time.monotonic()
+        if (
+            not force
+            and auth is not None
+            and auth.session is not None
+            and now - last_validated < _MARKET_SESSION_REVALIDATE_SECONDS
+        ):
+            return None
+
+        session, error = await _load_validated_market_session(store)
+        if error is not None or session is None:
+            if client is not None:
+                await client.__aexit__(None, None, None)
+                client = None
+            auth = None
+            return error or "auth_expired"
+
+        if auth is None:
+            auth = _RequestAuth(session)
+        else:
+            auth.session = session
+
+        if client is None:
+            client = AvanzaClient(
+                session_provider=lambda: auth.session if auth is not None else None,
+                session_invalidated=auth.invalidate_session,
+                max_connections=_MARKET_BATCH_CONCURRENCY,
+                max_keepalive_connections=_MARKET_BATCH_CONCURRENCY,
+                max_in_flight_requests=_MARKET_BATCH_CONCURRENCY,
+                min_request_interval=_MARKET_BATCH_MIN_REQUEST_INTERVAL,
+            )
+            await client.__aenter__()
+        last_validated = now
+        return None
+
+    try:
+        while True:
+            if not _parent_alive(parent_pid):
+                return
+
+            try:
+                line = await asyncio.wait_for(queue.get(), timeout=0.25)
+            except TimeoutError:
+                continue
+            if line is None:
+                return
+
+            try:
+                command = json.loads(line)
+            except json.JSONDecodeError:
+                _emit({"ok": False, "code": "protocol_error"})
+                continue
+            if not isinstance(command, dict):
+                _emit({"ok": False, "code": "protocol_error"})
+                continue
+
+            action = command.get("action")
+            if action == "shutdown":
+                _emit({"ok": True})
+                return
+            if action not in {"market", "market_batch"}:
+                _emit({"ok": False, "code": "operation_not_allowed"})
+                continue
+
+            error = await ensure_session()
+            if error is not None or auth is None or client is None:
+                _emit({"ok": False, "code": error or "auth_required"})
+                continue
+
+            previous_session = auth.session
+            if action == "market_batch":
+                result = await _market_batch_operation(auth, command, client)
+            else:
+                result = await _market_operation(auth, command, client)
+
+            if result.get("code") == "auth_expired" and previous_session is not None:
+                auth.session = previous_session
+                error = await ensure_session(force=True)
+                if error is None and auth is not None and client is not None:
+                    if action == "market_batch":
+                        result = await _market_batch_operation(auth, command, client)
+                    else:
+                        result = await _market_operation(auth, command, client)
+                else:
+                    result = {"ok": False, "code": error or "auth_expired"}
+
+            _emit(result)
+    finally:
+        if client is not None:
+            await client.__aexit__(None, None, None)
+
+
 async def _run_daemon(mode: str, parent_pid: int) -> None:
     if mode not in {"memory_only", "one_shot"}:
         _emit({"ok": False, "code": "invalid_mode"})
@@ -752,6 +900,13 @@ async def _async_main(args: argparse.Namespace) -> int:
         await _run_daemon(args.mode, args.parent_pid)
         return 0
 
+    if args.kind == "market-daemon":
+        if args.mode != "persistent":
+            _emit({"ok": False, "code": "invalid_mode"})
+            return 2
+        await _run_persistent_market_daemon(args.parent_pid)
+        return 0
+
     command = await _read_first_command()
     if command is None:
         _emit({"ok": False, "code": "protocol_error"})
@@ -778,7 +933,11 @@ async def _async_main(args: argparse.Namespace) -> int:
 def main() -> int:
     _isolate_protocol_stdout()
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--kind", choices=("once", "ui", "daemon"), required=True)
+    parser.add_argument(
+        "--kind",
+        choices=("once", "ui", "daemon", "market-daemon"),
+        required=True,
+    )
     parser.add_argument(
         "--mode",
         choices=("persistent", "memory_only", "one_shot"),

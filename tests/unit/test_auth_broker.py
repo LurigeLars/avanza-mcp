@@ -90,7 +90,7 @@ async def test_persistent_market_batch_uses_one_worker_and_preserves_alignment(m
             ],
         }
     )
-    monkeypatch.setattr(broker, "_run_once", worker)
+    monkeypatch.setattr(broker, "_persistent_market_command", worker)
     paths = [
         "/_api/trading-critical/rest/marketdata/101",
         "/_api/trading-critical/rest/marketdata/102",
@@ -113,7 +113,7 @@ async def test_persistent_market_batch_uses_one_worker_and_preserves_alignment(m
 async def test_market_batch_rejects_non_trading_critical_path(monkeypatch):
     broker = AuthProcessBroker(mode="persistent")
     worker = AsyncMock()
-    monkeypatch.setattr(broker, "_run_once", worker)
+    monkeypatch.setattr(broker, "_persistent_market_command", worker)
     try:
         result = await broker.market_data_batch(
             [
@@ -130,7 +130,7 @@ async def test_market_batch_rejects_non_trading_critical_path(monkeypatch):
 async def test_market_broker_rejects_non_allowlisted_authenticated_path(monkeypatch):
     broker = AuthProcessBroker(mode="persistent")
     command = AsyncMock()
-    monkeypatch.setattr(broker, "_run_once", command)
+    monkeypatch.setattr(broker, "_persistent_market_command", command)
     try:
         response = await broker.market_request(
             "POST",
@@ -139,6 +139,63 @@ async def test_market_broker_rejects_non_allowlisted_authenticated_path(monkeypa
         )
         assert response is None
         command.assert_not_awaited()
+    finally:
+        await broker.aclose()
+
+
+class _ReusableMarketProcess:
+    returncode = None
+
+
+async def test_persistent_market_requests_reuse_one_market_daemon(monkeypatch):
+    broker = AuthProcessBroker(mode="persistent")
+    process = _ReusableMarketProcess()
+    spawn = AsyncMock(return_value=process)
+    command = AsyncMock(
+        side_effect=[
+            {"ok": True, "result": {"last": 10}},
+            {"ok": True, "result": {"last": 11}},
+        ]
+    )
+    stop = AsyncMock()
+    monkeypatch.setattr(broker, "_spawn", spawn)
+    monkeypatch.setattr(broker, "_command", command)
+    monkeypatch.setattr(broker, "_stop_process", stop)
+
+    try:
+        first = await broker.market_request(
+            "GET",
+            "/_api/market-guide/stock/123/quote",
+            {"params": None},
+        )
+        second = await broker.market_request(
+            "GET",
+            "/_api/market-guide/stock/123/quote",
+            {"params": None},
+        )
+
+        assert first is not None and first.json()["last"] == 10
+        assert second is not None and second.json()["last"] == 11
+        spawn.assert_awaited_once_with("market-daemon", "persistent")
+        assert command.await_count == 2
+        assert broker._market_daemon is process
+    finally:
+        broker._market_daemon = None
+        await broker.aclose()
+
+
+async def test_persistent_account_stops_reusable_market_daemon(monkeypatch):
+    broker = AuthProcessBroker(mode="persistent")
+    stop_market = AsyncMock()
+    worker = AsyncMock(return_value={"ok": True, "result": {"accounts": []}})
+    monkeypatch.setattr(broker, "_stop_market_daemon", stop_market)
+    monkeypatch.setattr(broker, "_run_once", worker)
+
+    try:
+        result = await broker.account("accounts", {})
+        assert result == {"accounts": []}
+        stop_market.assert_awaited_once()
+        worker.assert_awaited_once()
     finally:
         await broker.aclose()
 
@@ -227,7 +284,7 @@ async def test_market_worker_non_auth_failure_falls_back_to_public(monkeypatch):
     broker = AuthProcessBroker(mode="persistent")
     monkeypatch.setattr(
         broker,
-        "_run_once",
+        "_persistent_market_command",
         AsyncMock(return_value={"ok": False, "code": "read_error"}),
     )
     try:
@@ -245,7 +302,7 @@ async def test_market_worker_auth_expiry_never_falls_back(monkeypatch):
     broker = AuthProcessBroker(mode="persistent")
     monkeypatch.setattr(
         broker,
-        "_run_once",
+        "_persistent_market_command",
         AsyncMock(return_value={"ok": False, "code": "auth_expired"}),
     )
     try:
@@ -264,7 +321,7 @@ async def test_market_worker_protocol_failure_degrades_to_public(monkeypatch):
     broker = AuthProcessBroker(mode="persistent")
     monkeypatch.setattr(
         broker,
-        "_run_once",
+        "_persistent_market_command",
         AsyncMock(side_effect=AuthWorkerOperationError("worker failed")),
     )
     try:
@@ -287,7 +344,7 @@ async def test_market_family_backoff_skips_repeated_failed_auth_attempts(monkeyp
             {"ok": True, "result": {"last": 10}},
         ]
     )
-    monkeypatch.setattr(broker, "_run_once", worker)
+    monkeypatch.setattr(broker, "_persistent_market_command", worker)
     monkeypatch.setattr("avanza_mcp.auth.broker.monotonic", lambda: 100.0)
     try:
         first = await broker.market_request(
@@ -318,7 +375,7 @@ async def test_market_family_backoff_skips_repeated_failed_auth_attempts(monkeyp
 async def test_market_family_backoff_expires(monkeypatch):
     broker = AuthProcessBroker(mode="persistent")
     worker = AsyncMock(return_value={"ok": True, "result": {"ok": True}})
-    monkeypatch.setattr(broker, "_run_once", worker)
+    monkeypatch.setattr(broker, "_persistent_market_command", worker)
     now = [120.0]
     monkeypatch.setattr("avanza_mcp.auth.broker.monotonic", lambda: now[0])
     broker._market_auth_backoff_until["warrant_filter"] = 160.0
@@ -348,7 +405,7 @@ async def test_market_family_backoff_expires(monkeypatch):
 async def test_auth_expiry_is_never_added_to_market_family_backoff(monkeypatch):
     broker = AuthProcessBroker(mode="persistent")
     worker = AsyncMock(return_value={"ok": False, "code": "auth_expired"})
-    monkeypatch.setattr(broker, "_run_once", worker)
+    monkeypatch.setattr(broker, "_persistent_market_command", worker)
     monkeypatch.setattr("avanza_mcp.auth.broker.monotonic", lambda: 100.0)
     try:
         first = await broker.market_request(
