@@ -10,7 +10,11 @@ from pydantic import Field
 
 from .. import mcp
 from ..models.common import OrderBookId
-from ..services.leveraged_screen_service import LeveragedScreenService, ScreenFilters
+from ..services.leveraged_screen_service import (
+    LeveragedScreenService,
+    ScreenFilters,
+    SuitabilityCriteria,
+)
 from ._helpers import READ_ONLY, api_errors
 
 PageSize = Annotated[
@@ -48,6 +52,19 @@ MaxLeverage = Annotated[
     NonNegativeFloat | None,
     Field(description="Maximum reported leverage; candidates with unknown leverage are excluded."),
 ]
+
+TargetLeverage = Annotated[
+    NonNegativeFloat | None,
+    Field(description="Target leverage for suitability selection. Must be paired with max_leverage_deviation."),
+]
+MaxLeverageDeviation = Annotated[
+    NonNegativeFloat | None,
+    Field(description="Maximum absolute leverage deviation from target_leverage."),
+]
+MinStopLossBufferPercent = Annotated[
+    NonNegativeFloat | None,
+    Field(description="Minimum percent distance from the live underlying reference price to stop-loss/knockout. Candidates without stop-loss are excluded."),
+]
 MaxSpreadPercent = Annotated[
     NonNegativeFloat | None,
     Field(description="Maximum midpoint spread percent; candidates with unknown spread are excluded."),
@@ -79,6 +96,18 @@ def _screen_filters(
     )
 
 
+def _suitability_criteria(
+    target_leverage: float | None,
+    max_leverage_deviation: float | None,
+    min_stop_loss_buffer_percent: float | None,
+) -> SuitabilityCriteria:
+    return SuitabilityCriteria(
+        target_leverage=target_leverage,
+        max_leverage_deviation=max_leverage_deviation,
+        min_stop_loss_buffer_percent=min_stop_loss_buffer_percent,
+    )
+
+
 @mcp.tool(annotations=READ_ONLY)
 async def screen_leveraged_instruments(
     ctx: Context,
@@ -89,6 +118,9 @@ async def screen_leveraged_instruments(
     sub_types: SubTypeFilters = None,
     min_leverage: MinLeverage = None,
     max_leverage: MaxLeverage = None,
+    target_leverage: TargetLeverage = None,
+    max_leverage_deviation: MaxLeverageDeviation = None,
+    min_stop_loss_buffer_percent: MinStopLossBufferPercent = None,
     require_two_way_quote: bool = False,
     max_spread_percent: MaxSpreadPercent = None,
     min_turnover: MinTurnover = None,
@@ -100,8 +132,10 @@ async def screen_leveraged_instruments(
 
     Without snapshot_id, creates one complete ranked result for the requested filters.
     Issuer and warrant sub-type filters may be pushed to Avanza before paging; all supplied
-    filters are still re-applied locally before ranking. The frozen result is stored for ten
-    minutes and the requested first page is returned.
+    filters are still re-applied locally before ranking. Suitability criteria are then applied
+    before live execution ranking: target leverage uses an explicit absolute deviation tolerance,
+    and optional stop-loss/knockout buffer uses one authenticated live underlying reference quote.
+    The frozen result is stored for ten minutes and the requested first page is returned.
 
     The response includes exact issuer/sub-type vocabulary supplemented from upstream filter
     metadata when available. The leverage availability summary describes candidates actually
@@ -116,8 +150,9 @@ async def screen_leveraged_instruments(
     valid authenticated session, the complete eligible universe is progressively refetched through
     bounded auth-worker batches. Repeat the returned snapshot_id until
     execution.enrichment.scan_complete is true. No provisional execution ranking is exposed before
-    the full universe has been attempted; after completion it is globally ranked and only then
-    paginated. page_size controls response size, not the candidate pool. Without auth, the tool
+    the full universe has been attempted; after completion it is globally ranked, the top 25 are
+    refetched once for final execution freshness, and only then paginated. page_size controls
+    response size, not the candidate pool. Without auth, the tool
     falls back to public structural discovery instead of failing. For authenticated leveraged data,
     freshness is based on bid/ask update age; last_trade is informational only.
     """
@@ -131,6 +166,11 @@ async def screen_leveraged_instruments(
         max_spread_percent,
         min_turnover,
     )
+    selected_suitability = _suitability_criteria(
+        target_leverage,
+        max_leverage_deviation,
+        min_stop_loss_buffer_percent,
+    )
     filters_were_supplied = any(
         (
             issuers,
@@ -140,6 +180,13 @@ async def screen_leveraged_instruments(
             require_two_way_quote,
             max_spread_percent is not None,
             min_turnover is not None,
+        )
+    )
+    suitability_was_supplied = any(
+        (
+            target_leverage is not None,
+            max_leverage_deviation is not None,
+            min_stop_loss_buffer_percent is not None,
         )
     )
 
@@ -155,6 +202,7 @@ async def screen_leveraged_instruments(
                     selected,
                     page_size,
                     selected_filters,
+                    selected_suitability,
                 )
         else:
             result = service.get_page(
@@ -165,6 +213,9 @@ async def screen_leveraged_instruments(
                 page_size,
                 product_types=product_types,
                 filters=selected_filters if filters_were_supplied else None,
+                suitability=(
+                    selected_suitability if suitability_was_supplied else None
+                ),
             )
 
         if result.get("products"):
@@ -238,6 +289,7 @@ async def screen_leveraged_instruments(
                             selected,
                             page_size,
                             selected_filters,
+                            selected_suitability,
                             prefer_catalog=False,
                         )
                 result["execution"] = {
