@@ -28,6 +28,7 @@ class FakeMarket:
         self.certificate_calls = []
         self.warrant_calls = []
         self.market_data_quote_calls = []
+        self.market_data_batch_calls = []
 
     async def filter_certificates(self, request):
         self.certificate_calls.append(request)
@@ -65,6 +66,13 @@ class FakeMarket:
             ],
             totalNumberOfOrderbooks=1,
         )
+
+    async def get_authenticated_market_data_quotes(self, order_book_ids):
+        self.market_data_batch_calls.append(list(order_book_ids))
+        return [
+            await self.get_authenticated_market_data_quote(order_book_id)
+            for order_book_id in order_book_ids
+        ]
 
     async def get_authenticated_market_data_quote(self, order_book_id):
         self.market_data_quote_calls.append(order_book_id)
@@ -153,10 +161,16 @@ async def test_realtime_enrichment_refetches_only_requested_snapshot_page():
         2,
     )
 
-    assert sorted(fake.market_data_quote_calls) == ["101", "202"]
+    assert fake.market_data_batch_calls == [["101", "202"]]
+    assert fake.market_data_quote_calls == ["101", "202"]
     assert enriched["enrichment"]["attempted_count"] == 2
     assert enriched["enrichment"]["enriched_count"] == 2
     assert enriched["enrichment"]["authenticated_quote_count"] == 2
+    assert enriched["enrichment"]["auth_worker_calls"] == 1
+    assert (
+        enriched["enrichment"]["source"]
+        == "authenticated_trading_critical_market_data_batch"
+    )
     assert enriched["enrichment"]["two_way_quote_count"] == 2
     assert enriched["structural_snapshot"]["ranking_quote_source"] == "delayed_filter_feed"
     assert enriched["ordering"] == "structural_snapshot_order"
