@@ -31,6 +31,7 @@ _EXECUTION_RANKING = (
 )
 _EXECUTION_STALE_AFTER_MS = 30_000
 _EXECUTION_BATCH_SIZE = 300
+_FINAL_REFRESH_SIZE = 25
 _AVANZA_MARKET_TIMEZONE = ZoneInfo("Europe/Stockholm")
 
 
@@ -215,6 +216,58 @@ def _compact_live_quote(quote: dict[str, Any]) -> dict[str, Any]:
     return {"quote": compact}
 
 
+def _refresh_live_freshness(candidate: dict[str, Any], observed_at: int) -> None:
+    live = candidate.get("live_market_data")
+    quote = live.get("quote") if isinstance(live, dict) else None
+    if not isinstance(quote, dict):
+        return
+    freshness = quote.get("freshness")
+    freshness = dict(freshness) if isinstance(freshness, dict) else {}
+    source_updated_at = _number(freshness.get("source_updated_at"))
+    last_trade_at = _number(freshness.get("last_trade_at"))
+    bid = _number(quote.get("bid"))
+    ask = _number(quote.get("ask"))
+    has_two_way = (
+        bid is not None and ask is not None and bid > 0 and ask > 0 and ask >= bid
+    )
+    bid_ask_age_ms = (
+        _age_ms(observed_at, int(source_updated_at))
+        if source_updated_at is not None
+        else None
+    )
+    freshness["observed_at"] = observed_at
+    if source_updated_at is not None:
+        freshness["source_update_age_ms"] = bid_ask_age_ms
+        freshness["bid_ask_age_ms"] = bid_ask_age_ms
+    if last_trade_at is not None:
+        freshness["last_trade_age_ms"] = _age_ms(observed_at, int(last_trade_at))
+    freshness["execution_is_fresh"] = bool(
+        has_two_way
+        and bid_ask_age_ms is not None
+        and bid_ask_age_ms <= _EXECUTION_STALE_AFTER_MS
+    )
+    quote["freshness"] = freshness
+
+
+def _underlying_reference_price(quote: dict[str, Any]) -> float | None:
+    bid = _number(quote.get("buy"))
+    ask = _number(quote.get("sell"))
+    if bid is not None and ask is not None and bid > 0 and ask > 0 and ask >= bid:
+        return (bid + ask) / 2
+    last = _number(quote.get("last"))
+    return last if last is not None and last > 0 else None
+
+
+def _stop_loss_buffer_percent(
+    direction: Direction,
+    underlying_price: float,
+    stop_loss: float,
+) -> float:
+    if direction == "long":
+        return (underlying_price - stop_loss) / underlying_price * 100
+    return (stop_loss - underlying_price) / underlying_price * 100
+
+
 def _has_two_way_quote(candidate: dict[str, Any]) -> bool:
     bid = _number(candidate.get("discovery_bid"))
     ask = _number(candidate.get("discovery_ask"))
@@ -263,6 +316,93 @@ def _execution_rank(candidate: dict[str, Any]) -> tuple[Any, ...]:
         str(candidate.get("name") or ""),
         str(candidate.get("order_book_id") or ""),
     )
+
+
+@dataclass(frozen=True)
+class SuitabilityCriteria:
+    target_leverage: float | None = None
+    max_leverage_deviation: float | None = None
+    min_stop_loss_buffer_percent: float | None = None
+
+
+def _normalize_suitability(
+    suitability: SuitabilityCriteria | None,
+) -> SuitabilityCriteria:
+    return suitability or SuitabilityCriteria()
+
+
+def _validate_suitability(suitability: SuitabilityCriteria) -> None:
+    if suitability.target_leverage is not None and suitability.target_leverage <= 0:
+        raise ValueError("target_leverage must be > 0")
+    if suitability.max_leverage_deviation is not None and suitability.max_leverage_deviation < 0:
+        raise ValueError("max_leverage_deviation must be >= 0")
+    if (suitability.target_leverage is None) != (
+        suitability.max_leverage_deviation is None
+    ):
+        raise ValueError(
+            "target_leverage and max_leverage_deviation must be supplied together"
+        )
+    if (
+        suitability.min_stop_loss_buffer_percent is not None
+        and suitability.min_stop_loss_buffer_percent < 0
+    ):
+        raise ValueError("min_stop_loss_buffer_percent must be >= 0")
+
+
+def _suitability_payload(suitability: SuitabilityCriteria) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in {
+            "target_leverage": suitability.target_leverage,
+            "max_leverage_deviation": suitability.max_leverage_deviation,
+            "min_stop_loss_buffer_percent": suitability.min_stop_loss_buffer_percent,
+        }.items()
+        if value is not None
+    }
+
+
+def _apply_suitability(
+    candidates: list[dict[str, Any]],
+    *,
+    direction: Direction,
+    suitability: SuitabilityCriteria,
+    underlying_reference_price: float | None,
+) -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    for raw in candidates:
+        candidate = dict(raw)
+        details: dict[str, Any] = {}
+
+        if suitability.target_leverage is not None:
+            leverage = _number(candidate.get("leverage"))
+            if leverage is None:
+                continue
+            deviation = abs(leverage - suitability.target_leverage)
+            details["leverage_deviation"] = round(deviation, 6)
+            if deviation > (suitability.max_leverage_deviation or 0):
+                continue
+
+        if suitability.min_stop_loss_buffer_percent is not None:
+            if underlying_reference_price is None:
+                raise ValueError(
+                    "a live underlying reference price is required for stop-loss buffer suitability"
+                )
+            stop_loss = _number(candidate.get("stop_loss"))
+            if stop_loss is None or stop_loss <= 0:
+                continue
+            buffer_percent = _stop_loss_buffer_percent(
+                direction,
+                underlying_reference_price,
+                stop_loss,
+            )
+            details["stop_loss_buffer_percent"] = round(buffer_percent, 6)
+            if buffer_percent < suitability.min_stop_loss_buffer_percent:
+                continue
+
+        if details:
+            candidate["suitability"] = details
+        selected.append(candidate)
+    return selected
 
 
 @dataclass(frozen=True)
@@ -448,6 +588,8 @@ class _Snapshot:
     direction: Direction
     product_types: tuple[ProductType, ...]
     filters: ScreenFilters
+    suitability: SuitabilityCriteria
+    suitability_context: dict[str, Any]
     available_filter_values: dict[str, Any]
     families: dict[str, dict[str, Any]]
     products: list[dict[str, Any]]
@@ -465,6 +607,8 @@ class _Snapshot:
     execution_started_at: datetime | None = None
     execution_duration_ms: float = 0.0
     execution_auth_worker_calls: int = 0
+    final_refresh_completed: bool = False
+    final_refresh_metadata: dict[str, Any] | None = None
 
 
 class _SnapshotStore:
@@ -512,6 +656,8 @@ def _page(snapshot: _Snapshot, offset: int, page_size: int) -> dict[str, Any]:
         "direction": snapshot.direction,
         "product_types": list(snapshot.product_types),
         "filters": _filter_payload(snapshot.filters),
+        "suitability": _suitability_payload(snapshot.suitability),
+        "suitability_context": snapshot.suitability_context,
         "available_filter_values": snapshot.available_filter_values,
         "families": snapshot.families,
         "snapshot": {
@@ -760,6 +906,7 @@ class LeveragedScreenService:
         product_types: list[ProductType],
         page_size: int,
         filters: ScreenFilters | None = None,
+        suitability: SuitabilityCriteria | None = None,
         *,
         prefer_catalog: bool = True,
     ) -> dict[str, Any]:
@@ -770,6 +917,8 @@ class LeveragedScreenService:
 
         selected_filters = _normalize_filters(filters or ScreenFilters())
         _validate_filters(selected_filters)
+        selected_suitability = _normalize_suitability(suitability)
+        _validate_suitability(selected_suitability)
 
         started_at, timer = datetime.now(timezone.utc), perf_counter()
         families: dict[str, dict[str, Any]] = {}
@@ -869,6 +1018,35 @@ class LeveragedScreenService:
             for candidate in all_products
             if _matches_filters(candidate, selected_filters)
         ]
+
+        suitability_context: dict[str, Any] = {}
+        underlying_reference_price: float | None = None
+        if selected_suitability.min_stop_loss_buffer_percent is not None:
+            try:
+                underlying_quote = await self._market.get_authenticated_market_data_quote(
+                    underlying_order_book_id
+                )
+            except (AvanzaAuthError, AvanzaError, ValueError) as exc:
+                raise ValueError(
+                    "authenticated underlying quote is required for min_stop_loss_buffer_percent"
+                ) from exc
+            underlying_reference_price = _underlying_reference_price(underlying_quote)
+            if underlying_reference_price is None:
+                raise ValueError(
+                    "authenticated underlying quote did not contain a usable reference price"
+                )
+            suitability_context = {
+                "underlying_reference_price": round(underlying_reference_price, 8),
+                "underlying_reference_source": "authenticated_trading_critical",
+            }
+
+        products = _apply_suitability(
+            products,
+            direction=direction,
+            suitability=selected_suitability,
+            underlying_reference_price=underlying_reference_price,
+        )
+
         for product_type in product_types:
             families[product_type]["eligible_count"] = sum(
                 candidate.get("product_type") == product_type
@@ -886,6 +1064,8 @@ class LeveragedScreenService:
             direction,
             tuple(product_types),
             selected_filters,
+            selected_suitability,
+            suitability_context,
             available_filter_values,
             families,
             products,
@@ -985,7 +1165,65 @@ class LeveragedScreenService:
 
         scan_complete = snapshot.execution_next_index >= total
         if scan_complete and snapshot.execution_products is not None:
+            final_observed_at = int(datetime.now(timezone.utc).timestamp() * 1000)
+            for product in snapshot.execution_products:
+                _refresh_live_freshness(product, final_observed_at)
             snapshot.execution_products.sort(key=_execution_rank)
+
+            if not snapshot.final_refresh_completed and snapshot.execution_products:
+                shortlist = snapshot.execution_products[:_FINAL_REFRESH_SIZE]
+                shortlist_ids = [
+                    str(product["order_book_id"]) for product in shortlist
+                ]
+                refresh_timer = perf_counter()
+                refresh_error: str | None = None
+                try:
+                    refreshed_quotes = (
+                        await self._market.get_authenticated_market_data_quotes(
+                            shortlist_ids
+                        )
+                    )
+                except AvanzaAuthError:
+                    refreshed_quotes = []
+                    refresh_error = "auth_required"
+                except AvanzaError:
+                    refreshed_quotes = []
+                    refresh_error = "upstream_unavailable"
+
+                refreshed_count = 0
+                if refresh_error is None:
+                    refreshed_by_id: dict[str, dict[str, Any]] = {}
+                    for product, quote in zip(shortlist, refreshed_quotes, strict=True):
+                        if quote is None:
+                            continue
+                        refreshed_by_id[str(product["order_book_id"])] = {
+                            **product,
+                            "live_market_data": _compact_live_quote(quote),
+                            "live_market_data_retrieved_at": datetime.now(
+                                timezone.utc
+                            ).isoformat(),
+                        }
+                        refreshed_count += 1
+                    snapshot.execution_products = [
+                        refreshed_by_id.get(str(product["order_book_id"]), product)
+                        for product in snapshot.execution_products
+                    ]
+                    final_observed_at = int(
+                        datetime.now(timezone.utc).timestamp() * 1000
+                    )
+                    for product in snapshot.execution_products:
+                        _refresh_live_freshness(product, final_observed_at)
+                    snapshot.execution_products.sort(key=_execution_rank)
+
+                snapshot.final_refresh_completed = True
+                snapshot.final_refresh_metadata = {
+                    "requested_count": len(shortlist_ids),
+                    "refreshed_count": refreshed_count,
+                    "duration_ms": round(
+                        (perf_counter() - refresh_timer) * 1000, 3
+                    ),
+                    "error": refresh_error,
+                }
 
         products = snapshot.execution_products or []
         authenticated_quote_count = sum(
@@ -1046,6 +1284,8 @@ class LeveragedScreenService:
             "scope": "complete_snapshot_progressive",
             "cache_hit": cache_hit,
             "current_call_upstream_requests": current_call_attempted_count,
+            "final_refresh": snapshot.final_refresh_metadata,
+            "final_refresh_size": _FINAL_REFRESH_SIZE,
         }
         if batch_error is not None:
             metadata["error"] = batch_error
@@ -1265,12 +1505,16 @@ class LeveragedScreenService:
         page_size: int,
         product_types: list[ProductType] | None = None,
         filters: ScreenFilters | None = None,
+        suitability: SuitabilityCriteria | None = None,
     ) -> dict[str, Any]:
         if offset < 0 or page_size < 1:
             raise ValueError("offset must be >= 0 and page_size must be >= 1")
         if filters is not None:
             filters = _normalize_filters(filters)
             _validate_filters(filters)
+        if suitability is not None:
+            suitability = _normalize_suitability(suitability)
+            _validate_suitability(suitability)
 
         snapshot = _SNAPSHOTS.get(snapshot_id)
         if (
@@ -1284,4 +1528,6 @@ class LeveragedScreenService:
             raise ValueError("product_types do not match the stored snapshot")
         if filters is not None and filters != snapshot.filters:
             raise ValueError("filters do not match the stored snapshot")
+        if suitability is not None and suitability != snapshot.suitability:
+            raise ValueError("suitability criteria do not match the stored snapshot")
         return _page(snapshot, offset, page_size)
