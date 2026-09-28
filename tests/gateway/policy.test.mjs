@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   ALL_ALLOWED_TOOLS,
-  DEFAULT_ALLOWED_TOOLS,
   checkRequest,
   compactSchema,
   compactToolDefinition,
