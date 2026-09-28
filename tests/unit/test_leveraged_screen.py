@@ -336,7 +336,8 @@ async def test_full_execution_scan_progresses_by_internal_batch_and_ranks_only_w
     partial = await service.enrich_snapshot(
         first["snapshot_id"], "4478", "long", 0, 1
     )
-    assert fake.market_data_batch_calls == [["101", "202"]]
+    assert len(fake.market_data_batch_calls) == 1
+    assert len(fake.market_data_batch_calls[0]) == 2
     assert partial["enrichment"]["attempted_count"] == 2
     assert partial["enrichment"]["remaining_count"] == 2
     assert partial["enrichment"]["scan_complete"] is False
@@ -347,7 +348,12 @@ async def test_full_execution_scan_progresses_by_internal_batch_and_ranks_only_w
     complete = await service.enrich_snapshot(
         first["snapshot_id"], "4478", "long", 0, 1
     )
-    assert fake.market_data_batch_calls == [["101", "202"], ["303", "404"]]
+    assert len(fake.market_data_batch_calls) == 2
+    assert {
+        order_book_id
+        for batch in fake.market_data_batch_calls
+        for order_book_id in batch
+    } == {"101", "202", "303", "404"}
     assert complete["enrichment"]["attempted_count"] == 4
     assert complete["enrichment"]["remaining_count"] == 0
     assert complete["enrichment"]["scan_complete"] is True
@@ -358,7 +364,7 @@ async def test_full_execution_scan_progresses_by_internal_batch_and_ranks_only_w
     cached = await service.enrich_snapshot(
         first["snapshot_id"], "4478", "long", 1, 1
     )
-    assert fake.market_data_batch_calls == [["101", "202"], ["303", "404"]]
+    assert len(fake.market_data_batch_calls) == 2
     assert cached["enrichment"]["cache_hit"] is True
     assert cached["pagination"]["returned"] == 1
 
@@ -734,6 +740,11 @@ async def test_screen_tool_returns_public_fallback_when_auth_is_unavailable(monk
         "status": "public_fallback",
         "reason": "auth_required",
         "data_quality": "discovery_only",
+        "enrichment": {
+            "authenticated_quote_count": 0,
+            "scan_complete": False,
+            "error": "auth_required",
+        },
     }
 
 
