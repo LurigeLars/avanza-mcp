@@ -118,6 +118,93 @@ async def test_market_batch_validates_session_once_for_multiple_paths(
     assert store.saves == 0
 
 
+async def test_persistent_market_daemon_reuses_validation_and_client(
+    monkeypatch, capsys
+):
+    session = SessionMaterial((), "token")
+    store = FakeStore(session)
+    validation_calls = 0
+    client_instances = []
+    seen_clients = []
+
+    async def validate(saved):
+        nonlocal validation_calls
+        validation_calls += 1
+        assert saved is session
+        return saved, None
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            client_instances.append(self)
+            self.kwargs = kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+    async def market(auth, command, client=None):
+        assert auth.session is session
+        assert client is not None
+        seen_clients.append(client)
+        return {"ok": True, "result": {"last": len(seen_clients)}}
+
+    def feed(loop, queue):
+        for payload in (
+            {
+                "action": "market",
+                "method": "GET",
+                "path": "/_api/market-guide/stock/4478/quote",
+                "params": None,
+                "json": None,
+            },
+            {
+                "action": "market",
+                "method": "GET",
+                "path": "/_api/market-guide/stock/4478/quote",
+                "params": None,
+                "json": None,
+            },
+            {"action": "shutdown"},
+        ):
+            loop.call_soon(queue.put_nowait, json.dumps(payload))
+
+    monkeypatch.setattr(worker, "create_session_store", lambda: store)
+    monkeypatch.setattr(worker, "_validate_saved_session", validate)
+    monkeypatch.setattr(worker, "AvanzaClient", FakeClient)
+    monkeypatch.setattr(worker, "_market_operation", market)
+    monkeypatch.setattr(worker, "_start_stdin_reader", feed)
+    monkeypatch.setattr(worker, "_parent_alive", lambda _pid: True)
+
+    await worker._run_persistent_market_daemon(123)
+
+    payloads = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if line.strip()
+    ]
+    assert payloads == [
+        {"ok": True, "result": {"last": 1}},
+        {"ok": True, "result": {"last": 2}},
+        {"ok": True},
+    ]
+    assert validation_calls == 1
+    assert store.loads == 1
+    assert len(client_instances) == 1
+    assert seen_clients == [client_instances[0], client_instances[0]]
+    assert client_instances[0].kwargs["max_connections"] == (
+        worker._MARKET_BATCH_CONCURRENCY
+    )
+    assert client_instances[0].kwargs["min_request_interval"] == (
+        worker._MARKET_BATCH_MIN_REQUEST_INTERVAL
+    )
+
+
+def test_persistent_market_session_revalidation_is_bounded():
+    assert worker._MARKET_SESSION_REVALIDATE_SECONDS == 15 * 60
+
+
 def test_authenticated_market_batch_pacing_is_50ms():
     assert worker._MARKET_BATCH_MIN_REQUEST_INTERVAL == 0.05
 
