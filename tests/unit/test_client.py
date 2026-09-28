@@ -1002,3 +1002,67 @@ async def test_429_retry_after_extends_shared_cooldown():
 
     assert exc.value.retry_after == 2
     assert 1.8 <= remaining <= 2.0
+
+
+@pytest.mark.asyncio
+async def test_authenticated_market_data_batch_uses_one_delegate_call():
+    paths = [
+        "/_api/trading-critical/rest/marketdata/101",
+        "/_api/trading-critical/rest/marketdata/102",
+        "/_api/trading-critical/rest/marketdata/103",
+    ]
+    delegate = AsyncMock(
+        return_value=[
+            {"quote": {"buy": 10.0}},
+            None,
+            {"quote": {"buy": 30.0}},
+        ]
+    )
+    client = AvanzaClient(
+        authenticated_market_data_batch_delegate=delegate,
+        max_retries=1,
+    )
+
+    async with client:
+        result = await client.get_authenticated_market_data_batch(paths)
+
+    assert result == [
+        {"quote": {"buy": 10.0}},
+        None,
+        {"quote": {"buy": 30.0}},
+    ]
+    delegate.assert_awaited_once_with(paths)
+
+
+@pytest.mark.asyncio
+async def test_authenticated_market_data_batch_rejects_other_auth_paths():
+    delegate = AsyncMock()
+    client = AvanzaClient(
+        authenticated_market_data_batch_delegate=delegate,
+        max_retries=1,
+    )
+
+    async with client:
+        with pytest.raises(AvanzaAuthError, match="trading-critical"):
+            await client.get_authenticated_market_data_batch(
+                ["/_api/market-guide/stock/4478/quote"]
+            )
+
+    delegate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_authenticated_market_data_batch_rejects_misaligned_result():
+    delegate = AsyncMock(return_value=[{"quote": {"buy": 10.0}}])
+    client = AvanzaClient(
+        authenticated_market_data_batch_delegate=delegate,
+        max_retries=1,
+    )
+    paths = [
+        "/_api/trading-critical/rest/marketdata/101",
+        "/_api/trading-critical/rest/marketdata/102",
+    ]
+
+    async with client:
+        with pytest.raises(AvanzaAPIError, match="result count"):
+            await client.get_authenticated_market_data_batch(paths)

@@ -24,7 +24,10 @@ from tenacity import (
 )
 
 from .. import __version__
-from .endpoints import authenticated_public_request_allowed
+from .endpoints import (
+    authenticated_public_request_allowed,
+    authenticated_public_request_family,
+)
 from .exceptions import (
     AvanzaAPIError,
     AvanzaAuthError,
@@ -157,6 +160,9 @@ class AvanzaClient:
         authenticated_request_delegate: Callable[
             [str, str, dict[str, Any]], Awaitable[httpx.Response | None]
         ] | None = None,
+        authenticated_market_data_batch_delegate: Callable[
+            [list[str]], Awaitable[list[dict[str, Any] | None] | None]
+        ] | None = None,
         max_in_flight_requests: int = DEFAULT_MAX_IN_FLIGHT_REQUESTS,
         min_request_interval: float = DEFAULT_MIN_REQUEST_INTERVAL,
         request_jitter: float = DEFAULT_REQUEST_JITTER,
@@ -189,6 +195,9 @@ class AvanzaClient:
         self._session_provider = session_provider
         self._session_invalidated = session_invalidated
         self._authenticated_request_delegate = authenticated_request_delegate
+        self._authenticated_market_data_batch_delegate = (
+            authenticated_market_data_batch_delegate
+        )
         if (
             not isinstance(max_in_flight_requests, int)
             or isinstance(max_in_flight_requests, bool)
@@ -598,6 +607,57 @@ class AvanzaClient:
             params=params,
             require_authenticated=True,
         )
+
+    async def get_authenticated_market_data_batch(
+        self, paths: list[str]
+    ) -> list[dict[str, Any] | None]:
+        """GET reviewed trading-critical market-data paths in one auth-worker batch."""
+        if not paths:
+            return []
+        for path in paths:
+            self._require_same_origin_authenticated_path(path)
+            if (
+                authenticated_public_request_family("GET", path)
+                != "trading_critical_market_data"
+            ):
+                raise AvanzaAuthError(
+                    "Authenticated batch path is not approved trading-critical market data"
+                )
+
+        delegate = self._authenticated_market_data_batch_delegate
+        if (
+            delegate is not None
+            and self._base_url.rstrip("/") == self.DEFAULT_BASE_URL
+        ):
+            result = await delegate(list(paths))
+            if result is None:
+                raise AvanzaAuthError("No authenticated Avanza session is available")
+            if len(result) != len(paths):
+                raise AvanzaAPIError(
+                    502,
+                    "Authenticated market-data batch returned an invalid result count",
+                )
+            if any(item is not None and not isinstance(item, dict) for item in result):
+                raise AvanzaAPIError(
+                    502,
+                    "Authenticated market-data batch returned an invalid result shape",
+                )
+            return result
+
+        results: list[dict[str, Any] | None] = []
+        for path in paths:
+            try:
+                item = await self.get_authenticated(path)
+            except (AvanzaNotFoundError, AvanzaAPIError):
+                results.append(None)
+                continue
+            if not isinstance(item, dict):
+                raise AvanzaAPIError(
+                    502,
+                    "Authenticated market-data batch returned an invalid result shape",
+                )
+            results.append(item)
+        return results
 
     async def get_public(
         self, path: str, params: dict[str, Any] | None = None

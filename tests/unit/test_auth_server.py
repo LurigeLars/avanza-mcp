@@ -22,7 +22,9 @@ class FakeBroker:
         self.opened = 0
         self.account_calls = []
         self.market_calls = []
+        self.market_batch_calls = []
         self.market_response = None
+        self.market_batch_response = None
         self.account_results = {}
 
     async def connect(self):
@@ -47,6 +49,10 @@ class FakeBroker:
     async def market_request(self, method, path, kwargs):
         self.market_calls.append((method, path, kwargs))
         return self.market_response
+
+    async def market_data_batch(self, paths):
+        self.market_batch_calls.append(list(paths))
+        return self.market_batch_response
 
     async def aclose(self):
         self.closed = True
@@ -123,6 +129,7 @@ async def test_auth_lifespan_resets_global_worker_delegate():
     assert avanza_mcp._auth_session_provider is None
     assert avanza_mcp._auth_session_invalidator is None
     assert avanza_mcp._auth_request_delegate is None
+    assert avanza_mcp._auth_market_data_batch_delegate is None
 
 
 def test_auth_transport_is_stdio(monkeypatch):

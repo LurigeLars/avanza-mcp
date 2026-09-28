@@ -28,8 +28,8 @@ RealtimePageSize = Annotated[
     Field(
         ge=1,
         description=(
-            "Number of shortlisted products to refetch from instrument-info endpoints. "
-            "No fixed upper bound; each product causes one governed upstream request."
+            "Number of shortlisted products to refetch from authenticated trading-critical "
+            "market data. No fixed upper bound; each product causes one governed upstream request."
         ),
     ),
 ]
@@ -179,18 +179,17 @@ async def enrich_leveraged_snapshot(
     offset: PageOffset = 0,
     page_size: RealtimePageSize = 5,
 ):
-    """Refetch a small leveraged snapshot shortlist with current instrument-info quotes.
+    """Refetch a leveraged shortlist through authenticated trading-critical market data.
 
     The parent screen uses Avanza's filter feed for full-universe discovery and ranking; live
-    testing shows those discovery prices can lag authenticated instrument-info quotes by about
-    fifteen minutes. This tool preserves the structural snapshot order and refetches only the
-    requested page.
+    testing shows those discovery prices can lag authenticated trading-critical quotes by about
+    fifteen minutes. This tool preserves structural snapshot order and refetches only the
+    requested page through one isolated auth worker and one session validation.
 
-    There is no fixed page-size upper bound. Each returned product requires one governed upstream
-    instrument-info request, so large pages may take substantially longer. Inspect each returned
-    quote's is_real_time and freshness fields before treating bid/ask as execution evidence.
-    Repeated calls refetch rather than cache so the returned shortlist can be refreshed close to
-    execution time.
+    There is no fixed page-size upper bound. Each returned product still requires one governed
+    upstream market-data request, so large pages may take substantially longer. The trading-
+    critical quote does not expose an is_real_time flag; inspect quote.source and quote.freshness
+    ages before treating bid/ask as execution evidence. Repeated calls refetch rather than cache.
     """
     service = LeveragedScreenService(ctx.lifespan_context["client"])
     try:

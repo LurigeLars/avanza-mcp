@@ -17,6 +17,9 @@ _auth_session_invalidator: Callable[[], Awaitable[None]] | None = None
 _auth_request_delegate: Callable[
     [str, str, dict[str, Any]], Awaitable[Any | None]
 ] | None = None
+_auth_market_data_batch_delegate: Callable[
+    [list[str]], Awaitable[Any | None]
+] | None = None
 
 
 def _configure_authenticated_requests(
@@ -25,11 +28,16 @@ def _configure_authenticated_requests(
     request_delegate: Callable[
         [str, str, dict[str, Any]], Awaitable[Any | None]
     ] | None = None,
+    market_data_batch_delegate: Callable[
+        [list[str]], Awaitable[Any | None]
+    ] | None = None,
 ) -> None:
     global _auth_session_provider, _auth_session_invalidator, _auth_request_delegate
+    global _auth_market_data_batch_delegate
     _auth_session_provider = provider
     _auth_session_invalidator = invalidator
     _auth_request_delegate = request_delegate
+    _auth_market_data_batch_delegate = market_data_batch_delegate
 
 
 async def _invalidate_authenticated_session() -> None:
@@ -46,6 +54,7 @@ async def lifespan(server: FastMCP) -> AsyncIterator[dict[str, AvanzaClient]]:
         ),
         session_invalidated=_invalidate_authenticated_session,
         authenticated_request_delegate=_auth_request_delegate,
+        authenticated_market_data_batch_delegate=_auth_market_data_batch_delegate,
     ) as client:
         yield {"client": client}
 
