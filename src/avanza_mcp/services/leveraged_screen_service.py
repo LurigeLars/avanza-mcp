@@ -12,7 +12,7 @@ from uuid import uuid4
 from pydantic import Field
 
 from ..client.base import AvanzaClient
-from ..client.exceptions import AvanzaError
+from ..client.exceptions import AvanzaError, AvanzaNotFoundError
 from ..instrument_catalog import InstrumentCatalog, fresh_default_instrument_catalog
 from ..models.certificate import CertificateFilter, CertificateFilterRequest
 from ..models.filter import SortBy
@@ -23,6 +23,8 @@ ProductType = Literal["certificate", "warrant"]
 Direction = Literal["long", "short"]
 _FALLBACK_REQUEST_SIZE = 500
 _MAX_CONCURRENT_PAGES = 8
+_MAX_CONCURRENT_REALTIME_ENRICHMENT = 4
+_MAX_REALTIME_ENRICHMENT_PAGE_SIZE = 10
 _SNAPSHOT_TTL = timedelta(minutes=10)
 _RANKING = "two_way_quote, spread_percent_asc, turnover_desc"
 
@@ -83,6 +85,73 @@ def _normalize_candidate(item: Any, product_type: ProductType) -> dict[str, Any]
             "spread_percent_from_discovery_prices": _discovery_spread_percent(bid, ask),
             "total_value_traded": raw.get("totalValueTraded"),
             "underlying": underlying,
+        }.items()
+        if value is not None
+    }
+
+
+def _compact_live_info(info: Any) -> dict[str, Any]:
+    raw = info.model_dump(mode="json", by_alias=True, exclude_none=True)
+    quote = raw.get("quote") if isinstance(raw.get("quote"), dict) else {}
+    freshness = (
+        quote.get("freshness") if isinstance(quote.get("freshness"), dict) else {}
+    )
+    bid, ask = quote.get("buy"), quote.get("sell")
+    key_indicators = (
+        raw.get("keyIndicators")
+        if isinstance(raw.get("keyIndicators"), dict)
+        else {}
+    )
+
+    compact_freshness = {
+        target: freshness[source]
+        for source, target in (
+            ("observedAt", "observed_at"),
+            ("sourceUpdatedAt", "source_updated_at"),
+            ("bidAskUpdatedAt", "bid_ask_updated_at"),
+            ("lastTradeAt", "last_trade_at"),
+            ("sourceUpdateAgeMs", "source_update_age_ms"),
+            ("bidAskAgeMs", "bid_ask_age_ms"),
+            ("lastTradeAgeMs", "last_trade_age_ms"),
+            ("upstreamIsRealTime", "upstream_is_real_time"),
+            ("realTimeFlagIsFreshnessGuarantee", "real_time_flag_is_freshness_guarantee"),
+        )
+        if freshness.get(source) is not None
+    }
+    compact_quote = {
+        key: value
+        for key, value in {
+            "bid": bid,
+            "ask": ask,
+            "last": quote.get("last"),
+            "upstream_spread": quote.get("spread"),
+            "spread_percent_from_live_prices": _discovery_spread_percent(bid, ask),
+            "total_value_traded": quote.get("totalValueTraded"),
+            "total_volume_traded": quote.get("totalVolumeTraded"),
+            "updated": quote.get("updated"),
+            "is_real_time": quote.get("isRealTime"),
+            "freshness": compact_freshness or None,
+        }.items()
+        if value is not None
+    }
+    compact_indicators = {
+        target: key_indicators[source]
+        for source, target in (
+            ("leverage", "leverage"),
+            ("barrierLevel", "barrier_level"),
+            ("financingLevel", "financing_level"),
+            ("stopLoss", "stop_loss"),
+            ("parity", "parity"),
+            ("direction", "direction"),
+            ("subType", "sub_type"),
+        )
+        if key_indicators.get(source) is not None
+    }
+    return {
+        key: value
+        for key, value in {
+            "quote": compact_quote or None,
+            "key_indicators": compact_indicators or None,
         }.items()
         if value is not None
     }
@@ -382,8 +451,13 @@ def _page(snapshot: _Snapshot, offset: int, page_size: int) -> dict[str, Any]:
             "number of candidates actually scanned after structural pushdown. Exact issuer/sub-type "
             "vocabulary is supplemented from upstream filter metadata when available; leverage "
             "availability is derived from scanned candidates. Calls using snapshot_id reuse the "
-            "frozen ranking and do not refetch market data. Initial quote collection is non-atomic "
-            "because upstream pages are fetched over time; after the first page establishes the "
+            "frozen ranking and do not refetch market data. discovery_bid/discovery_ask and "
+            "the ranking spread come from Avanza's filter feed, which live testing showed can lag "
+            "the authenticated instrument-info quote by roughly 15 minutes; do not use discovery "
+            "prices as execution evidence. Use enrich_leveraged_snapshot on a small shortlisted "
+            "page and inspect live_market_data.quote.is_real_time plus freshness before trading. "
+            "Initial quote collection is non-atomic because upstream pages are fetched over time; "
+            "after the first page establishes the "
             "total, remaining pages may be fetched concurrently. If pagination.has_more is true, "
             "this response is only a partial view of the snapshot."
         ),
@@ -687,6 +761,140 @@ class LeveragedScreenService:
         )
         _SNAPSHOTS.put(snapshot)
         return _page(snapshot, 0, page_size)
+
+    async def enrich_page(
+        self,
+        snapshot_id: str,
+        underlying_order_book_id: str,
+        direction: Direction,
+        offset: int,
+        page_size: int,
+    ) -> dict[str, Any]:
+        if offset < 0:
+            raise ValueError("offset must be >= 0")
+        if page_size < 1 or page_size > _MAX_REALTIME_ENRICHMENT_PAGE_SIZE:
+            raise ValueError(
+                f"page_size must be between 1 and {_MAX_REALTIME_ENRICHMENT_PAGE_SIZE}"
+            )
+
+        snapshot = _SNAPSHOTS.get(snapshot_id)
+        if (
+            snapshot.underlying_order_book_id != underlying_order_book_id
+            or snapshot.direction != direction
+        ):
+            raise ValueError(
+                "snapshot_id does not match the supplied underlying_order_book_id and direction"
+            )
+
+        selected_products = snapshot.products[offset : offset + page_size]
+        started_at = datetime.now(timezone.utc)
+        timer = perf_counter()
+        semaphore = asyncio.Semaphore(_MAX_CONCURRENT_REALTIME_ENRICHMENT)
+
+        async def enrich(product: dict[str, Any]) -> dict[str, Any]:
+            async with semaphore:
+                order_book_id = str(product["order_book_id"])
+                try:
+                    if product.get("product_type") == "certificate":
+                        info = await self._market.get_certificate_info(order_book_id)
+                    else:
+                        info = await self._market.get_warrant_info(order_book_id)
+                except AvanzaNotFoundError:
+                    return {
+                        **product,
+                        "live_market_data_error": "not_found",
+                        "live_market_data_retrieved_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                except AvanzaError:
+                    return {
+                        **product,
+                        "live_market_data_error": "upstream_unavailable",
+                        "live_market_data_retrieved_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                return {
+                    **product,
+                    "live_market_data": _compact_live_info(info),
+                    "live_market_data_retrieved_at": datetime.now(timezone.utc).isoformat(),
+                }
+
+        products = await asyncio.gather(*(enrich(product) for product in selected_products))
+        completed_at = datetime.now(timezone.utc)
+        returned = len(products)
+        total = len(snapshot.products)
+        has_more = offset + returned < total
+        realtime_count = sum(
+            product.get("live_market_data", {})
+            .get("quote", {})
+            .get("is_real_time")
+            is True
+            for product in products
+        )
+        live_two_way_count = sum(
+            _has_two_way_quote(
+                {
+                    "discovery_bid": product.get("live_market_data", {})
+                    .get("quote", {})
+                    .get("bid"),
+                    "discovery_ask": product.get("live_market_data", {})
+                    .get("quote", {})
+                    .get("ask"),
+                }
+            )
+            for product in products
+        )
+
+        return {
+            "snapshot_id": snapshot.snapshot_id,
+            "underlying_order_book_id": snapshot.underlying_order_book_id,
+            "direction": snapshot.direction,
+            "structural_snapshot": {
+                "eligible_count": total,
+                "expires_at": snapshot.expires_at.isoformat(),
+                "ranking": _RANKING,
+                "ranking_quote_source": "delayed_filter_feed",
+            },
+            "enrichment": {
+                "started_at": started_at.isoformat(),
+                "completed_at": completed_at.isoformat(),
+                "duration_ms": round((perf_counter() - timer) * 1000, 3),
+                "attempted_count": returned,
+                "enriched_count": sum("live_market_data" in product for product in products),
+                "not_found_count": sum(
+                    product.get("live_market_data_error") == "not_found"
+                    for product in products
+                ),
+                "upstream_error_count": sum(
+                    product.get("live_market_data_error") == "upstream_unavailable"
+                    for product in products
+                ),
+                "realtime_quote_count": realtime_count,
+                "two_way_quote_count": live_two_way_count,
+                "max_concurrency": _MAX_CONCURRENT_REALTIME_ENRICHMENT,
+                "max_page_size": _MAX_REALTIME_ENRICHMENT_PAGE_SIZE,
+                "source": "authenticated_if_connected instrument-info endpoints",
+                "scope": "requested_snapshot_page",
+                "cache_hit": False,
+                "current_call_upstream_requests": returned,
+            },
+            "pagination": {
+                "total": total,
+                "offset": offset,
+                "page_size": page_size,
+                "returned": returned,
+                "has_more": has_more,
+                "next_offset": offset + returned if has_more else None,
+            },
+            "products": products,
+            "returned": returned,
+            "ordering": "structural_snapshot_order",
+            "data_note": (
+                "The structural snapshot order was created from Avanza's delayed filter feed. "
+                "This enrichment refetches only the requested shortlist through instrument-info "
+                "endpoints. Treat bid/ask as execution evidence only when quote.is_real_time is "
+                "true and quote.freshness ages are acceptably low. The enrichment is non-atomic "
+                "across products and is intentionally limited to ten products per call."
+            ),
+        }
 
     def get_page(
         self,
