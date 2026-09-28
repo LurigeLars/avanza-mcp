@@ -111,17 +111,23 @@ def create_auth_server(broker: AuthProcessBroker | None = None) -> FastMCP:
     async def lifespan(server: FastMCP) -> AsyncIterator[dict[str, AvanzaClient]]:
         # The long-lived MCP process never receives Avanza cookies/tokens. Public
         # realtime-capable requests are delegated to isolated workers instead.
-        _configure_authenticated_requests(None, None, broker.market_request)
+        _configure_authenticated_requests(
+            None,
+            None,
+            broker.market_request,
+            broker.market_data_batch,
+        )
         try:
             async with AvanzaClient(
-                authenticated_request_delegate=broker.market_request
+                authenticated_request_delegate=broker.market_request,
+                authenticated_market_data_batch_delegate=broker.market_data_batch,
             ) as client:
                 yield {"client": client}
         finally:
             try:
                 await broker.aclose()
             finally:
-                _configure_authenticated_requests(None, None, None)
+                _configure_authenticated_requests(None, None, None, None)
 
     server = FastMCP(
         "Avanza MCP Authenticated Server",
