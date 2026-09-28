@@ -65,6 +65,59 @@ async def test_persistent_operation_validates_and_reads_concurrently(monkeypatch
     assert store.deletes == 0
 
 
+async def test_market_batch_validates_session_once_for_multiple_paths(
+    monkeypatch, capsys
+):
+    session = SessionMaterial((), "token")
+    store = FakeStore(session)
+    validation_calls = 0
+    batch_calls = 0
+
+    async def validate(saved):
+        nonlocal validation_calls
+        validation_calls += 1
+        assert saved is session
+        return saved, None
+
+    async def batch(auth, command):
+        nonlocal batch_calls
+        batch_calls += 1
+        assert auth.session is session
+        assert command["paths"] == [
+            "/_api/trading-critical/rest/marketdata/101",
+            "/_api/trading-critical/rest/marketdata/102",
+        ]
+        return {
+            "ok": True,
+            "result": [
+                {"quote": {"buy": 10.0}},
+                {"quote": {"buy": 20.0}},
+            ],
+        }
+
+    monkeypatch.setattr(worker, "create_session_store", lambda: store)
+    monkeypatch.setattr(worker, "_validate_saved_session", validate)
+    monkeypatch.setattr(worker, "_market_batch_operation", batch)
+
+    await worker._run_once(
+        {
+            "action": "market_batch",
+            "paths": [
+                "/_api/trading-critical/rest/marketdata/101",
+                "/_api/trading-critical/rest/marketdata/102",
+            ],
+        }
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+    assert len(payload["result"]) == 2
+    assert validation_calls == 1
+    assert batch_calls == 1
+    assert store.loads == 1
+    assert store.saves == 0
+
+
 async def test_invalid_validation_discards_concurrent_success(monkeypatch, capsys):
     session = SessionMaterial((), "token")
     store = FakeStore(session)
