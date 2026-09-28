@@ -181,7 +181,6 @@ async def test_realtime_enrichment_refetches_only_requested_snapshot_page():
     assert enriched["enrichment"]["enriched_count"] == 2
     assert enriched["enrichment"]["realtime_quote_count"] == 2
     assert enriched["enrichment"]["two_way_quote_count"] == 2
-    assert enriched["enrichment"]["max_page_size"] == 10
     assert enriched["structural_snapshot"]["ranking_quote_source"] == "delayed_filter_feed"
     assert enriched["ordering"] == "structural_snapshot_order"
 
@@ -197,14 +196,22 @@ async def test_realtime_enrichment_refetches_only_requested_snapshot_page():
 
 
 @pytest.mark.asyncio
-async def test_realtime_enrichment_caps_page_size_at_ten():
+async def test_realtime_enrichment_has_no_artificial_page_maximum():
     service = LeveragedScreenService(object())
     fake = FakeMarket()
     service._market = fake
     first = await service.screen("4478", "long", ["warrant"], 1)
 
-    with pytest.raises(ValueError, match="page_size must be between 1 and 10"):
-        await service.enrich_page(first["snapshot_id"], "4478", "long", 0, 11)
+    enriched = await service.enrich_page(
+        first["snapshot_id"],
+        "4478",
+        "long",
+        0,
+        11,
+    )
+
+    assert enriched["pagination"]["page_size"] == 11
+    assert enriched["pagination"]["returned"] == 1
 
 
 @pytest.mark.asyncio
@@ -518,7 +525,7 @@ async def test_screen_tool_has_unbounded_page_size_and_filter_contract():
     enrich = tools["enrich_leveraged_snapshot"]
     enrich_props = enrich.input_schema["properties"]
     assert enrich_props["page_size"]["minimum"] == 1
-    assert enrich_props["page_size"]["maximum"] == 10
+    assert "maximum" not in enrich_props["page_size"]
     assert enrich_props["page_size"]["default"] == 5
     assert enrich_props["snapshot_id"]["pattern"] == "^[0-9a-f]{32}$"
 

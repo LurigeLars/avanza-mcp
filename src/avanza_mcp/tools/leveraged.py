@@ -27,10 +27,9 @@ RealtimePageSize = Annotated[
     int,
     Field(
         ge=1,
-        le=10,
         description=(
             "Number of shortlisted products to refetch from instrument-info endpoints. "
-            "Capped at 10 to bound live upstream load."
+            "No fixed upper bound; each product causes one governed upstream request."
         ),
     ),
 ]
@@ -187,9 +186,11 @@ async def enrich_leveraged_snapshot(
     fifteen minutes. This tool preserves the structural snapshot order and refetches only the
     requested page.
 
-    page_size is intentionally capped at 10. Inspect each returned quote's is_real_time and
-    freshness fields before treating bid/ask as execution evidence. Repeated calls refetch rather
-    than cache so the returned shortlist can be refreshed close to execution time.
+    There is no fixed page-size upper bound. Each returned product requires one governed upstream
+    instrument-info request, so large pages may take substantially longer. Inspect each returned
+    quote's is_real_time and freshness fields before treating bid/ask as execution evidence.
+    Repeated calls refetch rather than cache so the returned shortlist can be refreshed close to
+    execution time.
     """
     service = LeveragedScreenService(ctx.lifespan_context["client"])
     try:
