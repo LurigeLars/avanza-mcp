@@ -909,7 +909,7 @@ class LeveragedScreenService:
             )
             for product in products
         )
-        execution_shortlist = sorted(products, key=_execution_rank)
+        products.sort(key=_execution_rank)
 
         return {
             "snapshot_id": snapshot.snapshot_id,
@@ -954,22 +954,17 @@ class LeveragedScreenService:
             },
             "products": products,
             "returned": returned,
-            "ordering": "structural_snapshot_order",
-            "execution_shortlist": execution_shortlist,
+            "ordering": "execution_ranking",
             "execution_ranking": _EXECUTION_RANKING,
             "execution_freshness_basis": "bid_ask_updated_at",
             "last_trade_role": "informational_only_for_leveraged_products",
             "data_note": (
-                "The structural snapshot order was created from Avanza's delayed filter feed. "
-                "This enrichment refetches only the requested shortlist through Avanza's "
-                "authenticated trading-critical market-data endpoint. The shortlist is sent "
-                "through one isolated auth worker and one session validation, while still issuing "
-                "one governed upstream market-data request per returned product. That endpoint "
-                "does not report an is_real_time flag; use quote.source and bid/ask freshness "
-                "as the execution-time evidence. For leveraged market-maker products, last_trade "
-                "is informational only and is not used for execution freshness or ranking. "
-                "The enrichment is non-atomic across products. "
-                "Large pages can therefore take substantially longer."
+                "This internal refetch verifies the requested structural page through Avanza's "
+                "authenticated trading-critical market-data endpoint, using one isolated auth "
+                "worker and one session validation while issuing one governed upstream request "
+                "per returned product. Products are returned in execution ranking based on fresh "
+                "two-way bid/ask, spread, and bid/ask age. For leveraged market-maker products, "
+                "last_trade is informational only. Large pages can take substantially longer."
             ),
         }
 
