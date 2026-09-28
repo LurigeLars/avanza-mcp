@@ -40,7 +40,12 @@ async def test_registered_schemas_and_annotations():
         assert tool.annotations.destructiveHint is False
         assert tool.annotations.idempotentHint is True
         assert tool.annotations.openWorldHint is True
-        if tool.name in {"screen_leveraged_instruments", "screen_options", "enrich_option_snapshot"}:
+        if tool.name in {
+            "screen_leveraged_instruments",
+            "enrich_leveraged_snapshot",
+            "screen_options",
+            "enrich_option_snapshot",
+        }:
             assert tool.outputSchema is None
         else:
             assert tool.outputSchema
