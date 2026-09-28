@@ -118,8 +118,8 @@ async def test_market_batch_validates_session_once_for_multiple_paths(
     assert store.saves == 0
 
 
-def test_authenticated_market_batch_pacing_is_75ms():
-    assert worker._MARKET_BATCH_MIN_REQUEST_INTERVAL == 0.075
+def test_authenticated_market_batch_pacing_is_50ms():
+    assert worker._MARKET_BATCH_MIN_REQUEST_INTERVAL == 0.05
 
 
 
