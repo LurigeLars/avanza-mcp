@@ -8,6 +8,7 @@ from threading import Lock
 from time import perf_counter
 from typing import Any, Literal
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from pydantic import Field
 
@@ -26,6 +27,7 @@ _MAX_CONCURRENT_PAGES = 8
 _MAX_CONCURRENT_REALTIME_ENRICHMENT = 4
 _SNAPSHOT_TTL = timedelta(minutes=10)
 _RANKING = "two_way_quote, spread_percent_asc, turnover_desc"
+_AVANZA_MARKET_TIMEZONE = ZoneInfo("Europe/Stockholm")
 
 
 class _LeveragedCertificateFilterRequest(CertificateFilterRequest):
@@ -106,7 +108,10 @@ def _timestamp_ms(value: Any) -> int | None:
     except ValueError:
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+        # Avanza trading-critical timestamps are local Swedish market time
+        # without an explicit offset. Resolve them with Europe/Stockholm so
+        # daylight-saving transitions are handled correctly.
+        parsed = parsed.replace(tzinfo=_AVANZA_MARKET_TIMEZONE)
     return int(parsed.timestamp() * 1000)
 
 
