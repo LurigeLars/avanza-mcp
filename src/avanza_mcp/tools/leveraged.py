@@ -111,11 +111,12 @@ async def screen_leveraged_instruments(
     Avanza. Omit product/filter arguments when paging, or repeat semantically equivalent values.
     Always inspect pagination.total, pagination.has_more and pagination.next_offset.
 
-    This tool is authenticated-only at runtime. It uses Avanza's structural filter feed internally
-    to discover and rank the full eligible universe, then refetches exactly the requested page
-    through the isolated auth worker before returning it. page_size therefore controls both the
-    returned row count and authenticated execution verification; there is no fixed shortlist cap.
-    Leveraged execution freshness is based on bid/ask update age; last_trade is informational only.
+    This tool always runs. It discovers and ranks the full eligible universe from Avanza's
+    structural market-data feed. When a valid authenticated session is available, it also refetches
+    the requested page through the isolated auth worker and returns execution-ranked bid/ask data.
+    Without auth, the same call returns the public discovery page instead of failing. page_size has
+    no fixed upper bound. For authenticated leveraged data, freshness is based on bid/ask update age;
+    last_trade is informational only.
     """
     selected = product_types or ["certificate", "warrant"]
     selected_filters = _screen_filters(
@@ -176,34 +177,44 @@ async def screen_leveraged_instruments(
             authenticated_count = int(
                 enriched.get("enrichment", {}).get("authenticated_quote_count") or 0
             )
-            if authenticated_count == 0 and any(
-                product.get("live_market_data_error") == "auth_required"
-                for product in enriched.get("products", [])
-            ):
-                raise ToolError(
-                    "AVANZA_AUTH_REQUIRED: Call connect_avanza, complete BankID locally, then retry."
+            if authenticated_count > 0:
+                discovery_ranking = result.get("ranking")
+                result["products"] = enriched.get("products", [])
+                result["returned"] = enriched.get("returned", 0)
+                result["ranking"] = enriched.get("execution_ranking")
+                result["discovery_ranking"] = discovery_ranking
+                result["execution"] = {
+                    "status": "authenticated",
+                    "freshness_basis": enriched.get("execution_freshness_basis"),
+                    "last_trade_role": enriched.get("last_trade_role"),
+                    "enrichment": enriched.get("enrichment"),
+                }
+                result["data_note"] = (
+                    "The complete eligible universe is discovered structurally before paging. "
+                    "The returned page is authenticated and re-ranked from bid/ask quality and "
+                    "bid/ask freshness. discovery_bid/discovery_ask are retained only as "
+                    "structural provenance. For leveraged market-maker products, last_trade is "
+                    "informational only."
                 )
-
-            discovery_ranking = result.get("ranking")
-            result["products"] = enriched.get("products", [])
-            result["returned"] = enriched.get("returned", 0)
-            result["ranking"] = enriched.get("execution_ranking")
-            result["discovery_ranking"] = discovery_ranking
-            result["execution"] = {
-                "status": (
-                    "authenticated" if authenticated_count > 0 else "unavailable"
-                ),
-                "freshness_basis": enriched.get("execution_freshness_basis"),
-                "last_trade_role": enriched.get("last_trade_role"),
-                "enrichment": enriched.get("enrichment"),
-            }
-            result["data_note"] = (
-                "The complete eligible universe is discovered structurally before paging. "
-                "The returned page is then refetched through authenticated trading-critical "
-                "market data and re-ranked from bid/ask quality and bid/ask freshness. "
-                "discovery_bid/discovery_ask are retained only as structural provenance. "
-                "For leveraged market-maker products, last_trade is informational only."
-            )
+            else:
+                auth_required = any(
+                    product.get("live_market_data_error") == "auth_required"
+                    for product in enriched.get("products", [])
+                )
+                result["execution"] = {
+                    "status": "public_fallback",
+                    "reason": (
+                        "auth_required"
+                        if auth_required
+                        else "authenticated_market_data_unavailable"
+                    ),
+                    "data_quality": "discovery_only",
+                }
+                result["data_note"] = (
+                    "No usable authenticated trading-critical quote was available, so this call "
+                    "returned the public discovery page instead of failing. discovery_bid and "
+                    "discovery_ask may be delayed and are not execution-grade prices."
+                )
     except ValueError as exc:
         raise ToolError(str(exc)) from exc
     return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
