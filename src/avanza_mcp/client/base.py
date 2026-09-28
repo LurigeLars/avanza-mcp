@@ -590,6 +590,8 @@ class AvanzaClient:
     ) -> dict[str, Any] | list[Any]:
         """GET one reviewed read-only endpoint and require the authenticated path."""
         self._require_same_origin_authenticated_path(path)
+        if not authenticated_public_request_allowed("GET", path):
+            raise AvanzaAuthError("Authenticated market path is not approved")
         return await self._request(
             "GET",
             path,
