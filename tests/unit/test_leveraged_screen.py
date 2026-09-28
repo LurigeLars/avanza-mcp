@@ -11,6 +11,7 @@ from avanza_mcp.services.leveraged_screen_service import (
     LeveragedScreenService,
     ScreenFilters,
     _discovery_spread_percent,
+    _execution_rank,
     _timestamp_ms,
 )
 
@@ -117,6 +118,43 @@ def test_discovery_spread_percent_is_midpoint_based_and_bounded():
     assert _discovery_spread_percent(0, 10.1) is None
 
 
+def test_execution_rank_uses_bid_ask_freshness_not_last_trade_age():
+    fresh_quote_old_trade = {
+        "order_book_id": "fresh",
+        "live_market_data": {
+            "quote": {
+                "bid": 10.0,
+                "ask": 10.01,
+                "spread_percent_from_live_prices": 0.09995,
+                "freshness": {
+                    "bid_ask_age_ms": 2_000,
+                    "last_trade_age_ms": 86_400_000,
+                },
+            }
+        },
+    }
+    stale_quote_recent_trade = {
+        "order_book_id": "stale",
+        "live_market_data": {
+            "quote": {
+                "bid": 10.0,
+                "ask": 10.001,
+                "spread_percent_from_live_prices": 0.0099995,
+                "freshness": {
+                    "bid_ask_age_ms": 120_000,
+                    "last_trade_age_ms": 500,
+                },
+            }
+        },
+    }
+
+    ranked = sorted(
+        [stale_quote_recent_trade, fresh_quote_old_trade],
+        key=_execution_rank,
+    )
+    assert [item["order_book_id"] for item in ranked] == ["fresh", "stale"]
+
+
 @pytest.mark.asyncio
 async def test_snapshot_pagination_reuses_same_ranked_data_without_refetching():
     service = LeveragedScreenService(object())
@@ -175,6 +213,10 @@ async def test_realtime_enrichment_refetches_only_requested_snapshot_page():
     assert enriched["enrichment"]["two_way_quote_count"] == 2
     assert enriched["structural_snapshot"]["ranking_quote_source"] == "delayed_filter_feed"
     assert enriched["ordering"] == "structural_snapshot_order"
+    assert enriched["execution_freshness_basis"] == "bid_ask_updated_at"
+    assert enriched["last_trade_role"] == "informational_only_for_leveraged_products"
+    assert enriched["execution_ranking"].startswith("fresh_two_way_quote")
+    assert len(enriched["execution_shortlist"]) == 2
 
     by_id = {product["order_book_id"]: product for product in enriched["products"]}
     assert by_id["101"]["discovery_bid"] == 9.9
@@ -183,10 +225,11 @@ async def test_realtime_enrichment_refetches_only_requested_snapshot_page():
         by_id["101"]["live_market_data"]["quote"]["source"]
         == "authenticated_trading_critical"
     )
-    assert (
-        by_id["101"]["live_market_data"]["quote"]["freshness"]["source_updated_at"]
-        == 1790580601000
-    )
+    freshness = by_id["101"]["live_market_data"]["quote"]["freshness"]
+    assert freshness["source_updated_at"] == 1790580601000
+    assert freshness["execution_freshness_basis"] == "bid_ask_updated_at"
+    assert freshness["execution_stale_after_ms"] == 30_000
+    assert freshness["last_trade_role"] == "informational_only_for_leveraged_products"
     assert by_id["202"]["live_market_data"]["quote"]["bid"] == 5.2
 
 

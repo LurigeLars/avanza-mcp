@@ -26,6 +26,10 @@ _FALLBACK_REQUEST_SIZE = 500
 _MAX_CONCURRENT_PAGES = 8
 _SNAPSHOT_TTL = timedelta(minutes=10)
 _RANKING = "two_way_quote, spread_percent_asc, turnover_desc"
+_EXECUTION_RANKING = (
+    "fresh_two_way_quote, spread_percent_asc, bid_ask_age_ms_asc, turnover_desc"
+)
+_EXECUTION_STALE_AFTER_MS = 30_000
 _AVANZA_MARKET_TIMEZONE = ZoneInfo("Europe/Stockholm")
 
 
@@ -123,6 +127,15 @@ def _compact_live_quote(quote: dict[str, Any]) -> dict[str, Any]:
     observed_at = int(datetime.now(timezone.utc).timestamp() * 1000)
     source_updated_at = _timestamp_ms(quote.get("updated"))
     last_trade_at = _timestamp_ms(quote.get("timeOfLast"))
+    bid_ask_age_ms = _age_ms(observed_at, source_updated_at)
+    has_two_way_quote = (
+        bid is not None and ask is not None and bid > 0 and ask > 0 and ask >= bid
+    )
+    execution_is_fresh = (
+        has_two_way_quote
+        and bid_ask_age_ms is not None
+        and bid_ask_age_ms <= _EXECUTION_STALE_AFTER_MS
+    )
     freshness = {
         key: value
         for key, value in {
@@ -131,8 +144,12 @@ def _compact_live_quote(quote: dict[str, Any]) -> dict[str, Any]:
             "bid_ask_updated_at": source_updated_at,
             "last_trade_at": last_trade_at,
             "source_update_age_ms": _age_ms(observed_at, source_updated_at),
-            "bid_ask_age_ms": _age_ms(observed_at, source_updated_at),
+            "bid_ask_age_ms": bid_ask_age_ms,
             "last_trade_age_ms": _age_ms(observed_at, last_trade_at),
+            "execution_freshness_basis": "bid_ask_updated_at",
+            "execution_stale_after_ms": _EXECUTION_STALE_AFTER_MS,
+            "execution_is_fresh": execution_is_fresh,
+            "last_trade_role": "informational_only_for_leveraged_products",
         }.items()
         if value is not None
     }
@@ -171,6 +188,36 @@ def _candidate_rank(candidate: dict[str, Any]) -> tuple[Any, ...]:
     return (
         0 if _has_two_way_quote(candidate) else 1,
         spread if spread is not None else float("inf"),
+        -turnover,
+        str(candidate.get("product_type") or ""),
+        str(candidate.get("issuer") or ""),
+        str(candidate.get("name") or ""),
+        str(candidate.get("order_book_id") or ""),
+    )
+
+
+def _execution_rank(candidate: dict[str, Any]) -> tuple[Any, ...]:
+    live = candidate.get("live_market_data")
+    quote = live.get("quote") if isinstance(live, dict) else None
+    quote = quote if isinstance(quote, dict) else {}
+    bid, ask = _number(quote.get("bid")), _number(quote.get("ask"))
+    has_two_way = (
+        bid is not None and ask is not None and bid > 0 and ask > 0 and ask >= bid
+    )
+    freshness = quote.get("freshness")
+    freshness = freshness if isinstance(freshness, dict) else {}
+    bid_ask_age_ms = _number(freshness.get("bid_ask_age_ms"))
+    is_fresh = (
+        has_two_way
+        and bid_ask_age_ms is not None
+        and bid_ask_age_ms <= _EXECUTION_STALE_AFTER_MS
+    )
+    spread = _number(quote.get("spread_percent_from_live_prices"))
+    turnover = _number(candidate.get("total_value_traded")) or 0.0
+    return (
+        0 if is_fresh else 1 if has_two_way else 2,
+        spread if spread is not None else float("inf"),
+        bid_ask_age_ms if bid_ask_age_ms is not None else float("inf"),
         -turnover,
         str(candidate.get("product_type") or ""),
         str(candidate.get("issuer") or ""),
@@ -851,6 +898,16 @@ class LeveragedScreenService:
             )
             for product in products
         )
+        fresh_two_way_count = sum(
+            bool(
+                product.get("live_market_data", {})
+                .get("quote", {})
+                .get("freshness", {})
+                .get("execution_is_fresh")
+            )
+            for product in products
+        )
+        execution_shortlist = sorted(products, key=_execution_rank)
 
         return {
             "snapshot_id": snapshot.snapshot_id,
@@ -878,6 +935,7 @@ class LeveragedScreenService:
                 ),
                 "authenticated_quote_count": authenticated_quote_count,
                 "two_way_quote_count": live_two_way_count,
+                "fresh_two_way_quote_count": fresh_two_way_count,
                 "auth_worker_calls": 1 if returned else 0,
                 "source": "authenticated_trading_critical_market_data_batch",
                 "scope": "requested_snapshot_page",
@@ -895,14 +953,20 @@ class LeveragedScreenService:
             "products": products,
             "returned": returned,
             "ordering": "structural_snapshot_order",
+            "execution_shortlist": execution_shortlist,
+            "execution_ranking": _EXECUTION_RANKING,
+            "execution_freshness_basis": "bid_ask_updated_at",
+            "last_trade_role": "informational_only_for_leveraged_products",
             "data_note": (
                 "The structural snapshot order was created from Avanza's delayed filter feed. "
                 "This enrichment refetches only the requested shortlist through Avanza's "
                 "authenticated trading-critical market-data endpoint. The shortlist is sent "
                 "through one isolated auth worker and one session validation, while still issuing "
                 "one governed upstream market-data request per returned product. That endpoint "
-                "does not report an is_real_time flag; use quote.source and quote.freshness ages "
-                "as the execution-time evidence. The enrichment is non-atomic across products. "
+                "does not report an is_real_time flag; use quote.source and bid/ask freshness "
+                "as the execution-time evidence. For leveraged market-maker products, last_trade "
+                "is informational only and is not used for execution freshness or ranking. "
+                "The enrichment is non-atomic across products. "
                 "Large pages can therefore take substantially longer."
             ),
         }

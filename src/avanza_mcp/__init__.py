@@ -45,6 +45,11 @@ async def _invalidate_authenticated_session() -> None:
         await _auth_session_invalidator()
 
 
+def _authenticated_market_data_configured() -> bool:
+    """Return whether the composed server can delegate authenticated market-data reads."""
+    return _auth_market_data_batch_delegate is not None
+
+
 @asynccontextmanager
 async def lifespan(server: FastMCP) -> AsyncIterator[dict[str, AvanzaClient]]:
     """Reuse the HTTP pool across tools and resources; close it on shutdown."""
