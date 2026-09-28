@@ -720,6 +720,12 @@ async def _run_daemon(mode: str, parent_pid: int) -> None:
                     last_activity = time.monotonic()
                 _emit(response)
                 continue
+            if action == "market_batch":
+                response = await _market_batch_operation(auth, command)
+                if response.get("ok") is True and mode == "memory_only":
+                    last_activity = time.monotonic()
+                _emit(response)
+                continue
 
             _emit({"ok": False, "code": "operation_not_allowed"})
     finally:
