@@ -78,6 +78,55 @@ async def test_one_shot_mode_reuses_live_session_for_approved_market_calls(monke
         await broker.aclose()
 
 
+async def test_persistent_market_batch_uses_one_worker_and_preserves_alignment(monkeypatch):
+    broker = AuthProcessBroker(mode="persistent")
+    worker = AsyncMock(
+        return_value={
+            "ok": True,
+            "result": [
+                {"quote": {"buy": 10.0, "sell": 10.1}},
+                None,
+                {"quote": {"buy": 20.0, "sell": 20.1}},
+            ],
+        }
+    )
+    monkeypatch.setattr(broker, "_run_once", worker)
+    paths = [
+        "/_api/trading-critical/rest/marketdata/101",
+        "/_api/trading-critical/rest/marketdata/102",
+        "/_api/trading-critical/rest/marketdata/103",
+    ]
+    try:
+        result = await broker.market_data_batch(paths)
+        assert result == [
+            {"quote": {"buy": 10.0, "sell": 10.1}},
+            None,
+            {"quote": {"buy": 20.0, "sell": 20.1}},
+        ]
+        worker.assert_awaited_once()
+        command = worker.await_args.args[0]
+        assert command == {"action": "market_batch", "paths": paths}
+    finally:
+        await broker.aclose()
+
+
+async def test_market_batch_rejects_non_trading_critical_path(monkeypatch):
+    broker = AuthProcessBroker(mode="persistent")
+    worker = AsyncMock()
+    monkeypatch.setattr(broker, "_run_once", worker)
+    try:
+        result = await broker.market_data_batch(
+            [
+                "/_api/trading-critical/rest/marketdata/101",
+                "/_api/market-guide/stock/4478/quote",
+            ]
+        )
+        assert result is None
+        worker.assert_not_awaited()
+    finally:
+        await broker.aclose()
+
+
 async def test_market_broker_rejects_non_allowlisted_authenticated_path(monkeypatch):
     broker = AuthProcessBroker(mode="persistent")
     command = AsyncMock()
