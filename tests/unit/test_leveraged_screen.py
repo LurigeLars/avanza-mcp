@@ -288,7 +288,7 @@ async def test_catalog_is_primary_universe_and_global_enrichment_precedes_paging
     )
     assert fake.market_data_batch_calls == [["101", "202"]]
     assert enriched["enrichment"]["attempted_count"] == 2
-    assert enriched["enrichment"]["scope"] == "complete_snapshot"
+    assert enriched["enrichment"]["scope"] == "complete_snapshot_progressive"
     assert enriched["pagination"]["total"] == 2
     assert enriched["pagination"]["returned"] == 1
 
@@ -298,6 +298,69 @@ async def test_catalog_is_primary_universe_and_global_enrichment_precedes_paging
     assert fake.market_data_batch_calls == [["101", "202"]]
     assert second["enrichment"]["cache_hit"] is True
     assert second["pagination"]["returned"] == 1
+
+
+
+class FourRowLocalUniverseCatalog(LocalUniverseCatalog):
+    def __init__(self):
+        super().__init__()
+        self.rows.extend(
+            [
+                {
+                    **self.rows[0],
+                    "order_book_id": "303",
+                    "name": "MINI L TEST 303",
+                },
+                {
+                    **self.rows[1],
+                    "order_book_id": "404",
+                    "name": "TURBO L TEST 404",
+                },
+            ]
+        )
+
+
+@pytest.mark.asyncio
+async def test_full_execution_scan_progresses_by_internal_batch_and_ranks_only_when_complete(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "avanza_mcp.services.leveraged_screen_service._EXECUTION_BATCH_SIZE", 2
+    )
+    service = LeveragedScreenService(object(), catalog=FourRowLocalUniverseCatalog())
+    fake = FakeMarket()
+    service._market = fake
+
+    first = await service.screen("4478", "long", ["warrant"], 1)
+
+    partial = await service.enrich_snapshot(
+        first["snapshot_id"], "4478", "long", 0, 1
+    )
+    assert fake.market_data_batch_calls == [["101", "202"]]
+    assert partial["enrichment"]["attempted_count"] == 2
+    assert partial["enrichment"]["remaining_count"] == 2
+    assert partial["enrichment"]["scan_complete"] is False
+    assert partial["ordering"] == "pending_global_execution_ranking"
+    assert partial["products"] == []
+    assert partial["returned"] == 0
+
+    complete = await service.enrich_snapshot(
+        first["snapshot_id"], "4478", "long", 0, 1
+    )
+    assert fake.market_data_batch_calls == [["101", "202"], ["303", "404"]]
+    assert complete["enrichment"]["attempted_count"] == 4
+    assert complete["enrichment"]["remaining_count"] == 0
+    assert complete["enrichment"]["scan_complete"] is True
+    assert complete["ordering"] == "execution_ranking"
+    assert complete["pagination"]["total"] == 4
+    assert complete["pagination"]["returned"] == 1
+
+    cached = await service.enrich_snapshot(
+        first["snapshot_id"], "4478", "long", 1, 1
+    )
+    assert fake.market_data_batch_calls == [["101", "202"], ["303", "404"]]
+    assert cached["enrichment"]["cache_hit"] is True
+    assert cached["pagination"]["returned"] == 1
 
 
 @pytest.mark.asyncio
@@ -644,7 +707,11 @@ async def test_screen_tool_returns_public_fallback_when_auth_is_unavailable(monk
                 }
             ],
             "returned": 1,
-            "enrichment": {"authenticated_quote_count": 0},
+            "enrichment": {
+                "authenticated_quote_count": 0,
+                "scan_complete": False,
+                "error": "auth_required",
+            },
         }
 
     monkeypatch.setattr(LeveragedScreenService, "screen", fake_screen)
@@ -668,6 +735,79 @@ async def test_screen_tool_returns_public_fallback_when_auth_is_unavailable(monk
         "reason": "auth_required",
         "data_quality": "discovery_only",
     }
+
+
+
+@pytest.mark.asyncio
+async def test_screen_tool_hides_provisional_ranking_while_full_scan_is_partial(monkeypatch):
+    async def fake_screen(self, *_args, **_kwargs):
+        return {
+            "snapshot_id": "b" * 32,
+            "underlying_order_book_id": "4478",
+            "direction": "long",
+            "product_types": ["warrant"],
+            "filters": {},
+            "families": {},
+            "snapshot": {"discovery_source": "fresh_local_instrument_catalog"},
+            "pagination": {
+                "total": 300,
+                "offset": 0,
+                "page_size": 5,
+                "returned": 5,
+                "has_more": True,
+                "next_offset": 5,
+            },
+            "products": [{"order_book_id": str(index)} for index in range(5)],
+            "returned": 5,
+            "ranking": "two_way_quote, spread_percent_asc, turnover_desc",
+        }
+
+    async def fake_enrich(self, *_args, **_kwargs):
+        return {
+            "products": [],
+            "returned": 0,
+            "pagination": {
+                "total": 300,
+                "offset": 0,
+                "page_size": 5,
+                "returned": 0,
+                "has_more": False,
+                "next_offset": None,
+            },
+            "execution_ranking": None,
+            "execution_freshness_basis": "bid_ask_updated_at",
+            "last_trade_role": "informational_only_for_leveraged_products",
+            "enrichment": {
+                "authenticated_quote_count": 150,
+                "attempted_count": 150,
+                "remaining_count": 150,
+                "scan_complete": False,
+                "batch_size": 150,
+            },
+        }
+
+    monkeypatch.setattr(LeveragedScreenService, "screen", fake_screen)
+    monkeypatch.setattr(LeveragedScreenService, "enrich_snapshot", fake_enrich)
+
+    async with Client(mcp) as client:
+        result = await client.call_tool(
+            "screen_leveraged_instruments",
+            {
+                "underlying_order_book_id": "4478",
+                "direction": "long",
+                "product_types": ["warrant"],
+                "page_size": 5,
+            },
+        )
+
+    payload = json.loads(result.content[0].text)
+    assert payload["products"] == []
+    assert payload["returned"] == 0
+    assert payload["ranking"] is None
+    assert payload["execution"]["status"] == "authenticated_partial"
+    assert payload["execution"]["enrichment"]["scan_complete"] is False
+    assert payload["execution"]["enrichment"]["remaining_count"] == 150
+    assert payload["structural_pagination"]["returned"] == 5
 
 
 @pytest.mark.asyncio
