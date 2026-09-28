@@ -24,7 +24,7 @@ def upstream(monkeypatch):
 async def test_registered_schemas_and_annotations():
     async with Client(mcp) as client:
         tools = {tool.name: tool for tool in await client.list_tools()}
-    assert len(tools) == 37
+    assert len(tools) == 38
     for tool in tools.values():
         props = tool.inputSchema["properties"]
         assert "instrument_id" not in props and "ctx" not in props
