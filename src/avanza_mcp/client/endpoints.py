@@ -82,6 +82,19 @@ class PublicEndpoint(Enum):
         return self.value.format(**kwargs)
 
 
+class AuthenticatedMarketEndpoint(Enum):
+    """Reviewed read-only endpoints that require an authenticated Avanza session."""
+
+    TRADING_CRITICAL_MARKET_DATA = "/_api/trading-critical/rest/marketdata/{id}"
+
+    def format(self, **kwargs: str | int) -> str:
+        if "id" in kwargs:
+            instrument_id = str(kwargs["id"])
+            if not instrument_id.isascii() or not instrument_id.isdecimal():
+                raise ValueError("Order-book id must contain only ASCII numeric digits")
+        return self.value.format(**kwargs)
+
+
 _AUTHENTICATED_PUBLIC_EXACT_FAMILIES = {
     ("POST", PublicEndpoint.SEARCH.value): "search",
     ("POST", PublicEndpoint.CERTIFICATE_FILTER.value): "certificate_filter",
@@ -95,6 +108,10 @@ _AUTHENTICATED_PUBLIC_EXACT_FAMILIES = {
 }
 
 _AUTHENTICATED_PUBLIC_GET_FAMILIES = (
+    (
+        "trading_critical_market_data",
+        re.compile(r"^/_api/trading-critical/rest/marketdata/[0-9]+$"),
+    ),
     ("stock_info", re.compile(r"^/_api/market-guide/stock/[0-9]+$")),
     ("stock_analysis", re.compile(r"^/_api/market-guide/stock/[0-9]+/analysis$")),
     ("stock_quote", re.compile(r"^/_api/market-guide/stock/[0-9]+/quote$")),
