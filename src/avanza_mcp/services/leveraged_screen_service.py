@@ -440,7 +440,7 @@ def _available_filter_values(
     }
 
 
-@dataclass(frozen=True)
+@dataclass
 class _Snapshot:
     snapshot_id: str
     underlying_order_book_id: str
@@ -775,7 +775,12 @@ class LeveragedScreenService:
         discovery_source = "avanza_filter_feed"
 
         catalog_rows: list[dict[str, Any]] = []
-        if prefer_catalog and self._catalog is not None and _catalog_can_satisfy_filters(selected_filters):
+        if (
+            prefer_catalog
+            and self._catalog is not None
+            and hasattr(self._catalog, "find_by_underlying")
+            and _catalog_can_satisfy_filters(selected_filters)
+        ):
             try:
                 catalog_count = self._catalog.count_by_underlying(
                     underlying_order_book_id,
