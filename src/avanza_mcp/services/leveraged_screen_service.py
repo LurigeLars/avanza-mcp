@@ -29,6 +29,10 @@ _RANKING = "two_way_quote, spread_percent_asc, turnover_desc"
 _EXECUTION_RANKING = (
     "fresh_two_way_quote, spread_percent_asc, bid_ask_age_ms_asc, turnover_desc"
 )
+_TARGET_EXECUTION_RANKING = (
+    "fresh_two_way_quote, leverage_deviation_asc, spread_percent_asc, "
+    "bid_ask_age_ms_asc, turnover_desc"
+)
 _EXECUTION_STALE_AFTER_MS = 30_000
 _EXECUTION_BATCH_SIZE = 300
 _FINAL_REFRESH_SIZE = 25
@@ -296,7 +300,11 @@ def _candidate_rank(candidate: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
-def _execution_rank(candidate: dict[str, Any]) -> tuple[Any, ...]:
+def _execution_rank(
+    candidate: dict[str, Any],
+    *,
+    prefer_target_leverage: bool = False,
+) -> tuple[Any, ...]:
     live = candidate.get("live_market_data")
     quote = live.get("quote") if isinstance(live, dict) else None
     quote = quote if isinstance(quote, dict) else {}
@@ -314,15 +322,34 @@ def _execution_rank(candidate: dict[str, Any]) -> tuple[Any, ...]:
     )
     spread = _number(quote.get("spread_percent_from_live_prices"))
     turnover = _number(candidate.get("total_value_traded")) or 0.0
+
+    rank: list[Any] = [0 if is_fresh else 1 if has_two_way else 2]
+    if prefer_target_leverage:
+        suitability = candidate.get("suitability")
+        suitability = suitability if isinstance(suitability, dict) else {}
+        leverage_deviation = _number(suitability.get("leverage_deviation"))
+        rank.append(
+            leverage_deviation if leverage_deviation is not None else float("inf")
+        )
+    rank.extend(
+        (
+            spread if spread is not None else float("inf"),
+            bid_ask_age_ms if bid_ask_age_ms is not None else float("inf"),
+            -turnover,
+            str(candidate.get("product_type") or ""),
+            str(candidate.get("issuer") or ""),
+            str(candidate.get("name") or ""),
+            str(candidate.get("order_book_id") or ""),
+        )
+    )
+    return tuple(rank)
+
+
+def _execution_ranking_label(suitability: "SuitabilityCriteria") -> str:
     return (
-        0 if is_fresh else 1 if has_two_way else 2,
-        spread if spread is not None else float("inf"),
-        bid_ask_age_ms if bid_ask_age_ms is not None else float("inf"),
-        -turnover,
-        str(candidate.get("product_type") or ""),
-        str(candidate.get("issuer") or ""),
-        str(candidate.get("name") or ""),
-        str(candidate.get("order_book_id") or ""),
+        _TARGET_EXECUTION_RANKING
+        if suitability.target_leverage is not None
+        else _EXECUTION_RANKING
     )
 
 
@@ -1179,7 +1206,12 @@ class LeveragedScreenService:
             final_observed_at = int(datetime.now(timezone.utc).timestamp() * 1000)
             for product in snapshot.execution_products:
                 _refresh_live_freshness(product, final_observed_at)
-            snapshot.execution_products.sort(key=_execution_rank)
+            snapshot.execution_products.sort(
+                key=lambda candidate: _execution_rank(
+                    candidate,
+                    prefer_target_leverage=snapshot.suitability.target_leverage is not None,
+                )
+            )
 
             if not snapshot.final_refresh_completed and snapshot.execution_products:
                 shortlist = snapshot.execution_products[:_FINAL_REFRESH_SIZE]
@@ -1224,7 +1256,12 @@ class LeveragedScreenService:
                     )
                     for product in snapshot.execution_products:
                         _refresh_live_freshness(product, final_observed_at)
-                    snapshot.execution_products.sort(key=_execution_rank)
+                    snapshot.execution_products.sort(
+            key=lambda candidate: _execution_rank(
+                candidate,
+                prefer_target_leverage=snapshot.suitability.target_leverage is not None,
+            )
+        )
 
                 snapshot.final_refresh_completed = True
                 snapshot.final_refresh_metadata = {
@@ -1341,7 +1378,11 @@ class LeveragedScreenService:
             "products": page,
             "returned": returned,
             "ordering": ordering,
-            "execution_ranking": _EXECUTION_RANKING if scan_complete else None,
+            "execution_ranking": (
+                _execution_ranking_label(snapshot.suitability)
+                if scan_complete
+                else None
+            ),
             "execution_freshness_basis": "bid_ask_updated_at",
             "last_trade_role": "informational_only_for_leveraged_products",
             "data_note": (
@@ -1494,7 +1535,7 @@ class LeveragedScreenService:
             "products": products,
             "returned": returned,
             "ordering": "execution_ranking",
-            "execution_ranking": _EXECUTION_RANKING,
+            "execution_ranking": _execution_ranking_label(snapshot.suitability),
             "execution_freshness_basis": "bid_ask_updated_at",
             "last_trade_role": "informational_only_for_leveraged_products",
             "data_note": (
@@ -1502,7 +1543,8 @@ class LeveragedScreenService:
                 "authenticated trading-critical market-data endpoint, using one isolated auth "
                 "worker and one session validation while issuing one governed upstream request "
                 "per returned product. Products are returned in execution ranking based on fresh "
-                "two-way bid/ask, spread, and bid/ask age. For leveraged market-maker products, "
+                "two-way bid/ask, optional target-leverage distance, spread, and bid/ask age. "
+                "For leveraged market-maker products, "
                 "last_trade is informational only. Large pages can take substantially longer."
             ),
         }
