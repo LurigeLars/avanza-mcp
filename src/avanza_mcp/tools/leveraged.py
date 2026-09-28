@@ -8,7 +8,7 @@ from fastmcp import Context
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from .. import _authenticated_market_data_configured, mcp
+from .. import mcp
 from ..models.common import OrderBookId
 from ..services.leveraged_screen_service import LeveragedScreenService, ScreenFilters
 from ._helpers import READ_ONLY, api_errors
@@ -164,10 +164,6 @@ async def screen_leveraged_instruments(
             )
 
         if result.get("products"):
-            if not _authenticated_market_data_configured():
-                raise ToolError(
-                    "AVANZA_AUTH_REQUIRED: authenticated Avanza runtime is required."
-                )
             with api_errors():
                 enriched = await service.enrich_page(
                     result["snapshot_id"],
