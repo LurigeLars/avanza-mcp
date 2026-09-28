@@ -502,13 +502,15 @@ def _page(snapshot: _Snapshot, offset: int, page_size: int) -> dict[str, Any]:
             "availability is derived from scanned candidates. Calls using snapshot_id reuse the "
             "frozen ranking and do not refetch market data. discovery_bid/discovery_ask and "
             "the ranking spread come from Avanza's filter feed, which live testing showed can lag "
-            "the authenticated instrument-info quote by roughly 15 minutes; do not use discovery "
-            "prices as execution evidence. Use enrich_leveraged_snapshot on a small shortlisted "
-            "page and inspect live_market_data.quote.is_real_time plus freshness before trading. "
+            "authenticated trading-critical market-maker quotes materially; do not use discovery "
+            "prices as execution evidence. When authenticated market-data delegation is available, "
+            "a new snapshot also includes execution with a top-candidate shortlist re-ranked from "
+            "authenticated bid/ask quality and bid/ask freshness. For leveraged market-maker "
+            "products, last_trade is informational only and is not an execution-freshness signal. "
             "Initial quote collection is non-atomic because upstream pages are fetched over time; "
-            "after the first page establishes the "
-            "total, remaining pages may be fetched concurrently. If pagination.has_more is true, "
-            "this response is only a partial view of the snapshot."
+            "after the first page establishes the total, remaining pages may be fetched concurrently. "
+            "If pagination.has_more is true, this response is only a partial view of the structural "
+            "snapshot page."
         ),
     }
 
