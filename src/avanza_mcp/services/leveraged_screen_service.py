@@ -12,7 +12,7 @@ from uuid import uuid4
 from pydantic import Field
 
 from ..client.base import AvanzaClient
-from ..client.exceptions import AvanzaError, AvanzaNotFoundError
+from ..client.exceptions import AvanzaAuthError, AvanzaError, AvanzaNotFoundError
 from ..instrument_catalog import InstrumentCatalog, fresh_default_instrument_catalog
 from ..models.certificate import CertificateFilter, CertificateFilterRequest
 from ..models.filter import SortBy
@@ -89,71 +89,70 @@ def _normalize_candidate(item: Any, product_type: ProductType) -> dict[str, Any]
     }
 
 
-def _compact_live_info(info: Any) -> dict[str, Any]:
-    raw = info.model_dump(mode="json", by_alias=True, exclude_none=True)
-    quote = raw.get("quote") if isinstance(raw.get("quote"), dict) else {}
-    freshness = (
-        quote.get("freshness") if isinstance(quote.get("freshness"), dict) else {}
-    )
-    bid, ask = quote.get("buy"), quote.get("sell")
-    key_indicators = (
-        raw.get("keyIndicators")
-        if isinstance(raw.get("keyIndicators"), dict)
-        else {}
-    )
-
-    compact_freshness = {
-        target: freshness[source]
-        for source, target in (
-            ("observedAt", "observed_at"),
-            ("sourceUpdatedAt", "source_updated_at"),
-            ("bidAskUpdatedAt", "bid_ask_updated_at"),
-            ("lastTradeAt", "last_trade_at"),
-            ("sourceUpdateAgeMs", "source_update_age_ms"),
-            ("bidAskAgeMs", "bid_ask_age_ms"),
-            ("lastTradeAgeMs", "last_trade_age_ms"),
-            ("upstreamIsRealTime", "upstream_is_real_time"),
-            ("realTimeFlagIsFreshnessGuarantee", "real_time_flag_is_freshness_guarantee"),
+def _timestamp_ms(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return int(value) if value >= 0 else None
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(
+            text[:-1] + "+00:00" if text.endswith("Z") else text
         )
-        if freshness.get(source) is not None
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return int(parsed.timestamp() * 1000)
+
+
+def _age_ms(observed_at: int, source_at: int | None) -> int | None:
+    return None if source_at is None else max(0, observed_at - source_at)
+
+
+def _compact_live_quote(quote: dict[str, Any]) -> dict[str, Any]:
+    bid, ask = _number(quote.get("buy")), _number(quote.get("sell"))
+    observed_at = int(datetime.now(timezone.utc).timestamp() * 1000)
+    source_updated_at = _timestamp_ms(quote.get("updated"))
+    last_trade_at = _timestamp_ms(quote.get("timeOfLast"))
+    freshness = {
+        key: value
+        for key, value in {
+            "observed_at": observed_at,
+            "source_updated_at": source_updated_at,
+            "bid_ask_updated_at": source_updated_at,
+            "last_trade_at": last_trade_at,
+            "source_update_age_ms": _age_ms(observed_at, source_updated_at),
+            "bid_ask_age_ms": _age_ms(observed_at, source_updated_at),
+            "last_trade_age_ms": _age_ms(observed_at, last_trade_at),
+        }.items()
+        if value is not None
     }
-    compact_quote = {
+    compact = {
         key: value
         for key, value in {
             "bid": bid,
             "ask": ask,
-            "last": quote.get("last"),
-            "upstream_spread": quote.get("spread"),
+            "last": _number(quote.get("last")),
+            "highest": _number(quote.get("highest")),
+            "lowest": _number(quote.get("lowest")),
+            "change": _number(quote.get("change")),
+            "change_percent": _number(quote.get("changePercent")),
             "spread_percent_from_live_prices": _discovery_spread_percent(bid, ask),
-            "total_value_traded": quote.get("totalValueTraded"),
-            "total_volume_traded": quote.get("totalVolumeTraded"),
+            "total_value_traded": _number(quote.get("totalValueTraded")),
+            "total_volume_traded": _number(quote.get("totalVolumeTraded")),
             "updated": quote.get("updated"),
-            "is_real_time": quote.get("isRealTime"),
-            "freshness": compact_freshness or None,
+            "time_of_last": quote.get("timeOfLast"),
+            "source": "authenticated_trading_critical",
+            "freshness": freshness,
         }.items()
         if value is not None
     }
-    compact_indicators = {
-        target: key_indicators[source]
-        for source, target in (
-            ("leverage", "leverage"),
-            ("barrierLevel", "barrier_level"),
-            ("financingLevel", "financing_level"),
-            ("stopLoss", "stop_loss"),
-            ("parity", "parity"),
-            ("direction", "direction"),
-            ("subType", "sub_type"),
-        )
-        if key_indicators.get(source) is not None
-    }
-    return {
-        key: value
-        for key, value in {
-            "quote": compact_quote or None,
-            "key_indicators": compact_indicators or None,
-        }.items()
-        if value is not None
-    }
+    return {"quote": compact}
 
 
 def _has_two_way_quote(candidate: dict[str, Any]) -> bool:
@@ -792,10 +791,15 @@ class LeveragedScreenService:
             async with semaphore:
                 order_book_id = str(product["order_book_id"])
                 try:
-                    if product.get("product_type") == "certificate":
-                        info = await self._market.get_certificate_info(order_book_id)
-                    else:
-                        info = await self._market.get_warrant_info(order_book_id)
+                    quote = await self._market.get_authenticated_market_data_quote(
+                        order_book_id
+                    )
+                except AvanzaAuthError:
+                    return {
+                        **product,
+                        "live_market_data_error": "auth_required",
+                        "live_market_data_retrieved_at": datetime.now(timezone.utc).isoformat(),
+                    }
                 except AvanzaNotFoundError:
                     return {
                         **product,
@@ -810,7 +814,7 @@ class LeveragedScreenService:
                     }
                 return {
                     **product,
-                    "live_market_data": _compact_live_info(info),
+                    "live_market_data": _compact_live_quote(quote),
                     "live_market_data_retrieved_at": datetime.now(timezone.utc).isoformat(),
                 }
 
@@ -819,11 +823,11 @@ class LeveragedScreenService:
         returned = len(products)
         total = len(snapshot.products)
         has_more = offset + returned < total
-        realtime_count = sum(
+        authenticated_quote_count = sum(
             product.get("live_market_data", {})
             .get("quote", {})
-            .get("is_real_time")
-            is True
+            .get("source")
+            == "authenticated_trading_critical"
             for product in products
         )
         live_two_way_count = sum(
@@ -864,10 +868,10 @@ class LeveragedScreenService:
                     product.get("live_market_data_error") == "upstream_unavailable"
                     for product in products
                 ),
-                "realtime_quote_count": realtime_count,
+                "authenticated_quote_count": authenticated_quote_count,
                 "two_way_quote_count": live_two_way_count,
                 "max_concurrency": _MAX_CONCURRENT_REALTIME_ENRICHMENT,
-                "source": "authenticated_if_connected instrument-info endpoints",
+                "source": "authenticated_trading_critical_market_data",
                 "scope": "requested_snapshot_page",
                 "cache_hit": False,
                 "current_call_upstream_requests": returned,
@@ -885,10 +889,11 @@ class LeveragedScreenService:
             "ordering": "structural_snapshot_order",
             "data_note": (
                 "The structural snapshot order was created from Avanza's delayed filter feed. "
-                "This enrichment refetches only the requested shortlist through instrument-info "
-                "endpoints. Treat bid/ask as execution evidence only when quote.is_real_time is "
-                "true and quote.freshness ages are acceptably low. The enrichment is non-atomic "
-                "across products. Large pages issue one upstream instrument-info request per "
+                "This enrichment refetches only the requested shortlist through Avanza's "
+                "authenticated trading-critical market-data endpoint. That endpoint does not "
+                "report an is_real_time flag; use quote.source and quote.freshness ages as the "
+                "execution-time evidence. The enrichment is non-atomic across products. Large "
+                "pages issue one upstream market-data request per "
                 "returned product and can therefore take substantially longer; the shared request "
                 "governor still bounds concurrency and request pacing."
             ),

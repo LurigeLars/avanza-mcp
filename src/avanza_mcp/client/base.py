@@ -41,6 +41,9 @@ logger = logging.getLogger(__name__)
 _AUTHENTICATED_STOCK_MARKET_PATH = re.compile(
     r"^/_api/market-guide/stock/[0-9]+/(?P<kind>quote|orderdepth|trades)$"
 )
+_AUTHENTICATED_TRADING_CRITICAL_MARKET_DATA_PATH = re.compile(
+    r"^/_api/trading-critical/rest/marketdata/[0-9]+$"
+)
 
 _AUTH_QUOTE_FIELDS = frozenset(
     {
@@ -71,7 +74,11 @@ def _authenticated_market_kind(method: str, path: str) -> str | None:
     if method.upper() != "GET":
         return None
     match = _AUTHENTICATED_STOCK_MARKET_PATH.fullmatch(path)
-    return match.group("kind") if match else None
+    if match:
+        return match.group("kind")
+    if _AUTHENTICATED_TRADING_CRITICAL_MARKET_DATA_PATH.fullmatch(path):
+        return "marketdata"
+    return None
 
 
 def _project_mapping(value: Any, fields: frozenset[str]) -> dict[str, Any]:
@@ -84,6 +91,11 @@ def _project_authenticated_market_payload(kind: str, value: Any) -> Any:
     """Strictly project authenticated market responses to known public fields."""
     if kind == "quote":
         return _project_mapping(value, _AUTH_QUOTE_FIELDS)
+
+    if kind == "marketdata":
+        root = _project_mapping(value, frozenset({"quote"}))
+        root["quote"] = _project_mapping(root.get("quote"), _AUTH_QUOTE_FIELDS)
+        return root
 
     if kind == "trades":
         if not isinstance(value, list):
@@ -573,6 +585,20 @@ class AvanzaClient:
         """
         return await self._request("GET", path, params=params)
 
+    async def get_authenticated(
+        self, path: str, params: dict[str, Any] | None = None
+    ) -> dict[str, Any] | list[Any]:
+        """GET one reviewed read-only endpoint and require the authenticated path."""
+        self._require_same_origin_authenticated_path(path)
+        if not authenticated_public_request_allowed("GET", path):
+            raise AvanzaAuthError("Authenticated market path is not approved")
+        return await self._request(
+            "GET",
+            path,
+            params=params,
+            require_authenticated=True,
+        )
+
     async def get_public(
         self, path: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any] | list[Any]:
@@ -630,6 +656,7 @@ class AvanzaClient:
         params: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
         allow_authenticated_public: bool = True,
+        require_authenticated: bool = False,
     ) -> dict[str, Any] | list[Any]:
         """Send a request through the shared retry and response pipeline."""
         request_id = str(uuid.uuid4())[:8]
@@ -640,6 +667,7 @@ class AvanzaClient:
             allow_authenticated_public
             and authenticated_public_request_allowed(method, path)
         )
+        allow_authenticated = require_authenticated or auth_public_allowed
 
         @retry(
             retry=retry_if_exception(
@@ -669,7 +697,8 @@ class AvanzaClient:
                 response, authenticated = await self._send_request(
                     method,
                     path,
-                    allow_authenticated=auth_public_allowed,
+                    allow_authenticated=allow_authenticated,
+                    require_authenticated=require_authenticated,
                     params=params,
                     json=json,
                 )

@@ -5,7 +5,7 @@ from typing import Any
 from pydantic import TypeAdapter, validate_call
 
 from ..client.base import AvanzaClient
-from ..client.endpoints import PublicEndpoint
+from ..client.endpoints import AuthenticatedMarketEndpoint, PublicEndpoint
 from ..client.exceptions import AvanzaNotFoundError
 from ..models.certificate import (
     CertificateDetails,
@@ -162,6 +162,21 @@ class MarketDataService:
                 "Expected a quote object containing recognized quote fields"
             )
         return Quote.model_validate(raw_data)
+
+    async def get_authenticated_market_data_quote(
+        self, instrument_id: str
+    ) -> dict[str, Any]:
+        """Fetch the authenticated trading-critical quote for one order book."""
+        endpoint = AuthenticatedMarketEndpoint.TRADING_CRITICAL_MARKET_DATA.format(
+            id=instrument_id
+        )
+        raw_data = await self._client.get_authenticated(endpoint)
+        if not isinstance(raw_data, dict) or not isinstance(raw_data.get("quote"), dict):
+            raise ValueError("Expected trading-critical market data with a quote object")
+        quote = TypeAdapter(dict[str, Any]).validate_python(raw_data["quote"])
+        if not {"updated", "buy", "sell", "last"} & quote.keys():
+            raise ValueError("Expected recognized trading-critical quote fields")
+        return quote
 
     async def get_fund_sustainability(self, instrument_id: str) -> FundSustainability:
         """Fetch fund sustainability, ESG scores, and environmental data."""
