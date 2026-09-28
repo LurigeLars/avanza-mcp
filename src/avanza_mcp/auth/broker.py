@@ -170,6 +170,20 @@ class AuthProcessBroker:
                     response = await self._command(process, command)
             return self._result_from_response(response)
 
+    async def warm_market_worker(self) -> None:
+        """Prewarm the isolated persistent market worker without exposing session data."""
+        self._ensure_open()
+        if self.mode != "persistent":
+            return
+        async with self._operation_lock:
+            if self._persistent_disconnect_active():
+                return
+            try:
+                await self._persistent_market_command({"action": "warm"})
+            except AuthWorkerOperationError:
+                # Prewarming is best-effort; the normal market path will retry lazily.
+                return
+
     async def market_request(
         self, method: str, path: str, kwargs: dict[str, Any]
     ) -> httpx.Response | None:
