@@ -291,10 +291,16 @@ class MarketDataService:
         )
         return FutureForwardMatrixResponse.model_validate(raw_data)
 
-    async def get_option_info(self, instrument_id: str) -> FutureForwardInfo:
+    async def get_option_info(
+        self,
+        instrument_id: str,
+        *,
+        public_only: bool = False,
+    ) -> FutureForwardInfo:
         """Fetch option info directly from the option market-guide path."""
         endpoint = PublicEndpoint.OPTION_INFO.format(id=instrument_id)
-        raw_data = await self._client.get(endpoint)
+        get = self._client.get_public if public_only else self._client.get
+        raw_data = await get(endpoint)
         return FutureForwardInfo.model_validate(raw_data)
 
     async def get_future_forward_info(self, instrument_id: str) -> FutureForwardInfo:
