@@ -62,6 +62,7 @@ class FakeMarket:
                     issuer="Issuer B",
                     subType="TURBO",
                     leverage=5.1,
+                    stopLoss=4.0,
                     buyPrice=4.95,
                     sellPrice=5.05,
                     totalValueTraded=654321,
