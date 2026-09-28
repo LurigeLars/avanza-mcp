@@ -11,6 +11,7 @@ from avanza_mcp.services.leveraged_screen_service import (
     LeveragedScreenService,
     ScreenFilters,
     _discovery_spread_percent,
+    _timestamp_ms,
 )
 
 
@@ -94,6 +95,11 @@ class FakeMarket:
             "timeOfLast": "2026-09-28T07:30:00.500+00:00",
             "updated": "2026-09-28T07:30:01.500+00:00",
         }
+
+
+def test_trading_critical_naive_timestamp_uses_stockholm_timezone():
+    assert _timestamp_ms("2026-09-28T10:38:19.837") == 1790584699837
+    assert _timestamp_ms("2026-12-28T10:38:19.837") == 1798450699837
 
 
 def test_discovery_spread_percent_is_midpoint_based_and_bounded():
