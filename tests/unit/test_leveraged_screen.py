@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -10,7 +11,9 @@ from avanza_mcp import mcp
 from avanza_mcp.services.leveraged_screen_service import (
     LeveragedScreenService,
     ScreenFilters,
+    SuitabilityCriteria,
     _discovery_spread_percent,
+    _execution_rank,
     _timestamp_ms,
 )
 
@@ -59,6 +62,7 @@ class FakeMarket:
                     issuer="Issuer B",
                     subType="TURBO",
                     leverage=5.1,
+                    stopLoss=4.0,
                     buyPrice=4.95,
                     sellPrice=5.05,
                     totalValueTraded=654321,
@@ -115,6 +119,89 @@ def test_discovery_spread_percent_is_midpoint_based_and_bounded():
     assert _discovery_spread_percent(None, 10.1) is None
     assert _discovery_spread_percent(10.1, 9.9) is None
     assert _discovery_spread_percent(0, 10.1) is None
+
+
+def test_execution_rank_uses_bid_ask_freshness_not_last_trade_age():
+    fresh_quote_old_trade = {
+        "order_book_id": "fresh",
+        "live_market_data": {
+            "quote": {
+                "bid": 10.0,
+                "ask": 10.01,
+                "spread_percent_from_live_prices": 0.09995,
+                "freshness": {
+                    "bid_ask_age_ms": 2_000,
+                    "last_trade_age_ms": 86_400_000,
+                },
+            }
+        },
+    }
+    stale_quote_recent_trade = {
+        "order_book_id": "stale",
+        "live_market_data": {
+            "quote": {
+                "bid": 10.0,
+                "ask": 10.001,
+                "spread_percent_from_live_prices": 0.0099995,
+                "freshness": {
+                    "bid_ask_age_ms": 120_000,
+                    "last_trade_age_ms": 500,
+                },
+            }
+        },
+    }
+
+    ranked = sorted(
+        [stale_quote_recent_trade, fresh_quote_old_trade],
+        key=_execution_rank,
+    )
+    assert [item["order_book_id"] for item in ranked] == ["fresh", "stale"]
+
+
+
+def test_execution_rank_prefers_target_leverage_before_spread_when_requested():
+    exact_target_wider_spread = {
+        "order_book_id": "exact",
+        "suitability": {"leverage_deviation": 0.0},
+        "live_market_data": {
+            "quote": {
+                "bid": 10.0,
+                "ask": 10.02,
+                "spread_percent_from_live_prices": 0.1998,
+                "freshness": {"bid_ask_age_ms": 2_000},
+            }
+        },
+    }
+    off_target_tighter_spread = {
+        "order_book_id": "off-target",
+        "suitability": {"leverage_deviation": 0.8},
+        "live_market_data": {
+            "quote": {
+                "bid": 10.0,
+                "ask": 10.001,
+                "spread_percent_from_live_prices": 0.0099995,
+                "freshness": {"bid_ask_age_ms": 1_000},
+            }
+        },
+    }
+
+    default_ranked = sorted(
+        [exact_target_wider_spread, off_target_tighter_spread],
+        key=_execution_rank,
+    )
+    assert [item["order_book_id"] for item in default_ranked] == [
+        "off-target",
+        "exact",
+    ]
+
+    target_ranked = sorted(
+        [exact_target_wider_spread, off_target_tighter_spread],
+        key=lambda item: _execution_rank(item, prefer_target_leverage=True),
+    )
+    assert [item["order_book_id"] for item in target_ranked] == [
+        "exact",
+        "off-target",
+    ]
 
 
 @pytest.mark.asyncio
@@ -174,7 +261,10 @@ async def test_realtime_enrichment_refetches_only_requested_snapshot_page():
     )
     assert enriched["enrichment"]["two_way_quote_count"] == 2
     assert enriched["structural_snapshot"]["ranking_quote_source"] == "delayed_filter_feed"
-    assert enriched["ordering"] == "structural_snapshot_order"
+    assert enriched["ordering"] == "execution_ranking"
+    assert enriched["execution_freshness_basis"] == "bid_ask_updated_at"
+    assert enriched["last_trade_role"] == "informational_only_for_leveraged_products"
+    assert enriched["execution_ranking"].startswith("fresh_two_way_quote")
 
     by_id = {product["order_book_id"]: product for product in enriched["products"]}
     assert by_id["101"]["discovery_bid"] == 9.9
@@ -183,11 +273,280 @@ async def test_realtime_enrichment_refetches_only_requested_snapshot_page():
         by_id["101"]["live_market_data"]["quote"]["source"]
         == "authenticated_trading_critical"
     )
-    assert (
-        by_id["101"]["live_market_data"]["quote"]["freshness"]["source_updated_at"]
-        == 1790580601000
-    )
+    freshness = by_id["101"]["live_market_data"]["quote"]["freshness"]
+    assert freshness["source_updated_at"] == 1790580601000
+    assert freshness["execution_freshness_basis"] == "bid_ask_updated_at"
+    assert freshness["execution_stale_after_ms"] == 30_000
+    assert freshness["last_trade_role"] == "informational_only_for_leveraged_products"
     assert by_id["202"]["live_market_data"]["quote"]["bid"] == 5.2
+
+
+
+class LocalUniverseCatalog:
+    def __init__(self):
+        self.rows = [
+            {
+                "product_type": "warrant",
+                "order_book_id": "101",
+                "name": "MINI L TEST",
+                "direction": "long",
+                "issuer": "Issuer A",
+                "sub_type": "MINI_FUTURE",
+                "leverage": 4.2,
+                "stop_loss": 8.0,
+                "underlying_order_book_id": "4478",
+                "underlying_name": "NVIDIA",
+                "underlying_instrument_type": "STOCK",
+                "underlying_country_code": "US",
+            },
+            {
+                "product_type": "warrant",
+                "order_book_id": "202",
+                "name": "TURBO L TEST",
+                "direction": "long",
+                "issuer": "Issuer B",
+                "sub_type": "KNOCK_OUT",
+                "leverage": 5.1,
+                "stop_loss": 4.0,
+                "underlying_order_book_id": "4478",
+                "underlying_name": "NVIDIA",
+            },
+        ]
+
+    def count_by_underlying(self, *_args, **_kwargs):
+        return len(self.rows)
+
+    def find_by_underlying(self, *_args, limit=1000, **_kwargs):
+        return list(self.rows[:limit])
+
+
+
+@pytest.mark.asyncio
+async def test_leverage_filter_falls_back_from_catalog_to_filter_feed():
+    service = LeveragedScreenService(object(), catalog=LocalUniverseCatalog())
+    fake = FakeMarket()
+    service._market = fake
+
+    result = await service.screen(
+        "4478",
+        "long",
+        ["warrant"],
+        10,
+        filters=ScreenFilters(min_leverage=4.0, max_leverage=6.0),
+    )
+
+    assert result["snapshot"]["discovery_source"] == "avanza_filter_feed"
+    assert len(fake.warrant_calls) == 1
+    assert result["pagination"]["total"] == 1
+    assert result["products"][0]["leverage"] == pytest.approx(5.1)
+
+
+@pytest.mark.asyncio
+async def test_target_leverage_suitability_falls_back_from_catalog_to_filter_feed():
+    service = LeveragedScreenService(object(), catalog=LocalUniverseCatalog())
+    fake = FakeMarket()
+    service._market = fake
+
+    result = await service.screen(
+        "4478",
+        "long",
+        ["warrant"],
+        10,
+        suitability=SuitabilityCriteria(
+            target_leverage=5.0,
+            max_leverage_deviation=0.2,
+        ),
+    )
+
+    assert result["snapshot"]["discovery_source"] == "avanza_filter_feed"
+    assert len(fake.warrant_calls) == 1
+    assert result["pagination"]["total"] == 1
+    assert result["products"][0]["suitability"]["leverage_deviation"] == pytest.approx(0.1)
+
+
+
+@pytest.mark.asyncio
+async def test_target_leverage_controls_execution_order_before_spread():
+    service = LeveragedScreenService(object(), catalog=LocalUniverseCatalog())
+    fake = FakeMarket()
+    service._market = fake
+
+    first = await service.screen(
+        "4478",
+        "long",
+        ["certificate", "warrant"],
+        10,
+        suitability=SuitabilityCriteria(
+            target_leverage=5.0,
+            max_leverage_deviation=1.0,
+        ),
+    )
+    enriched = await service.enrich_snapshot(
+        first["snapshot_id"], "4478", "long", 0, 10
+    )
+
+    assert enriched["execution_ranking"].startswith(
+        "fresh_two_way_quote, leverage_deviation_asc"
+    )
+    assert [item["order_book_id"] for item in enriched["products"][:2]] == [
+        "202",
+        "101",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_catalog_is_primary_universe_and_global_enrichment_precedes_paging():
+    service = LeveragedScreenService(object(), catalog=LocalUniverseCatalog())
+    fake = FakeMarket()
+    service._market = fake
+
+    first = await service.screen("4478", "long", ["warrant"], 1)
+    assert first["snapshot"]["discovery_source"] == "fresh_local_instrument_catalog"
+    assert first["snapshot"]["scanned_count"] == 2
+    assert fake.warrant_calls == []
+
+    enriched = await service.enrich_snapshot(
+        first["snapshot_id"], "4478", "long", 0, 1
+    )
+    assert len(fake.market_data_batch_calls) == 2
+    assert fake.market_data_batch_calls[0] == ["101", "202"]
+    assert set(fake.market_data_batch_calls[1]) == {"101", "202"}
+    assert enriched["enrichment"]["attempted_count"] == 2
+    assert enriched["enrichment"]["scope"] == "complete_snapshot_progressive"
+    assert enriched["pagination"]["total"] == 2
+    assert enriched["pagination"]["returned"] == 1
+
+    second = await service.enrich_snapshot(
+        first["snapshot_id"], "4478", "long", 1, 1
+    )
+    assert len(fake.market_data_batch_calls) == 2
+    assert second["enrichment"]["cache_hit"] is True
+    assert second["pagination"]["returned"] == 1
+
+
+
+
+
+@pytest.mark.asyncio
+async def test_suitability_filters_target_leverage_and_stop_loss_buffer():
+    service = LeveragedScreenService(object(), catalog=LocalUniverseCatalog())
+    fake = FakeMarket()
+    service._market = fake
+
+    result = await service.screen(
+        "4478",
+        "long",
+        ["warrant"],
+        10,
+        suitability=SuitabilityCriteria(
+            target_leverage=5.0,
+            max_leverage_deviation=0.2,
+            min_stop_loss_buffer_percent=10.0,
+        ),
+    )
+
+    assert result["pagination"]["total"] == 1
+    assert result["products"][0]["order_book_id"] == "202"
+    assert result["products"][0]["suitability"]["leverage_deviation"] == pytest.approx(0.1)
+    assert result["products"][0]["suitability"]["stop_loss_buffer_percent"] > 20
+    assert result["suitability"] == {
+        "target_leverage": 5.0,
+        "max_leverage_deviation": 0.2,
+        "min_stop_loss_buffer_percent": 10.0,
+    }
+    assert result["suitability_context"]["underlying_reference_source"] == (
+        "authenticated_trading_critical"
+    )
+    assert fake.market_data_quote_calls == ["4478"]
+
+
+def test_suitability_requires_explicit_leverage_tolerance():
+    service = LeveragedScreenService(object(), catalog=LocalUniverseCatalog())
+
+    with pytest.raises(
+        ValueError,
+        match="target_leverage and max_leverage_deviation must be supplied together",
+    ):
+        asyncio.run(
+            service.screen(
+                "4478",
+                "long",
+                ["warrant"],
+                10,
+                suitability=SuitabilityCriteria(target_leverage=5.0),
+            )
+        )
+
+
+class FourRowLocalUniverseCatalog(LocalUniverseCatalog):
+    def __init__(self):
+        super().__init__()
+        self.rows.extend(
+            [
+                {
+                    **self.rows[0],
+                    "order_book_id": "303",
+                    "name": "MINI L TEST 303",
+                },
+                {
+                    **self.rows[1],
+                    "order_book_id": "404",
+                    "name": "TURBO L TEST 404",
+                },
+            ]
+        )
+
+
+@pytest.mark.asyncio
+async def test_full_execution_scan_progresses_by_internal_batch_and_ranks_only_when_complete(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "avanza_mcp.services.leveraged_screen_service._EXECUTION_BATCH_SIZE", 2
+    )
+    service = LeveragedScreenService(object(), catalog=FourRowLocalUniverseCatalog())
+    fake = FakeMarket()
+    service._market = fake
+
+    first = await service.screen("4478", "long", ["warrant"], 1)
+
+    partial = await service.enrich_snapshot(
+        first["snapshot_id"], "4478", "long", 0, 1
+    )
+    assert len(fake.market_data_batch_calls) == 1
+    assert len(fake.market_data_batch_calls[0]) == 2
+    assert partial["enrichment"]["attempted_count"] == 2
+    assert partial["enrichment"]["remaining_count"] == 2
+    assert partial["enrichment"]["scan_complete"] is False
+    assert partial["ordering"] == "pending_global_execution_ranking"
+    assert partial["products"] == []
+    assert partial["returned"] == 0
+
+    complete = await service.enrich_snapshot(
+        first["snapshot_id"], "4478", "long", 0, 1
+    )
+    assert len(fake.market_data_batch_calls) == 3
+    assert {
+        order_book_id
+        for batch in fake.market_data_batch_calls[:2]
+        for order_book_id in batch
+    } == {"101", "202", "303", "404"}
+    assert set(fake.market_data_batch_calls[2]) == {"101", "202", "303", "404"}
+    assert complete["enrichment"]["attempted_count"] == 4
+    assert complete["enrichment"]["remaining_count"] == 0
+    assert complete["enrichment"]["scan_complete"] is True
+    assert complete["ordering"] == "execution_ranking"
+    assert complete["pagination"]["total"] == 4
+    assert complete["pagination"]["returned"] == 1
+    assert complete["enrichment"]["final_refresh"]["requested_count"] == 4
+    assert complete["enrichment"]["final_refresh"]["refreshed_count"] == 4
+
+    cached = await service.enrich_snapshot(
+        first["snapshot_id"], "4478", "long", 1, 1
+    )
+    assert len(fake.market_data_batch_calls) == 3
+    assert cached["enrichment"]["cache_hit"] is True
+    assert cached["pagination"]["returned"] == 1
 
 
 @pytest.mark.asyncio
@@ -494,6 +853,155 @@ async def test_snapshot_filter_mismatch_is_rejected():
 
 
 @pytest.mark.asyncio
+async def test_screen_tool_returns_public_fallback_when_auth_is_unavailable(monkeypatch):
+    async def fake_screen(self, *_args, **_kwargs):
+        return {
+            "snapshot_id": "a" * 32,
+            "underlying_order_book_id": "4478",
+            "direction": "long",
+            "product_types": ["warrant"],
+            "filters": {},
+            "families": {},
+            "snapshot": {},
+            "pagination": {
+                "total": 1,
+                "offset": 0,
+                "page_size": 1,
+                "returned": 1,
+                "has_more": False,
+                "next_offset": None,
+            },
+            "products": [
+                {
+                    "product_type": "warrant",
+                    "order_book_id": "202",
+                    "name": "MINI L TEST",
+                    "discovery_bid": 10.0,
+                    "discovery_ask": 10.1,
+                }
+            ],
+            "returned": 1,
+            "ranking": "two_way_quote, spread_percent_asc, turnover_desc",
+        }
+
+    async def fake_enrich(self, *_args, **_kwargs):
+        return {
+            "products": [
+                {
+                    "order_book_id": "202",
+                    "live_market_data_error": "auth_required",
+                }
+            ],
+            "returned": 1,
+            "enrichment": {
+                "authenticated_quote_count": 0,
+                "scan_complete": False,
+                "error": "auth_required",
+            },
+        }
+
+    monkeypatch.setattr(LeveragedScreenService, "screen", fake_screen)
+    monkeypatch.setattr(LeveragedScreenService, "enrich_snapshot", fake_enrich)
+
+    async with Client(mcp) as client:
+        result = await client.call_tool(
+            "screen_leveraged_instruments",
+            {
+                "underlying_order_book_id": "4478",
+                "direction": "long",
+                "product_types": ["warrant"],
+                "page_size": 1,
+            },
+        )
+
+    payload = json.loads(result.content[0].text)
+    assert payload["products"][0]["discovery_bid"] == 10.0
+    assert payload["execution"] == {
+        "status": "public_fallback",
+        "reason": "auth_required",
+        "data_quality": "discovery_only",
+        "enrichment": {
+            "authenticated_quote_count": 0,
+            "scan_complete": False,
+            "error": "auth_required",
+        },
+    }
+
+
+
+@pytest.mark.asyncio
+async def test_screen_tool_hides_provisional_ranking_while_full_scan_is_partial(monkeypatch):
+    async def fake_screen(self, *_args, **_kwargs):
+        return {
+            "snapshot_id": "b" * 32,
+            "underlying_order_book_id": "4478",
+            "direction": "long",
+            "product_types": ["warrant"],
+            "filters": {},
+            "families": {},
+            "snapshot": {"discovery_source": "fresh_local_instrument_catalog"},
+            "pagination": {
+                "total": 300,
+                "offset": 0,
+                "page_size": 5,
+                "returned": 5,
+                "has_more": True,
+                "next_offset": 5,
+            },
+            "products": [{"order_book_id": str(index)} for index in range(5)],
+            "returned": 5,
+            "ranking": "two_way_quote, spread_percent_asc, turnover_desc",
+        }
+
+    async def fake_enrich(self, *_args, **_kwargs):
+        return {
+            "products": [],
+            "returned": 0,
+            "pagination": {
+                "total": 300,
+                "offset": 0,
+                "page_size": 5,
+                "returned": 0,
+                "has_more": False,
+                "next_offset": None,
+            },
+            "execution_ranking": None,
+            "execution_freshness_basis": "bid_ask_updated_at",
+            "last_trade_role": "informational_only_for_leveraged_products",
+            "enrichment": {
+                "authenticated_quote_count": 150,
+                "attempted_count": 150,
+                "remaining_count": 150,
+                "scan_complete": False,
+                "batch_size": 150,
+            },
+        }
+
+    monkeypatch.setattr(LeveragedScreenService, "screen", fake_screen)
+    monkeypatch.setattr(LeveragedScreenService, "enrich_snapshot", fake_enrich)
+
+    async with Client(mcp) as client:
+        result = await client.call_tool(
+            "screen_leveraged_instruments",
+            {
+                "underlying_order_book_id": "4478",
+                "direction": "long",
+                "product_types": ["warrant"],
+                "page_size": 5,
+            },
+        )
+
+    payload = json.loads(result.content[0].text)
+    assert payload["products"] == []
+    assert payload["returned"] == 0
+    assert payload["ranking"] is None
+    assert payload["execution"]["status"] == "authenticated_partial"
+    assert payload["execution"]["enrichment"]["scan_complete"] is False
+    assert payload["execution"]["enrichment"]["remaining_count"] == 150
+    assert payload["structural_pagination"]["returned"] == 5
+
+
+@pytest.mark.asyncio
 async def test_screen_tool_has_unbounded_page_size_and_filter_contract():
     async with Client(mcp) as client:
         tools = {item.name: item for item in await client.list_tools()}
@@ -511,18 +1019,16 @@ async def test_screen_tool_has_unbounded_page_size_and_filter_contract():
         "sub_types",
         "min_leverage",
         "max_leverage",
+        "target_leverage",
+        "max_leverage_deviation",
+        "min_stop_loss_buffer_percent",
         "require_two_way_quote",
         "max_spread_percent",
         "min_turnover",
     ):
         assert field in props
 
-    enrich = tools["enrich_leveraged_snapshot"]
-    enrich_props = enrich.input_schema["properties"]
-    assert enrich_props["page_size"]["minimum"] == 1
-    assert "maximum" not in enrich_props["page_size"]
-    assert enrich_props["page_size"]["default"] == 5
-    assert enrich_props["snapshot_id"]["pattern"] == "^[0-9a-f]{32}$"
+    assert "enrich_leveraged_snapshot" not in tools
 
 
 @pytest.mark.asyncio
@@ -532,6 +1038,12 @@ async def test_public_filter_tools_remain_capped_at_100_rows():
 
     assert tools["filter_certificates"].input_schema["properties"]["limit"]["maximum"] == 100
     assert tools["filter_warrants"].input_schema["properties"]["limit"]["maximum"] == 100
+
+
+def test_default_progressive_execution_batch_size_is_300():
+    from avanza_mcp.services.leveraged_screen_service import _EXECUTION_BATCH_SIZE
+
+    assert _EXECUTION_BATCH_SIZE == 300
 
 
 def test_internal_leveraged_request_has_no_artificial_maximum():

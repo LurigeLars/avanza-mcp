@@ -478,6 +478,56 @@ class AvanzaClient:
             raise AvanzaAuthError("No authenticated Avanza session is available")
         return response
 
+
+    async def request_authenticated_batch(
+        self,
+        paths: list[str],
+        *,
+        max_concurrency: int = 8,
+    ) -> list[httpx.Response | None]:
+        """Send a bounded GET batch through one stable authenticated client lease.
+
+        The lifecycle lock is held for the whole batch so disconnect/clear cannot close
+        or replace the authenticated client mid-flight. Requests inside that lease may
+        run concurrently, while the normal per-client pacing still governs request
+        starts. Result order always matches the input path order.
+        """
+        if (
+            not isinstance(max_concurrency, int)
+            or isinstance(max_concurrency, bool)
+            or max_concurrency < 1
+        ):
+            raise ValueError("max_concurrency must be a positive integer")
+        if not paths:
+            return []
+        for path in paths:
+            self._require_same_origin_authenticated_path(path)
+
+        auth_possible = (
+            self._session_provider is not None
+            and self._base_url.rstrip("/") == self.DEFAULT_BASE_URL
+        )
+        if not auth_possible:
+            raise AvanzaAuthError("No authenticated Avanza session is available")
+
+        async with self._client_lock:
+            session = self._session_provider()
+            if session is None:
+                raise AvanzaAuthError("No authenticated Avanza session is available")
+            auth_client = await self._ensure_authenticated_client_locked(session)
+            semaphore = asyncio.Semaphore(max_concurrency)
+
+            async def fetch_one(path: str) -> httpx.Response | None:
+                async with semaphore:
+                    async with self._request_semaphore:
+                        await self._pace_request_start()
+                        try:
+                            return await auth_client.get(path)
+                        except httpx.HTTPError:
+                            return None
+
+            return list(await asyncio.gather(*(fetch_one(path) for path in paths)))
+
     def _handle_error(
         self,
         response: httpx.Response,

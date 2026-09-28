@@ -39,7 +39,7 @@ The Windows task installer exposes the same selection with `-SessionMode`.
 
 ## Cloudflare boundary
 
-The gateway uses the `@authenticated` allowlist profile when remote account tools are enabled. Cloudflare Access remains the external identity boundary. The gateway accepts only `/mcp`, validates the configured Access identity, rate-limits it, strips inbound credential/forwarding headers, filters `tools/list`, blocks non-allowlisted `tools/call` requests, and compacts schemas/results.
+The gateway exposes the single reviewed read-only allowlist. Cloudflare Access remains the external identity boundary. The gateway accepts only `/mcp`, validates the configured Access identity, rate-limits it, strips inbound credential/forwarding headers, filters `tools/list`, blocks non-allowlisted `tools/call` requests, and compacts schemas/results.
 
 Account result data requested by the user necessarily traverses the encrypted MCP/Cloudflare/ChatGPT path. Avanza session credentials do not.
 

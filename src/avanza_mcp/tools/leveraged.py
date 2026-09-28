@@ -10,7 +10,11 @@ from pydantic import Field
 
 from .. import mcp
 from ..models.common import OrderBookId
-from ..services.leveraged_screen_service import LeveragedScreenService, ScreenFilters
+from ..services.leveraged_screen_service import (
+    LeveragedScreenService,
+    ScreenFilters,
+    SuitabilityCriteria,
+)
 from ._helpers import READ_ONLY, api_errors
 
 PageSize = Annotated[
@@ -20,16 +24,6 @@ PageSize = Annotated[
         description=(
             "Rows to return from the ranked snapshot page. No fixed upper bound; "
             "pagination.total/has_more/next_offset make partial results explicit."
-        ),
-    ),
-]
-RealtimePageSize = Annotated[
-    int,
-    Field(
-        ge=1,
-        description=(
-            "Number of shortlisted products to refetch from authenticated trading-critical "
-            "market data. No fixed upper bound; each product causes one governed upstream request."
         ),
     ),
 ]
@@ -58,6 +52,19 @@ MaxLeverage = Annotated[
     NonNegativeFloat | None,
     Field(description="Maximum reported leverage; candidates with unknown leverage are excluded."),
 ]
+
+TargetLeverage = Annotated[
+    NonNegativeFloat | None,
+    Field(description="Target leverage for suitability selection. Must be paired with max_leverage_deviation."),
+]
+MaxLeverageDeviation = Annotated[
+    NonNegativeFloat | None,
+    Field(description="Maximum absolute leverage deviation from target_leverage."),
+]
+MinStopLossBufferPercent = Annotated[
+    NonNegativeFloat | None,
+    Field(description="Minimum percent distance from the live underlying reference price to stop-loss/knockout. Candidates without stop-loss are excluded."),
+]
 MaxSpreadPercent = Annotated[
     NonNegativeFloat | None,
     Field(description="Maximum midpoint spread percent; candidates with unknown spread are excluded."),
@@ -66,6 +73,7 @@ MinTurnover = Annotated[
     NonNegativeFloat | None,
     Field(description="Minimum reported turnover; candidates with unknown turnover are excluded."),
 ]
+
 
 
 def _screen_filters(
@@ -88,6 +96,18 @@ def _screen_filters(
     )
 
 
+def _suitability_criteria(
+    target_leverage: float | None,
+    max_leverage_deviation: float | None,
+    min_stop_loss_buffer_percent: float | None,
+) -> SuitabilityCriteria:
+    return SuitabilityCriteria(
+        target_leverage=target_leverage,
+        max_leverage_deviation=max_leverage_deviation,
+        min_stop_loss_buffer_percent=min_stop_loss_buffer_percent,
+    )
+
+
 @mcp.tool(annotations=READ_ONLY)
 async def screen_leveraged_instruments(
     ctx: Context,
@@ -98,6 +118,9 @@ async def screen_leveraged_instruments(
     sub_types: SubTypeFilters = None,
     min_leverage: MinLeverage = None,
     max_leverage: MaxLeverage = None,
+    target_leverage: TargetLeverage = None,
+    max_leverage_deviation: MaxLeverageDeviation = None,
+    min_stop_loss_buffer_percent: MinStopLossBufferPercent = None,
     require_two_way_quote: bool = False,
     max_spread_percent: MaxSpreadPercent = None,
     min_turnover: MinTurnover = None,
@@ -109,8 +132,10 @@ async def screen_leveraged_instruments(
 
     Without snapshot_id, creates one complete ranked result for the requested filters.
     Issuer and warrant sub-type filters may be pushed to Avanza before paging; all supplied
-    filters are still re-applied locally before ranking. The frozen result is stored for ten
-    minutes and the requested first page is returned.
+    filters are still re-applied locally before ranking. Suitability criteria are then applied
+    before live execution ranking: target leverage uses an explicit absolute deviation tolerance,
+    and optional stop-loss/knockout buffer uses one authenticated live underlying reference quote.
+    The frozen result is stored for ten minutes and the requested first page is returned.
 
     The response includes exact issuer/sub-type vocabulary supplemented from upstream filter
     metadata when available. The leverage availability summary describes candidates actually
@@ -119,6 +144,17 @@ async def screen_leveraged_instruments(
     With snapshot_id, returns another page from that same frozen ranking without refetching
     Avanza. Omit product/filter arguments when paging, or repeat semantically equivalent values.
     Always inspect pagination.total, pagination.has_more and pagination.next_offset.
+
+    This tool always runs. A fresh local daily instrument catalog is used as the primary structural
+    universe when it can satisfy the requested filters; Avanza's filter feed is the fallback. With a
+    valid authenticated session, the complete eligible universe is progressively refetched through
+    bounded auth-worker batches. Repeat the returned snapshot_id until
+    execution.enrichment.scan_complete is true. No provisional execution ranking is exposed before
+    the full universe has been attempted; after completion it is globally ranked, the top 25 are
+    refetched once for final execution freshness, and only then paginated. page_size controls
+    response size, not the candidate pool. Without auth, the tool
+    falls back to public structural discovery instead of failing. For authenticated leveraged data,
+    freshness is based on bid/ask update age; last_trade is informational only.
     """
     selected = product_types or ["certificate", "warrant"]
     selected_filters = _screen_filters(
@@ -130,6 +166,11 @@ async def screen_leveraged_instruments(
         max_spread_percent,
         min_turnover,
     )
+    selected_suitability = _suitability_criteria(
+        target_leverage,
+        max_leverage_deviation,
+        min_stop_loss_buffer_percent,
+    )
     filters_were_supplied = any(
         (
             issuers,
@@ -139,6 +180,13 @@ async def screen_leveraged_instruments(
             require_two_way_quote,
             max_spread_percent is not None,
             min_turnover is not None,
+        )
+    )
+    suitability_was_supplied = any(
+        (
+            target_leverage is not None,
+            max_leverage_deviation is not None,
+            min_stop_loss_buffer_percent is not None,
         )
     )
 
@@ -154,6 +202,7 @@ async def screen_leveraged_instruments(
                     selected,
                     page_size,
                     selected_filters,
+                    selected_suitability,
                 )
         else:
             result = service.get_page(
@@ -164,43 +213,102 @@ async def screen_leveraged_instruments(
                 page_size,
                 product_types=product_types,
                 filters=selected_filters if filters_were_supplied else None,
+                suitability=(
+                    selected_suitability if suitability_was_supplied else None
+                ),
             )
+
+        if result.get("products"):
+            with api_errors():
+                enriched = await service.enrich_snapshot(
+                    result["snapshot_id"],
+                    underlying_order_book_id,
+                    direction,
+                    offset,
+                    page_size,
+                )
+
+            enrichment = enriched.get("enrichment", {})
+            scan_complete = bool(enrichment.get("scan_complete"))
+            batch_error = enrichment.get("error")
+            authenticated_count = int(enrichment.get("authenticated_quote_count") or 0)
+
+            if batch_error is None and not scan_complete:
+                discovery_ranking = result.get("ranking")
+                result["structural_pagination"] = result.get("pagination")
+                result["products"] = []
+                result["returned"] = 0
+                result["pagination"] = enriched.get("pagination")
+                result["ranking"] = None
+                result["discovery_ranking"] = discovery_ranking
+                result["execution"] = {
+                    "status": "authenticated_partial",
+                    "freshness_basis": enriched.get("execution_freshness_basis"),
+                    "last_trade_role": enriched.get("last_trade_role"),
+                    "enrichment": enrichment,
+                }
+                result["data_note"] = (
+                    "The full live universe scan is still in progress. Repeat this tool with the "
+                    "same snapshot_id until execution.enrichment.scan_complete is true. No "
+                    "provisional execution ranking is returned. page_size only controls the final "
+                    "returned slice and never limits candidate evaluation."
+                )
+            elif batch_error is None and scan_complete and authenticated_count > 0:
+                discovery_ranking = result.get("ranking")
+                result["structural_pagination"] = result.get("pagination")
+                result["products"] = enriched.get("products", [])
+                result["returned"] = enriched.get("returned", 0)
+                result["pagination"] = enriched.get("pagination")
+                result["ranking"] = enriched.get("execution_ranking")
+                result["discovery_ranking"] = discovery_ranking
+                result["execution"] = {
+                    "status": "authenticated",
+                    "freshness_basis": enriched.get("execution_freshness_basis"),
+                    "last_trade_role": enriched.get("last_trade_role"),
+                    "enrichment": enrichment,
+                }
+                result["data_note"] = (
+                    "The complete eligible universe has been authenticated and globally re-ranked "
+                    "before paging. page_size only controls the returned slice and never limits "
+                    "candidate evaluation. For leveraged market-maker products, last_trade is "
+                    "informational only."
+                )
+            else:
+                auth_required = batch_error == "auth_required"
+                if (
+                    snapshot_id is None
+                    and result.get("snapshot", {}).get("discovery_source")
+                    == "fresh_local_instrument_catalog"
+                ):
+                    # Preserve the richer unauthenticated public fallback: the local catalog
+                    # intentionally contains structural identity, not stale executable quotes.
+                    with api_errors():
+                        result = await service.screen(
+                            underlying_order_book_id,
+                            direction,
+                            selected,
+                            page_size,
+                            selected_filters,
+                            selected_suitability,
+                            prefer_catalog=False,
+                        )
+                result["execution"] = {
+                    "status": "public_fallback",
+                    "reason": (
+                        "auth_required"
+                        if auth_required
+                        else "authenticated_market_data_unavailable"
+                    ),
+                    "data_quality": "discovery_only",
+                    "enrichment": enrichment,
+                }
+                result["data_note"] = (
+                    "No usable authenticated trading-critical quote batch was available, so this "
+                    "call returned structural public discovery instead of a live global ranking. "
+                    "discovery_bid and discovery_ask may be delayed and are not execution-grade "
+                    "prices."
+                )
     except ValueError as exc:
         raise ToolError(str(exc)) from exc
     return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
 
-
-@mcp.tool(annotations=READ_ONLY)
-async def enrich_leveraged_snapshot(
-    ctx: Context,
-    snapshot_id: SnapshotId,
-    underlying_order_book_id: OrderBookId,
-    direction: Literal["long", "short"],
-    offset: PageOffset = 0,
-    page_size: RealtimePageSize = 5,
-):
-    """Refetch a leveraged shortlist through authenticated trading-critical market data.
-
-    The parent screen uses Avanza's filter feed for full-universe discovery and ranking; live
-    testing shows those discovery prices can lag authenticated trading-critical quotes by about
-    fifteen minutes. This tool preserves structural snapshot order and refetches only the
-    requested page through one isolated auth worker and one session validation.
-
-    There is no fixed page-size upper bound. Each returned product still requires one governed
-    upstream market-data request, so large pages may take substantially longer. The trading-
-    critical quote does not expose an is_real_time flag; inspect quote.source and quote.freshness
-    ages before treating bid/ask as execution evidence. Repeated calls refetch rather than cache.
-    """
-    service = LeveragedScreenService(ctx.lifespan_context["client"])
-    try:
-        with api_errors():
-            result = await service.enrich_page(
-                snapshot_id,
-                underlying_order_book_id,
-                direction,
-                offset,
-                page_size,
-            )
-    except ValueError as exc:
-        raise ToolError(str(exc)) from exc
-    return json.dumps(result, ensure_ascii=False, separators=(",", ":"))

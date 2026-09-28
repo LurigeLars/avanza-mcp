@@ -1,9 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  AUTHENTICATED_ALLOWED_TOOLS,
-  AUTHENTICATED_EXTRA_TOOLS,
-  DEFAULT_ALLOWED_TOOLS,
+  ALL_ALLOWED_TOOLS,
   checkRequest,
   compactSchema,
   compactToolDefinition,
@@ -11,32 +9,24 @@ import {
   rewriteResponse,
 } from '../../public/gateway/policy.mjs';
 
-test('default public allowlist contains the current 38 read-only Avanza tools', () => {
+test('default allowlist is the single authenticated read-only Avanza surface', () => {
   const allowed = parseAllowedTools();
-  assert.equal(allowed.size, 38);
+  assert.equal(allowed.size, 52);
   assert.equal(allowed.has('search_instruments'), true);
-  assert.equal(allowed.has('get_orderbook'), true);
-  assert.equal(allowed.has('get_marketmaker_chart'), true);
-  assert.equal(allowed.has('screen_options'), true);
-  assert.equal(allowed.has('enrich_option_snapshot'), true);
-  assert.equal(allowed.has('enrich_leveraged_snapshot'), true);
-  assert.equal(DEFAULT_ALLOWED_TOOLS.split(',').length, 38);
-});
-
-test('authenticated profile adds exactly the 15 approved account/session tools', () => {
-  const allowed = parseAllowedTools('@authenticated');
-  assert.equal(AUTHENTICATED_EXTRA_TOOLS.split(',').length, 15);
-  assert.equal(AUTHENTICATED_ALLOWED_TOOLS.split(',').length, 53);
-  assert.equal(allowed.size, 53);
+  assert.equal(allowed.has('screen_leveraged_instruments'), true);
+  assert.equal(allowed.has('enrich_leveraged_snapshot'), false);
   assert.equal(allowed.has('connect_avanza'), true);
   assert.equal(allowed.has('get_accounts'), true);
-  assert.equal(allowed.has('get_active_orders'), true);
-  assert.equal(allowed.has('get_portfolio_snapshot'), true);
   assert.equal(allowed.has('get_stop_loss_orders'), true);
-  assert.equal(allowed.has('get_credit_info'), false);
-  assert.equal(allowed.has('get_current_offers'), false);
-  assert.equal(allowed.has('get_forum_posts'), false);
   assert.equal(allowed.has('future_place_order'), false);
+  assert.equal(ALL_ALLOWED_TOOLS.split(',').length, 52);
+});
+
+test('legacy authenticated profile token maps to the same single surface', () => {
+  assert.deepEqual(
+    [...parseAllowedTools('@authenticated')],
+    [...parseAllowedTools()],
+  );
 });
 
 test('explicit ALLOWED_TOOLS override is authoritative', () => {

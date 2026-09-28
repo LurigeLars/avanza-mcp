@@ -118,6 +118,60 @@ async def test_market_batch_validates_session_once_for_multiple_paths(
     assert store.saves == 0
 
 
+def test_authenticated_market_batch_pacing_is_50ms():
+    assert worker._MARKET_BATCH_MIN_REQUEST_INTERVAL == 0.05
+
+
+
+def test_authenticated_market_batch_concurrency_is_16():
+    assert worker._MARKET_BATCH_CONCURRENCY == 16
+
+
+async def test_market_batch_fetches_with_bounded_concurrency_and_preserves_order(monkeypatch):
+    seen_paths = []
+    seen_concurrency = []
+
+    class FakeResponse:
+        def __init__(self, value):
+            self.status_code = 200
+            self._value = value
+
+        def json(self):
+            return {"quote": {"buy": self._value, "sell": self._value + 0.1}}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            assert kwargs["max_connections"] == worker._MARKET_BATCH_CONCURRENCY
+            assert kwargs["max_in_flight_requests"] == worker._MARKET_BATCH_CONCURRENCY
+            assert kwargs["min_request_interval"] == worker._MARKET_BATCH_MIN_REQUEST_INTERVAL
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def request_authenticated_batch(self, paths, *, max_concurrency):
+            seen_paths.append(list(paths))
+            seen_concurrency.append(max_concurrency)
+            return [
+                FakeResponse(int(path.rsplit("/", 1)[-1]))
+                for path in paths
+            ]
+
+    monkeypatch.setattr(worker, "AvanzaClient", FakeClient)
+    auth = worker._RequestAuth(SessionMaterial((), "token"))
+    paths = [
+        f"/_api/trading-critical/rest/marketdata/{index}" for index in range(1, 25)
+    ]
+    result = await worker._market_batch_operation(auth, {"paths": paths})
+
+    assert result["ok"] is True
+    assert [item["quote"]["buy"] for item in result["result"]] == list(range(1, 25))
+    assert seen_paths == [paths]
+    assert seen_concurrency == [worker._MARKET_BATCH_CONCURRENCY]
+
+
 async def test_invalid_validation_discards_concurrent_success(monkeypatch, capsys):
     session = SessionMaterial((), "token")
     store = FakeStore(session)

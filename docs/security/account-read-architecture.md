@@ -4,7 +4,7 @@
 
 The MCP surface is read-only, but the underlying Avanza web session is **not assumed to be read-only**. A stolen cookie/security-token set may have broader authority outside this MCP. Treat Avanza session material as a high-value banking credential.
 
-The standalone public market-data MCP remains credential-free. In authenticated mode,
+The single runtime remains read-only and keeps credential handling isolated. For authenticated operations,
 all existing public market-data tools may reuse the logged-in Avanza session through an
 explicit read-only endpoint allowlist, alongside the reviewed account/session tools.
 

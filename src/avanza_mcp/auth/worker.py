@@ -25,6 +25,8 @@ from .browser import AuthStatus, BrowserAuth
 from .store import AuthStoreError, create_session_store
 
 _INTERNAL_BROWSER_IDLE_SECONDS = 365 * 24 * 60 * 60
+_MARKET_BATCH_CONCURRENCY = 16
+_MARKET_BATCH_MIN_REQUEST_INTERVAL = 0.05
 _MEMORY_ONLY_IDLE_SECONDS = 15 * 60
 _ONE_SHOT_IDLE_SECONDS = 5 * 60
 _TERMINAL_STATES = frozenset({"connected", "disconnected", "denied", "timed_out", "error"})
@@ -421,7 +423,7 @@ async def _market_operation(
 async def _market_batch_operation(
     auth: BrowserAuth | _RequestAuth, command: dict[str, Any]
 ) -> dict[str, Any]:
-    """Fetch trading-critical quotes sequentially inside one validated auth worker."""
+    """Fetch trading-critical quotes concurrently inside one validated auth worker."""
     paths = command.get("paths")
     if not isinstance(paths, list) or any(not isinstance(path, str) for path in paths):
         return {"ok": False, "code": "protocol_error"}
@@ -434,46 +436,48 @@ async def _market_batch_operation(
     if auth.session is None:
         return {"ok": False, "code": "no_session"}
 
-    results: list[dict[str, Any] | None] = []
     try:
         async with AvanzaClient(
             session_provider=lambda: auth.session,
             session_invalidated=auth.invalidate_session,
+            max_connections=_MARKET_BATCH_CONCURRENCY,
+            max_keepalive_connections=_MARKET_BATCH_CONCURRENCY,
+            max_in_flight_requests=_MARKET_BATCH_CONCURRENCY,
+            min_request_interval=_MARKET_BATCH_MIN_REQUEST_INTERVAL,
         ) as client:
-            for path in paths:
-                try:
-                    response = await client.request_authenticated("GET", path)
-                except AvanzaAuthError:
-                    await auth.invalidate_session()
-                    return {"ok": False, "code": "auth_expired"}
-                except Exception:
-                    results.append(None)
-                    continue
-
-                if response.status_code == 401:
-                    await auth.invalidate_session()
-                    return {"ok": False, "code": "auth_expired"}
-                if response.status_code != 200:
-                    results.append(None)
-                    continue
-
-                try:
-                    payload = response.json()
-                    projected = _project_authenticated_market_payload(
-                        "marketdata", payload
-                    )
-                except (ValueError, TypeError):
-                    results.append(None)
-                    continue
-
-                if _contains_forbidden_market_result(projected):
-                    return {"ok": False, "code": "unsafe_upstream_payload"}
-                if not isinstance(projected, dict):
-                    results.append(None)
-                    continue
-                results.append(projected)
+            responses = await client.request_authenticated_batch(
+                paths,
+                max_concurrency=_MARKET_BATCH_CONCURRENCY,
+            )
+    except AvanzaAuthError:
+        await auth.invalidate_session()
+        return {"ok": False, "code": "auth_expired"}
     except Exception:
         return {"ok": False, "code": "read_error"}
+
+    results: list[dict[str, Any] | None] = []
+    for response in responses:
+        if response is None:
+            results.append(None)
+            continue
+        if response.status_code == 401:
+            await auth.invalidate_session()
+            return {"ok": False, "code": "auth_expired"}
+        if response.status_code != 200:
+            results.append(None)
+            continue
+        try:
+            payload = response.json()
+            projected = _project_authenticated_market_payload("marketdata", payload)
+        except (ValueError, TypeError):
+            results.append(None)
+            continue
+        if _contains_forbidden_market_result(projected):
+            return {"ok": False, "code": "unsafe_upstream_payload"}
+        if not isinstance(projected, dict):
+            results.append(None)
+            continue
+        results.append(projected)
 
     return {"ok": True, "result": results}
 
