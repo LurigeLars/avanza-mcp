@@ -32,7 +32,7 @@ async def test_http_tool_and_resource(monkeypatch):
     monkeypatch.setattr(AvanzaClient, "get", get)
     async with run_server_async(mcp) as url:
         async with Client(url) as client:
-            assert len(await client.list_tools()) == 37
+            assert len(await client.list_tools()) == 38
             result = await client.call_tool(
                 "get_stock_quote", {"order_book_id": "5269"}
             )
