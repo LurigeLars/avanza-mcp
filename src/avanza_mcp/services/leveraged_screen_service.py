@@ -24,7 +24,6 @@ ProductType = Literal["certificate", "warrant"]
 Direction = Literal["long", "short"]
 _FALLBACK_REQUEST_SIZE = 500
 _MAX_CONCURRENT_PAGES = 8
-_MAX_CONCURRENT_REALTIME_ENRICHMENT = 4
 _SNAPSHOT_TTL = timedelta(minutes=10)
 _RANKING = "two_way_quote, spread_percent_asc, turnover_desc"
 _AVANZA_MARKET_TIMEZONE = ZoneInfo("Europe/Stockholm")
@@ -790,40 +789,44 @@ class LeveragedScreenService:
         selected_products = snapshot.products[offset : offset + page_size]
         started_at = datetime.now(timezone.utc)
         timer = perf_counter()
-        semaphore = asyncio.Semaphore(_MAX_CONCURRENT_REALTIME_ENRICHMENT)
+        order_book_ids = [
+            str(product["order_book_id"]) for product in selected_products
+        ]
 
-        async def enrich(product: dict[str, Any]) -> dict[str, Any]:
-            async with semaphore:
-                order_book_id = str(product["order_book_id"])
-                try:
-                    quote = await self._market.get_authenticated_market_data_quote(
-                        order_book_id
-                    )
-                except AvanzaAuthError:
-                    return {
+        batch_error: str | None = None
+        try:
+            quotes = await self._market.get_authenticated_market_data_quotes(
+                order_book_ids
+            )
+        except AvanzaAuthError:
+            quotes = [None] * len(selected_products)
+            batch_error = "auth_required"
+        except AvanzaError:
+            quotes = [None] * len(selected_products)
+            batch_error = "upstream_unavailable"
+
+        products: list[dict[str, Any]] = []
+        for product, quote in zip(selected_products, quotes, strict=True):
+            retrieved_at = datetime.now(timezone.utc).isoformat()
+            if quote is None:
+                products.append(
+                    {
                         **product,
-                        "live_market_data_error": "auth_required",
-                        "live_market_data_retrieved_at": datetime.now(timezone.utc).isoformat(),
+                        "live_market_data_error": (
+                            batch_error or "upstream_unavailable"
+                        ),
+                        "live_market_data_retrieved_at": retrieved_at,
                     }
-                except AvanzaNotFoundError:
-                    return {
-                        **product,
-                        "live_market_data_error": "not_found",
-                        "live_market_data_retrieved_at": datetime.now(timezone.utc).isoformat(),
-                    }
-                except AvanzaError:
-                    return {
-                        **product,
-                        "live_market_data_error": "upstream_unavailable",
-                        "live_market_data_retrieved_at": datetime.now(timezone.utc).isoformat(),
-                    }
-                return {
+                )
+                continue
+            products.append(
+                {
                     **product,
                     "live_market_data": _compact_live_quote(quote),
-                    "live_market_data_retrieved_at": datetime.now(timezone.utc).isoformat(),
+                    "live_market_data_retrieved_at": retrieved_at,
                 }
+            )
 
-        products = await asyncio.gather(*(enrich(product) for product in selected_products))
         completed_at = datetime.now(timezone.utc)
         returned = len(products)
         total = len(snapshot.products)
@@ -875,8 +878,8 @@ class LeveragedScreenService:
                 ),
                 "authenticated_quote_count": authenticated_quote_count,
                 "two_way_quote_count": live_two_way_count,
-                "max_concurrency": _MAX_CONCURRENT_REALTIME_ENRICHMENT,
-                "source": "authenticated_trading_critical_market_data",
+                "auth_worker_calls": 1 if returned else 0,
+                "source": "authenticated_trading_critical_market_data_batch",
                 "scope": "requested_snapshot_page",
                 "cache_hit": False,
                 "current_call_upstream_requests": returned,
@@ -895,12 +898,12 @@ class LeveragedScreenService:
             "data_note": (
                 "The structural snapshot order was created from Avanza's delayed filter feed. "
                 "This enrichment refetches only the requested shortlist through Avanza's "
-                "authenticated trading-critical market-data endpoint. That endpoint does not "
-                "report an is_real_time flag; use quote.source and quote.freshness ages as the "
-                "execution-time evidence. The enrichment is non-atomic across products. Large "
-                "pages issue one upstream market-data request per "
-                "returned product and can therefore take substantially longer; the shared request "
-                "governor still bounds concurrency and request pacing."
+                "authenticated trading-critical market-data endpoint. The shortlist is sent "
+                "through one isolated auth worker and one session validation, while still issuing "
+                "one governed upstream market-data request per returned product. That endpoint "
+                "does not report an is_real_time flag; use quote.source and quote.freshness ages "
+                "as the execution-time evidence. The enrichment is non-atomic across products. "
+                "Large pages can therefore take substantially longer."
             ),
         }
 
