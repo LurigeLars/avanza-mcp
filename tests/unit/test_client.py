@@ -286,6 +286,15 @@ class TestAvanzaClientRequests:
                 )
             client._client.request.assert_not_awaited()
 
+    async def test_get_authenticated_rejects_unreviewed_same_origin_path(self, method):
+        if method != "get":
+            return
+        active = SessionMaterial((), "sentinel-token")
+        client = AvanzaClient(session_provider=lambda: active, max_retries=1)
+        async with client:
+            with pytest.raises(AvanzaAuthError, match="not approved"):
+                await client.get_authenticated("/_api/trading/rest/orders")
+
     @respx.mock
     async def test_authenticated_order_depth_projection_strips_nested_unknowns(self, method):
         _ = method
