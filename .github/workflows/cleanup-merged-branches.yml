@@ -46,12 +46,7 @@ jobs:
               exit 1
             fi
 
-            encoded_branch="$(python - "$branch" <<'PY'
-import sys
-from urllib.parse import quote
-print(quote(sys.argv[1], safe=""))
-PY
-)"
+            encoded_branch="$(python -c 'import sys; from urllib.parse import quote; print(quote(sys.argv[1], safe=""))' "$branch")"
 
             if ! branch_json="$(gh api "repos/$GITHUB_REPOSITORY/branches/$encoded_branch" 2>/dev/null)"; then
               echo "SKIP missing: $branch"
