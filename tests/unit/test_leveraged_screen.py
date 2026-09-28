@@ -147,7 +147,7 @@ async def test_realtime_enrichment_refetches_only_requested_snapshot_page():
         2,
     )
 
-    assert fake.market_data_quote_calls == ["101", "202"]
+    assert sorted(fake.market_data_quote_calls) == ["101", "202"]
     assert enriched["enrichment"]["attempted_count"] == 2
     assert enriched["enrichment"]["enriched_count"] == 2
     assert enriched["enrichment"]["authenticated_quote_count"] == 2
