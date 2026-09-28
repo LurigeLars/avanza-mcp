@@ -1,0 +1,93 @@
+name: Cleanup merged branches
+
+on:
+  workflow_dispatch:
+    inputs:
+      branches:
+        description: "Newline-separated branch names to verify and delete"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify merged PRs and delete branches
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCHES: ${{ inputs.branches }}
+        run: |
+          set -euo pipefail
+
+          owner="${GITHUB_REPOSITORY%%/*}"
+          deleted=0
+          skipped=0
+
+          while IFS= read -r branch; do
+            branch="${branch%$'\r'}"
+            [[ -z "$branch" ]] && continue
+
+            if [[ "$branch" == "main" ]]; then
+              echo "::error::Refusing to delete main"
+              exit 1
+            fi
+
+            if [[ ! "$branch" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$ ]] ||
+               [[ "$branch" == *".."* ]] ||
+               [[ "$branch" == *"//"* ]] ||
+               [[ "$branch" == */ ]] ||
+               [[ "$branch" == *.lock ]]; then
+              echo "::error::Invalid branch name: $branch"
+              exit 1
+            fi
+
+            encoded_branch="$(python - "$branch" <<'PY'
+import sys
+from urllib.parse import quote
+print(quote(sys.argv[1], safe=""))
+PY
+)"
+
+            if ! branch_json="$(gh api "repos/$GITHUB_REPOSITORY/branches/$encoded_branch" 2>/dev/null)"; then
+              echo "SKIP missing: $branch"
+              skipped=$((skipped + 1))
+              continue
+            fi
+
+            if [[ "$(jq -r '.protected' <<<"$branch_json")" == "true" ]]; then
+              echo "::error::Refusing protected branch: $branch"
+              exit 1
+            fi
+
+            pulls_json="$(
+              gh api -X GET "repos/$GITHUB_REPOSITORY/pulls"                 -f state=closed                 -f base=main                 -f head="$owner:$branch"                 -f per_page=100
+            )"
+
+            merged_count="$(
+              jq --arg branch "$branch" '
+                [.[] |
+                  select(
+                    .head.ref == $branch and
+                    .base.ref == "main" and
+                    .merged_at != null
+                  )
+                ] | length
+              ' <<<"$pulls_json"
+            )"
+
+            if [[ "$merged_count" -lt 1 ]]; then
+              echo "::error::No merged PR to main found for: $branch"
+              exit 1
+            fi
+
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$encoded_branch"
+            echo "DELETED: $branch"
+            deleted=$((deleted + 1))
+          done <<<"$BRANCHES"
+
+          echo "Deleted $deleted branch(es); skipped $skipped missing branch(es)."
