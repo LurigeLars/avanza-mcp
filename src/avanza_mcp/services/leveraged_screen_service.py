@@ -125,13 +125,21 @@ def _catalog_candidate(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _catalog_can_satisfy_filters(filters: "ScreenFilters") -> bool:
-    # Quote/spread/turnover filters require current market data. Keep the existing
-    # public filter-feed path for those so unauthenticated behavior does not regress.
+def _catalog_can_satisfy_request(
+    filters: "ScreenFilters",
+    suitability: "SuitabilityCriteria",
+) -> bool:
+    # The local catalog is authoritative for structural identity, but not for
+    # every optional pricing/derivative attribute. Hard filters must never
+    # silently turn missing catalog fields into false negatives.
     return not (
         filters.require_two_way_quote
         or filters.max_spread_percent is not None
         or filters.min_turnover is not None
+        or filters.min_leverage is not None
+        or filters.max_leverage is not None
+        or suitability.target_leverage is not None
+        or suitability.min_stop_loss_buffer_percent is not None
     )
 
 def _timestamp_ms(value: Any) -> int | None:
@@ -933,7 +941,10 @@ class LeveragedScreenService:
             prefer_catalog
             and self._catalog is not None
             and hasattr(self._catalog, "find_by_underlying")
-            and _catalog_can_satisfy_filters(selected_filters)
+            and _catalog_can_satisfy_request(
+                selected_filters,
+                selected_suitability,
+            )
         ):
             try:
                 catalog_count = self._catalog.count_by_underlying(
