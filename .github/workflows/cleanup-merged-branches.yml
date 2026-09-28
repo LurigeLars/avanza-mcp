@@ -4,8 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       branches:
-        description: "Newline-separated branch names to verify and delete"
-        required: true
+        description: "Newline-separated merged branch names to verify and delete"
+        required: false
+        default: ""
+        type: string
+      reviewed_unmerged_refs:
+        description: "Newline-separated reviewed branch=40-char-SHA refs to delete"
+        required: false
+        default: ""
         type: string
 
 permissions:
@@ -16,11 +22,12 @@ jobs:
   cleanup:
     runs-on: ubuntu-latest
     steps:
-      - name: Verify merged PRs and delete branches
+      - name: Verify and delete reviewed branches
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           BRANCHES: ${{ inputs.branches }}
+          REVIEWED_REFS: ${{ inputs.reviewed_unmerged_refs }}
         run: |
           set -euo pipefail
 
@@ -28,15 +35,12 @@ jobs:
           deleted=0
           skipped=0
 
-          while IFS= read -r branch; do
-            branch="${branch%$'\r'}"
-            [[ -z "$branch" ]] && continue
-
+          validate_branch_name() {
+            local branch="$1"
             if [[ "$branch" == "main" ]]; then
               echo "::error::Refusing to delete main"
               exit 1
             fi
-
             if [[ ! "$branch" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$ ]] ||
                [[ "$branch" == *".."* ]] ||
                [[ "$branch" == *"//"* ]] ||
@@ -45,11 +49,20 @@ jobs:
               echo "::error::Invalid branch name: $branch"
               exit 1
             fi
+          }
 
-            encoded_branch="$(python -c 'import sys; from urllib.parse import quote; print(quote(sys.argv[1], safe=""))' "$branch")"
+          encode_branch() {
+            python -c 'import sys; from urllib.parse import quote; print(quote(sys.argv[1], safe=""))' "$1"
+          }
+
+          while IFS= read -r branch; do
+            branch="${branch%$'\r'}"
+            [[ -z "$branch" ]] && continue
+            validate_branch_name "$branch"
+            encoded_branch="$(encode_branch "$branch")"
 
             if ! branch_json="$(gh api "repos/$GITHUB_REPOSITORY/branches/$encoded_branch" 2>/dev/null)"; then
-              echo "SKIP missing: $branch"
+              echo "SKIP missing merged branch: $branch"
               skipped=$((skipped + 1))
               continue
             fi
@@ -81,8 +94,49 @@ jobs:
             fi
 
             gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$encoded_branch"
-            echo "DELETED: $branch"
+            echo "DELETED merged: $branch"
             deleted=$((deleted + 1))
           done <<<"$BRANCHES"
+
+          while IFS= read -r entry; do
+            entry="${entry%$'\r'}"
+            [[ -z "$entry" ]] && continue
+
+            if [[ "$entry" != *=* ]]; then
+              echo "::error::Reviewed ref must use branch=sha format"
+              exit 1
+            fi
+
+            branch="${entry%%=*}"
+            expected_sha="${entry#*=}"
+            validate_branch_name "$branch"
+
+            if [[ ! "$expected_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::Invalid expected SHA for: $branch"
+              exit 1
+            fi
+
+            encoded_branch="$(encode_branch "$branch")"
+            if ! branch_json="$(gh api "repos/$GITHUB_REPOSITORY/branches/$encoded_branch" 2>/dev/null)"; then
+              echo "SKIP missing reviewed branch: $branch"
+              skipped=$((skipped + 1))
+              continue
+            fi
+
+            if [[ "$(jq -r '.protected' <<<"$branch_json")" == "true" ]]; then
+              echo "::error::Refusing protected branch: $branch"
+              exit 1
+            fi
+
+            actual_sha="$(jq -r '.commit.sha' <<<"$branch_json")"
+            if [[ "$actual_sha" != "$expected_sha" ]]; then
+              echo "::error::HEAD changed for $branch: expected $expected_sha, got $actual_sha"
+              exit 1
+            fi
+
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$encoded_branch"
+            echo "DELETED reviewed: $branch@$expected_sha"
+            deleted=$((deleted + 1))
+          done <<<"$REVIEWED_REFS"
 
           echo "Deleted $deleted branch(es); skipped $skipped missing branch(es)."
