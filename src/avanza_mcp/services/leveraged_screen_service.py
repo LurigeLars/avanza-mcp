@@ -24,7 +24,6 @@ Direction = Literal["long", "short"]
 _FALLBACK_REQUEST_SIZE = 500
 _MAX_CONCURRENT_PAGES = 8
 _MAX_CONCURRENT_REALTIME_ENRICHMENT = 4
-_MAX_REALTIME_ENRICHMENT_PAGE_SIZE = 10
 _SNAPSHOT_TTL = timedelta(minutes=10)
 _RANKING = "two_way_quote, spread_percent_asc, turnover_desc"
 
@@ -772,10 +771,8 @@ class LeveragedScreenService:
     ) -> dict[str, Any]:
         if offset < 0:
             raise ValueError("offset must be >= 0")
-        if page_size < 1 or page_size > _MAX_REALTIME_ENRICHMENT_PAGE_SIZE:
-            raise ValueError(
-                f"page_size must be between 1 and {_MAX_REALTIME_ENRICHMENT_PAGE_SIZE}"
-            )
+        if page_size < 1:
+            raise ValueError("page_size must be at least 1")
 
         snapshot = _SNAPSHOTS.get(snapshot_id)
         if (
@@ -870,7 +867,6 @@ class LeveragedScreenService:
                 "realtime_quote_count": realtime_count,
                 "two_way_quote_count": live_two_way_count,
                 "max_concurrency": _MAX_CONCURRENT_REALTIME_ENRICHMENT,
-                "max_page_size": _MAX_REALTIME_ENRICHMENT_PAGE_SIZE,
                 "source": "authenticated_if_connected instrument-info endpoints",
                 "scope": "requested_snapshot_page",
                 "cache_hit": False,
@@ -892,7 +888,9 @@ class LeveragedScreenService:
                 "This enrichment refetches only the requested shortlist through instrument-info "
                 "endpoints. Treat bid/ask as execution evidence only when quote.is_real_time is "
                 "true and quote.freshness ages are acceptably low. The enrichment is non-atomic "
-                "across products and is intentionally limited to ten products per call."
+                "across products. Large pages issue one upstream instrument-info request per "
+                "returned product and can therefore take substantially longer; the shared request "
+                "governor still bounds concurrency and request pacing."
             ),
         }
 
