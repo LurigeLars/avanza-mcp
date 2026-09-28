@@ -26,7 +26,7 @@ from .store import AuthStoreError, create_session_store
 
 _INTERNAL_BROWSER_IDLE_SECONDS = 365 * 24 * 60 * 60
 _MARKET_BATCH_CONCURRENCY = 16
-_MARKET_BATCH_MIN_REQUEST_INTERVAL = 0.075
+_MARKET_BATCH_MIN_REQUEST_INTERVAL = 0.05
 _MEMORY_ONLY_IDLE_SECONDS = 15 * 60
 _ONE_SHOT_IDLE_SECONDS = 5 * 60
 _TERMINAL_STATES = frozenset({"connected", "disconnected", "denied", "timed_out", "error"})
