@@ -418,6 +418,66 @@ async def _market_operation(
     return {"ok": True, "result": result}
 
 
+async def _market_batch_operation(
+    auth: BrowserAuth | _RequestAuth, command: dict[str, Any]
+) -> dict[str, Any]:
+    """Fetch trading-critical quotes sequentially inside one validated auth worker."""
+    paths = command.get("paths")
+    if not isinstance(paths, list) or any(not isinstance(path, str) for path in paths):
+        return {"ok": False, "code": "protocol_error"}
+    if any(
+        authenticated_public_request_allowed("GET", path) is False
+        or _authenticated_market_kind("GET", path) != "marketdata"
+        for path in paths
+    ):
+        return {"ok": False, "code": "operation_not_allowed"}
+    if auth.session is None:
+        return {"ok": False, "code": "no_session"}
+
+    results: list[dict[str, Any] | None] = []
+    try:
+        async with AvanzaClient(
+            session_provider=lambda: auth.session,
+            session_invalidated=auth.invalidate_session,
+        ) as client:
+            for path in paths:
+                try:
+                    response = await client.request_authenticated("GET", path)
+                except AvanzaAuthError:
+                    await auth.invalidate_session()
+                    return {"ok": False, "code": "auth_expired"}
+                except Exception:
+                    results.append(None)
+                    continue
+
+                if response.status_code == 401:
+                    await auth.invalidate_session()
+                    return {"ok": False, "code": "auth_expired"}
+                if response.status_code != 200:
+                    results.append(None)
+                    continue
+
+                try:
+                    payload = response.json()
+                    projected = _project_authenticated_market_payload(
+                        "marketdata", payload
+                    )
+                except (ValueError, TypeError):
+                    results.append(None)
+                    continue
+
+                if _contains_forbidden_market_result(projected):
+                    return {"ok": False, "code": "unsafe_upstream_payload"}
+                if not isinstance(projected, dict):
+                    results.append(None)
+                    continue
+                results.append(projected)
+    except Exception:
+        return {"ok": False, "code": "read_error"}
+
+    return {"ok": True, "result": results}
+
+
 async def _run_once(command: dict[str, Any]) -> None:
     store = create_session_store()
     action = command.get("action")
@@ -440,7 +500,7 @@ async def _run_once(command: dict[str, Any]) -> None:
         if not isinstance(operation, str) or not isinstance(arguments, dict):
             _emit({"ok": False, "code": "protocol_error"})
             return
-    elif action != "market":
+    elif action not in {"market", "market_batch"}:
         _emit({"ok": False, "code": "operation_not_allowed"})
         return
 
@@ -458,6 +518,10 @@ async def _run_once(command: dict[str, Any]) -> None:
     if action == "account":
         operation_task = asyncio.create_task(
             _account_operation(request_auth, operation, arguments)
+        )
+    elif action == "market_batch":
+        operation_task = asyncio.create_task(
+            _market_batch_operation(request_auth, command)
         )
     else:
         operation_task = asyncio.create_task(_market_operation(request_auth, command))
@@ -495,6 +559,8 @@ async def _run_once(command: dict[str, Any]) -> None:
         retry_auth = _RequestAuth(refreshed)
         if action == "account":
             result = await _account_operation(retry_auth, operation, arguments)
+        elif action == "market_batch":
+            result = await _market_batch_operation(retry_auth, command)
         else:
             result = await _market_operation(retry_auth, command)
 
