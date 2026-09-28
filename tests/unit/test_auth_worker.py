@@ -120,8 +120,8 @@ async def test_market_batch_validates_session_once_for_multiple_paths(
 
 
 async def test_market_batch_fetches_with_bounded_concurrency_and_preserves_order(monkeypatch):
-    active = 0
-    max_active = 0
+    seen_paths = []
+    seen_concurrency = []
 
     class FakeResponse:
         def __init__(self, value):
@@ -133,7 +133,8 @@ async def test_market_batch_fetches_with_bounded_concurrency_and_preserves_order
 
     class FakeClient:
         def __init__(self, *args, **kwargs):
-            pass
+            assert kwargs["max_connections"] == worker._MARKET_BATCH_CONCURRENCY
+            assert kwargs["max_in_flight_requests"] == worker._MARKET_BATCH_CONCURRENCY
 
         async def __aenter__(self):
             return self
@@ -141,16 +142,13 @@ async def test_market_batch_fetches_with_bounded_concurrency_and_preserves_order
         async def __aexit__(self, *args):
             return None
 
-        async def request_authenticated(self, method, path):
-            nonlocal active, max_active
-            active += 1
-            max_active = max(max_active, active)
-            try:
-                await asyncio.sleep(0.01)
-                value = int(path.rsplit("/", 1)[-1])
-                return FakeResponse(value)
-            finally:
-                active -= 1
+        async def request_authenticated_batch(self, paths, *, max_concurrency):
+            seen_paths.append(list(paths))
+            seen_concurrency.append(max_concurrency)
+            return [
+                FakeResponse(int(path.rsplit("/", 1)[-1]))
+                for path in paths
+            ]
 
     monkeypatch.setattr(worker, "AvanzaClient", FakeClient)
     auth = worker._RequestAuth(SessionMaterial((), "token"))
@@ -161,7 +159,8 @@ async def test_market_batch_fetches_with_bounded_concurrency_and_preserves_order
 
     assert result["ok"] is True
     assert [item["quote"]["buy"] for item in result["result"]] == list(range(1, 25))
-    assert 1 < max_active <= worker._MARKET_BATCH_CONCURRENCY
+    assert seen_paths == [paths]
+    assert seen_concurrency == [worker._MARKET_BATCH_CONCURRENCY]
 
 
 async def test_invalid_validation_discards_concurrent_success(monkeypatch, capsys):
