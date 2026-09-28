@@ -746,11 +746,18 @@ async def _run_persistent_market_daemon(parent_pid: int) -> None:
             if action == "shutdown":
                 _emit({"ok": True})
                 return
-            if action not in {"market", "market_batch"}:
+            if action not in {"warm", "market", "market_batch"}:
                 _emit({"ok": False, "code": "operation_not_allowed"})
                 continue
 
             error = await ensure_session()
+            if action == "warm":
+                _emit(
+                    {"ok": True}
+                    if error is None
+                    else {"ok": False, "code": error}
+                )
+                continue
             if error is not None or auth is None or client is None:
                 _emit({"ok": False, "code": error or "auth_required"})
                 continue
