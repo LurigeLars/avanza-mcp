@@ -10,7 +10,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from ..client.base import AvanzaClient
-from ..client.exceptions import AvanzaNotFoundError
+from ..client.exceptions import AvanzaError, AvanzaNotFoundError
 from ..models.filter import SortBy
 from ..models.future_forward import FutureForwardMatrixFilter, FutureForwardMatrixRequest
 from .market_data_service import MarketDataService
@@ -191,6 +191,30 @@ def _compact_option_info(info: Any) -> dict[str, Any]:
     }
 
 
+def _compact_stock_quote(info: Any) -> dict[str, Any]:
+    raw = _dump(info)
+    mapping = (
+        ("buy", "bid"),
+        ("sell", "ask"),
+        ("last", "last"),
+        ("spread", "upstream_spread_percent"),
+        ("updated", "updated"),
+        ("isRealTime", "is_real_time"),
+    )
+    compact = {
+        target: raw[source]
+        for source, target in mapping
+        if raw.get(source) is not None
+    }
+    spread = _quote_spread_percent(compact)
+    if spread is not None:
+        compact["spread_percent_from_quote_prices"] = spread
+    freshness = _quote_freshness(compact)
+    if freshness is not None:
+        compact["freshness"] = freshness
+    return compact
+
+
 def _quote_freshness(quote: dict[str, Any]) -> dict[str, Any] | None:
     observed_at = int(time() * 1000)
 
@@ -335,6 +359,7 @@ class _OptionMarketSnapshot:
     enriched_count: int
     not_found_count: int
     retrieval_span_ms: int | None
+    underlying_quote_shared: bool
     expires_at: datetime
 
 
@@ -696,13 +721,17 @@ class OptionsScreenService:
     async def _enrich_contracts(
         self,
         contracts: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
+        underlying_order_book_id: str,
+    ) -> tuple[list[dict[str, Any]], bool]:
         semaphore = asyncio.Semaphore(_MAX_CONCURRENT_ENRICHMENT)
 
         async def enrich(contract: dict[str, Any]) -> dict[str, Any]:
             async with semaphore:
                 try:
-                    info = await self._market.get_option_info(contract["order_book_id"])
+                    info = await self._market.get_option_info(
+                        contract["order_book_id"],
+                        public_only=True,
+                    )
                 except AvanzaNotFoundError:
                     return {
                         **contract,
@@ -715,7 +744,24 @@ class OptionsScreenService:
                     "market_data_retrieved_at": datetime.now(timezone.utc).isoformat(),
                 }
 
-        return await asyncio.gather(*(enrich(contract) for contract in contracts))
+        async def shared_underlying_quote() -> dict[str, Any] | None:
+            try:
+                quote = await self._market.get_stock_quote(underlying_order_book_id)
+            except AvanzaError:
+                return None
+            compact = _compact_stock_quote(quote)
+            return compact or None
+
+        options, underlying_quote = await asyncio.gather(
+            asyncio.gather(*(enrich(contract) for contract in contracts)),
+            shared_underlying_quote(),
+        )
+        if underlying_quote is not None:
+            for option in options:
+                market_data = option.get("market_data")
+                if isinstance(market_data, dict):
+                    market_data["underlying_quote"] = dict(underlying_quote)
+        return options, underlying_quote is not None
 
     async def enrich_page(
         self,
@@ -743,7 +789,10 @@ class OptionsScreenService:
             if market_snapshot is None:
                 started_at = datetime.now(timezone.utc)
                 timer = perf_counter()
-                options = await self._enrich_contracts(snapshot.contracts)
+                options, underlying_quote_shared = await self._enrich_contracts(
+                    snapshot.contracts,
+                    underlying_order_book_id,
+                )
                 completed_at = datetime.now(timezone.utc)
                 options.sort(key=_market_rank)
                 retrieval_times = [
@@ -774,10 +823,11 @@ class OptionsScreenService:
                         for option in options
                     ),
                     retrieval_span_ms=retrieval_span_ms,
+                    underlying_quote_shared=underlying_quote_shared,
                     expires_at=snapshot.expires_at,
                 )
                 _MARKET_SNAPSHOTS.put(market_snapshot)
-                current_call_upstream_requests = len(options)
+                current_call_upstream_requests = len(options) + 1
             else:
                 cache_hit = True
 
@@ -800,6 +850,9 @@ class OptionsScreenService:
                 "ranking": "two_way_quote, spread_percent_asc, turnover_desc",
                 "cache_hit": cache_hit,
                 "current_call_upstream_requests": current_call_upstream_requests,
+                "option_info_transport": "public",
+                "underlying_quote_transport": "authenticated_if_connected_else_public",
+                "underlying_quote_shared": market_snapshot.underlying_quote_shared,
             }
             ordering = "market_quality"
             page_total = len(source_options)
@@ -807,7 +860,10 @@ class OptionsScreenService:
             selected_contracts = snapshot.contracts[offset : offset + page_size]
             started_at = datetime.now(timezone.utc)
             timer = perf_counter()
-            selected = await self._enrich_contracts(selected_contracts)
+            selected, underlying_quote_shared = await self._enrich_contracts(
+                selected_contracts,
+                underlying_order_book_id,
+            )
             completed_at = datetime.now(timezone.utc)
             returned = len(selected)
             has_more = offset + returned < total
@@ -827,7 +883,10 @@ class OptionsScreenService:
                 "scope": "requested_page",
                 "ranking": "structural_snapshot_order",
                 "cache_hit": False,
-                "current_call_upstream_requests": returned,
+                "current_call_upstream_requests": returned + 1,
+                "option_info_transport": "public",
+                "underlying_quote_transport": "authenticated_if_connected_else_public",
+                "underlying_quote_shared": underlying_quote_shared,
             }
             ordering = "structural_snapshot_order"
             page_total = total
@@ -854,7 +913,10 @@ class OptionsScreenService:
             "ordering": ordering,
             "data_note": (
                 "Option quotes are non-atomic and may have different upstream updated timestamps. "
-                "quote.is_real_time is an upstream feed flag, not a freshness guarantee; inspect "
+                "Option-info rows use the public transport; the underlying stock quote is fetched "
+                "once per enrichment through the normal authenticated-if-connected path and shared "
+                "across enriched rows. quote.is_real_time is an upstream feed flag, not a freshness "
+                "guarantee; inspect "
                 "quote.freshness source ages before using bid/ask as execution evidence. "
                 "Retrieval timestamps are not source timestamps. "
                 "market_quality enriches and ranks the complete structural snapshot once, then "

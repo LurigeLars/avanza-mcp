@@ -4,6 +4,7 @@ import pytest
 from fastmcp import Client
 
 from avanza_mcp import mcp
+from avanza_mcp.client.exceptions import AvanzaNotFoundError
 from avanza_mcp.services.options_screen_service import (
     OptionScreenSpec,
     OptionsScreenService,
@@ -23,6 +24,8 @@ class FakeMarket:
         self.calls = []
         self.public_only_calls = []
         self.option_info_calls = []
+        self.option_info_public_only_calls = []
+        self.stock_quote_calls = []
 
     async def list_futures_forwards(self, request, *, public_only=False):
         self.calls.append(request)
@@ -99,8 +102,9 @@ class FakeMarket:
             }
         )
 
-    async def get_option_info(self, order_book_id):
+    async def get_option_info(self, order_book_id, *, public_only=False):
         self.option_info_calls.append(order_book_id)
+        self.option_info_public_only_calls.append(public_only)
         return FakeResponse(
             {
                 "orderbookId": order_book_id,
@@ -138,10 +142,30 @@ class FakeMarket:
             }
         )
 
+    async def get_stock_quote(self, order_book_id):
+        self.stock_quote_calls.append(order_book_id)
+        return FakeResponse(
+            {
+                "buy": 100.0,
+                "sell": 100.2,
+                "last": 100.1,
+                "spread": 0.2,
+                "updated": 123456999,
+                "isRealTime": True,
+            }
+        )
+
+
+class MissingUnderlyingQuoteMarket(FakeMarket):
+    async def get_stock_quote(self, order_book_id):
+        self.stock_quote_calls.append(order_book_id)
+        raise AvanzaNotFoundError("missing")
+
 
 class RankingFakeMarket(FakeMarket):
-    async def get_option_info(self, order_book_id):
+    async def get_option_info(self, order_book_id, *, public_only=False):
         self.option_info_calls.append(order_book_id)
+        self.option_info_public_only_calls.append(public_only)
         quotes = {
             "101": {"buy": 10.0, "sell": 10.5, "totalValueTraded": 100},
             "102": {"buy": 10.0, "sell": 10.2, "totalValueTraded": 100},
@@ -245,6 +269,8 @@ async def test_option_enrichment_pages_existing_snapshot_without_matrix_refetch(
 
     assert len(fake.calls) == matrix_calls
     assert fake.option_info_calls == ["102", "103"]
+    assert fake.option_info_public_only_calls == [True, True]
+    assert fake.stock_quote_calls == ["5269"]
     assert enriched["pagination"] == {
         "total": 4,
         "offset": 1,
@@ -257,6 +283,9 @@ async def test_option_enrichment_pages_existing_snapshot_without_matrix_refetch(
     assert enriched["enrichment"]["enriched_count"] == 2
     assert enriched["enrichment"]["not_found_count"] == 0
     assert enriched["enrichment"]["atomic"] is False
+    assert enriched["enrichment"]["current_call_upstream_requests"] == 3
+    assert enriched["enrichment"]["option_info_transport"] == "public"
+    assert enriched["enrichment"]["underlying_quote_shared"] is True
     assert enriched["options"][0]["market_data"]["instrument_type"] == "OPTION"
     quote = enriched["options"][0]["market_data"]["quote"]
     assert {
@@ -287,10 +316,36 @@ async def test_option_enrichment_pages_existing_snapshot_without_matrix_refetch(
     assert quote["freshness"]["upstream_is_real_time"] is False
     assert quote["freshness"]["real_time_flag_is_freshness_guarantee"] is False
     underlying_quote = enriched["options"][0]["market_data"]["underlying_quote"]
-    assert underlying_quote["is_real_time"] is False
-    assert underlying_quote["freshness"]["source_updated_at"] == 123456700
+    assert underlying_quote["is_real_time"] is True
+    assert underlying_quote["freshness"]["source_updated_at"] == 123456999
     assert "bid_ask_updated_at" not in underlying_quote["freshness"]
     assert underlying_quote["freshness"]["real_time_flag_is_freshness_guarantee"] is False
+
+
+@pytest.mark.asyncio
+async def test_option_enrichment_keeps_public_underlying_when_shared_quote_fails():
+    service = OptionsScreenService(object())
+    fake = MissingUnderlyingQuoteMarket()
+    service._market = fake
+    first = await service.screen(
+        "5269",
+        1,
+        OptionScreenSpec(option_types=("STANDARD",)),
+    )
+
+    enriched = await service.enrich_page(
+        first["snapshot_id"],
+        "5269",
+        0,
+        1,
+    )
+
+    assert fake.option_info_public_only_calls == [True]
+    assert fake.stock_quote_calls == ["5269"]
+    assert enriched["enrichment"]["underlying_quote_shared"] is False
+    underlying_quote = enriched["options"][0]["market_data"]["underlying_quote"]
+    assert underlying_quote["is_real_time"] is False
+    assert underlying_quote["freshness"]["source_updated_at"] == 123456700
 
 
 @pytest.mark.asyncio
@@ -315,13 +370,17 @@ async def test_market_quality_enriches_full_snapshot_once_then_pages_cached_rank
 
     assert len(fake.calls) == matrix_calls
     assert fake.option_info_calls == ["101", "102", "103", "104"]
+    assert fake.option_info_public_only_calls == [True, True, True, True]
+    assert fake.stock_quote_calls == ["5269"]
     assert ranked["options"][0]["order_book_id"] == "104"
     assert ranked["options"][0]["market_data"]["quote"][
         "spread_percent_from_quote_prices"
     ] == pytest.approx(0.995025)
     assert ranked["enrichment"]["scope"] == "full_structural_snapshot"
     assert ranked["enrichment"]["cache_hit"] is False
-    assert ranked["enrichment"]["current_call_upstream_requests"] == 4
+    assert ranked["enrichment"]["current_call_upstream_requests"] == 5
+    assert ranked["enrichment"]["option_info_transport"] == "public"
+    assert ranked["enrichment"]["underlying_quote_shared"] is True
     assert ranked["pagination"]["total"] == 4
     assert ranked["pagination"]["returned"] == 1
     assert ranked["pagination"]["has_more"] is True
