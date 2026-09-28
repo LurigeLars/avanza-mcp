@@ -118,3 +118,16 @@ async def test_direct_option_info_uses_option_path_without_future_probe():
     assert result.orderbookId == "2401349"
     assert result.type == "OPTION"
     client.get.assert_awaited_once_with("/_api/market-guide/option/2401349")
+
+
+@pytest.mark.asyncio
+async def test_direct_option_info_public_only_uses_public_transport():
+    client = AsyncMock()
+    client.get_public.return_value = OPTION_INFO
+    service = MarketDataService(client)
+
+    result = await service.get_option_info("2401349", public_only=True)
+
+    assert result.orderbookId == "2401349"
+    client.get_public.assert_awaited_once_with("/_api/market-guide/option/2401349")
+    client.get.assert_not_awaited()
