@@ -14,6 +14,7 @@ import respx
 from tenacity import retry
 from unittest.mock import AsyncMock
 from avanza_mcp.client.endpoints import (
+    AuthenticatedMarketEndpoint,
     PublicEndpoint,
     authenticated_public_request_allowed,
     authenticated_public_request_family,
@@ -232,6 +233,58 @@ class TestAvanzaClientRequests:
             result = await client.get(path)
         assert result == {"last": 10, "isRealTime": True}
         assert route.call_count == 1
+
+    @respx.mock
+    async def test_trading_critical_market_data_requires_auth_and_projects_quote(self, method):
+        if method != "get":
+            return
+        active = SessionMaterial((), "sentinel-token")
+        path = "/_api/trading-critical/rest/marketdata/1528333"
+        route = respx.get(f"https://www.avanza.se{path}").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "quote": {
+                        "buy": 202.5,
+                        "sell": 202.55,
+                        "last": 203.0,
+                        "updated": "2026-09-28T07:30:01.000+00:00",
+                        "timeOfLast": "2026-09-28T07:29:59.000+00:00",
+                        "futureUnknownQuoteField": "discard",
+                    },
+                    "orderDepth": {"levels": [{"accountId": "discard"}]},
+                    "trades": [{"price": 203.0, "accountId": "discard"}],
+                    "securityToken": "discard",
+                },
+            )
+        )
+        client = AvanzaClient(session_provider=lambda: active, max_retries=1)
+        async with client:
+            result = await client.get_authenticated(path)
+
+        assert result == {
+            "quote": {
+                "buy": 202.5,
+                "sell": 202.55,
+                "last": 203.0,
+                "updated": "2026-09-28T07:30:01.000+00:00",
+                "timeOfLast": "2026-09-28T07:29:59.000+00:00",
+            }
+        }
+        assert route.call_count == 1
+        assert route.calls.last.request.headers["x-securitytoken"] == "sentinel-token"
+
+    async def test_trading_critical_market_data_never_falls_back_public(self, method):
+        if method != "get":
+            return
+        client = AvanzaClient(session_provider=lambda: None, max_retries=1)
+        async with client:
+            client._client.request = AsyncMock()
+            with pytest.raises(AvanzaAuthError):
+                await client.get_authenticated(
+                    "/_api/trading-critical/rest/marketdata/1528333"
+                )
+            client._client.request.assert_not_awaited()
 
     @respx.mock
     async def test_authenticated_order_depth_projection_strips_nested_unknowns(self, method):
@@ -662,6 +715,8 @@ class TestClientFailureBoundaries:
 def test_invalid_order_book_id(value):
     with pytest.raises(ValueError, match="Order-book id"):
         PublicEndpoint.STOCK_INFO.format(id=value)
+    with pytest.raises(ValueError, match="Order-book id"):
+        AuthenticatedMarketEndpoint.TRADING_CRITICAL_MARKET_DATA.format(id=value)
 
 
 @pytest.mark.parametrize("value", [123, "123", "00123", "0"])
@@ -693,6 +748,7 @@ def test_invalid_request_deadline(timeout):
         ("GET", "/_api/market-guide/stock/4478/analysis"),
         ("GET", "/_api/market-guide/stock/4478/quote"),
         ("GET", "/_api/market-guide/stock/4478/orderdepth"),
+        ("GET", "/_api/trading-critical/rest/marketdata/1528333"),
         ("GET", "/_api/price-chart/stock/4478"),
         ("GET", "/_api/price-chart/marketmaker/123"),
         ("GET", "/_api/fund-guide/guide/123"),
@@ -731,6 +787,12 @@ def test_authenticated_public_market_allowlist_rejects_non_public_or_removed_pat
 
 
 def test_authenticated_public_market_family_normalizes_dynamic_ids():
+    assert (
+        authenticated_public_request_family(
+            "GET", "/_api/trading-critical/rest/marketdata/1704709"
+        )
+        == "trading_critical_market_data"
+    )
     assert (
         authenticated_public_request_family(
             "GET", "/_api/market-guide/warrant/1704709"
