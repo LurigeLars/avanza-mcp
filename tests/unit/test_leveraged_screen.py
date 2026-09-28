@@ -26,6 +26,8 @@ class FakeMarket:
     def __init__(self):
         self.certificate_calls = []
         self.warrant_calls = []
+        self.certificate_info_calls = []
+        self.warrant_info_calls = []
 
     async def filter_certificates(self, request):
         self.certificate_calls.append(request)
@@ -64,6 +66,63 @@ class FakeMarket:
             totalNumberOfOrderbooks=1,
         )
 
+    async def get_certificate_info(self, order_book_id):
+        self.certificate_info_calls.append(order_book_id)
+        return FakeItem(
+            orderbookId=order_book_id,
+            quote={
+                "buy": 10.2,
+                "sell": 10.3,
+                "last": 10.25,
+                "spread": 0.98,
+                "totalValueTraded": 1000,
+                "totalVolumeTraded": 50,
+                "updated": 123456789,
+                "isRealTime": True,
+                "freshness": {
+                    "observedAt": 123456999,
+                    "sourceUpdatedAt": 123456789,
+                    "bidAskUpdatedAt": 123456789,
+                    "sourceUpdateAgeMs": 210,
+                    "bidAskAgeMs": 210,
+                    "upstreamIsRealTime": True,
+                    "realTimeFlagIsFreshnessGuarantee": False,
+                },
+            },
+            keyIndicators={"leverage": 4.4},
+        )
+
+    async def get_warrant_info(self, order_book_id):
+        self.warrant_info_calls.append(order_book_id)
+        return FakeItem(
+            orderbookId=order_book_id,
+            quote={
+                "buy": 5.2,
+                "sell": 5.3,
+                "last": 5.25,
+                "spread": 1.9,
+                "totalValueTraded": 2000,
+                "totalVolumeTraded": 75,
+                "updated": 123456790,
+                "isRealTime": True,
+                "freshness": {
+                    "observedAt": 123456999,
+                    "sourceUpdatedAt": 123456790,
+                    "bidAskUpdatedAt": 123456790,
+                    "sourceUpdateAgeMs": 209,
+                    "bidAskAgeMs": 209,
+                    "upstreamIsRealTime": True,
+                    "realTimeFlagIsFreshnessGuarantee": False,
+                },
+            },
+            keyIndicators={
+                "leverage": 5.3,
+                "barrierLevel": 3.0,
+                "financingLevel": 2.5,
+                "subType": "TURBO",
+            },
+        )
+
 
 def test_discovery_spread_percent_is_midpoint_based_and_bounded():
     assert _discovery_spread_percent(9.9, 10.1) == 2.0
@@ -99,6 +158,53 @@ async def test_snapshot_pagination_reuses_same_ranked_data_without_refetching():
     assert second["snapshot"] == first["snapshot"]
     assert second["pagination"]["has_more"] is False
     assert {first["products"][0]["order_book_id"], second["products"][0]["order_book_id"]} == {"101", "202"}
+
+
+@pytest.mark.asyncio
+async def test_realtime_enrichment_refetches_only_requested_snapshot_page():
+    service = LeveragedScreenService(object())
+    fake = FakeMarket()
+    service._market = fake
+
+    first = await service.screen("4478", "long", ["certificate", "warrant"], 2)
+    enriched = await service.enrich_page(
+        first["snapshot_id"],
+        "4478",
+        "long",
+        0,
+        2,
+    )
+
+    assert fake.certificate_info_calls == ["101"]
+    assert fake.warrant_info_calls == ["202"]
+    assert enriched["enrichment"]["attempted_count"] == 2
+    assert enriched["enrichment"]["enriched_count"] == 2
+    assert enriched["enrichment"]["realtime_quote_count"] == 2
+    assert enriched["enrichment"]["two_way_quote_count"] == 2
+    assert enriched["enrichment"]["max_page_size"] == 10
+    assert enriched["structural_snapshot"]["ranking_quote_source"] == "delayed_filter_feed"
+    assert enriched["ordering"] == "structural_snapshot_order"
+
+    by_id = {product["order_book_id"]: product for product in enriched["products"]}
+    assert by_id["101"]["discovery_bid"] == 9.9
+    assert by_id["101"]["live_market_data"]["quote"]["bid"] == 10.2
+    assert by_id["101"]["live_market_data"]["quote"]["is_real_time"] is True
+    assert (
+        by_id["101"]["live_market_data"]["quote"]["freshness"]["bid_ask_age_ms"]
+        == 210
+    )
+    assert by_id["202"]["live_market_data"]["key_indicators"]["leverage"] == 5.3
+
+
+@pytest.mark.asyncio
+async def test_realtime_enrichment_caps_page_size_at_ten():
+    service = LeveragedScreenService(object())
+    fake = FakeMarket()
+    service._market = fake
+    first = await service.screen("4478", "long", ["warrant"], 1)
+
+    with pytest.raises(ValueError, match="page_size must be between 1 and 10"):
+        await service.enrich_page(first["snapshot_id"], "4478", "long", 0, 11)
 
 
 @pytest.mark.asyncio
@@ -408,6 +514,13 @@ async def test_screen_tool_has_unbounded_page_size_and_filter_contract():
         "min_turnover",
     ):
         assert field in props
+
+    enrich = tools["enrich_leveraged_snapshot"]
+    enrich_props = enrich.input_schema["properties"]
+    assert enrich_props["page_size"]["minimum"] == 1
+    assert enrich_props["page_size"]["maximum"] == 10
+    assert enrich_props["page_size"]["default"] == 5
+    assert enrich_props["snapshot_id"]["pattern"] == "^[0-9a-f]{32}$"
 
 
 @pytest.mark.asyncio
