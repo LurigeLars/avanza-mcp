@@ -111,12 +111,13 @@ async def screen_leveraged_instruments(
     Avanza. Omit product/filter arguments when paging, or repeat semantically equivalent values.
     Always inspect pagination.total, pagination.has_more and pagination.next_offset.
 
-    This tool always runs. It discovers and ranks the full eligible universe from Avanza's
-    structural market-data feed. When a valid authenticated session is available, it also refetches
-    the requested page through the isolated auth worker and returns execution-ranked bid/ask data.
-    Without auth, the same call returns the public discovery page instead of failing. page_size has
-    no fixed upper bound. For authenticated leveraged data, freshness is based on bid/ask update age;
-    last_trade is informational only.
+    This tool always runs. A fresh local daily instrument catalog is used as the primary structural
+    universe when it can satisfy the requested filters; Avanza's filter feed is the fallback. With a
+    valid authenticated session, the complete eligible universe is refetched through the isolated
+    auth worker, globally execution-ranked, and only then paginated. page_size therefore controls
+    response size, not the candidate pool. Without auth, the tool falls back to public structural
+    discovery instead of failing. For authenticated leveraged data, freshness is based on bid/ask
+    update age; last_trade is informational only.
     """
     selected = product_types or ["certificate", "warrant"]
     selected_filters = _screen_filters(
@@ -166,7 +167,7 @@ async def screen_leveraged_instruments(
 
         if result.get("products"):
             with api_errors():
-                enriched = await service.enrich_page(
+                enriched = await service.enrich_snapshot(
                     result["snapshot_id"],
                     underlying_order_book_id,
                     direction,
@@ -190,17 +191,32 @@ async def screen_leveraged_instruments(
                     "enrichment": enriched.get("enrichment"),
                 }
                 result["data_note"] = (
-                    "The complete eligible universe is discovered structurally before paging. "
-                    "The returned page is authenticated and re-ranked from bid/ask quality and "
-                    "bid/ask freshness. discovery_bid/discovery_ask are retained only as "
-                    "structural provenance. For leveraged market-maker products, last_trade is "
-                    "informational only."
+                    "The complete eligible universe is authenticated and globally re-ranked before "
+                    "paging. page_size only controls the returned slice and never limits candidate "
+                    "evaluation. For leveraged market-maker products, last_trade is informational "
+                    "only."
                 )
             else:
                 auth_required = any(
                     product.get("live_market_data_error") == "auth_required"
                     for product in enriched.get("products", [])
                 )
+                if (
+                    snapshot_id is None
+                    and result.get("snapshot", {}).get("discovery_source")
+                    == "fresh_local_instrument_catalog"
+                ):
+                    # Preserve the richer unauthenticated public fallback: the local catalog
+                    # intentionally contains structural identity, not stale executable quotes.
+                    with api_errors():
+                        result = await service.screen(
+                            underlying_order_book_id,
+                            direction,
+                            selected,
+                            page_size,
+                            selected_filters,
+                            prefer_catalog=False,
+                        )
                 result["execution"] = {
                     "status": "public_fallback",
                     "reason": (

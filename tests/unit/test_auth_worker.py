@@ -118,6 +118,52 @@ async def test_market_batch_validates_session_once_for_multiple_paths(
     assert store.saves == 0
 
 
+
+async def test_market_batch_fetches_with_bounded_concurrency_and_preserves_order(monkeypatch):
+    active = 0
+    max_active = 0
+
+    class FakeResponse:
+        def __init__(self, value):
+            self.status_code = 200
+            self._value = value
+
+        def json(self):
+            return {"quote": {"buy": self._value, "sell": self._value + 0.1}}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def request_authenticated(self, method, path):
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            try:
+                await asyncio.sleep(0.01)
+                value = int(path.rsplit("/", 1)[-1])
+                return FakeResponse(value)
+            finally:
+                active -= 1
+
+    monkeypatch.setattr(worker, "AvanzaClient", FakeClient)
+    auth = worker._RequestAuth(SessionMaterial((), "token"))
+    paths = [
+        f"/_api/trading-critical/rest/marketdata/{index}" for index in range(1, 25)
+    ]
+    result = await worker._market_batch_operation(auth, {"paths": paths})
+
+    assert result["ok"] is True
+    assert [item["quote"]["buy"] for item in result["result"]] == list(range(1, 25))
+    assert 1 < max_active <= worker._MARKET_BATCH_CONCURRENCY
+
+
 async def test_invalid_validation_discards_concurrent_success(monkeypatch, capsys):
     session = SessionMaterial((), "token")
     store = FakeStore(session)

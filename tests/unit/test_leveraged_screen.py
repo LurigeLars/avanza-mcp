@@ -233,6 +233,73 @@ async def test_realtime_enrichment_refetches_only_requested_snapshot_page():
     assert by_id["202"]["live_market_data"]["quote"]["bid"] == 5.2
 
 
+
+class LocalUniverseCatalog:
+    def __init__(self):
+        self.rows = [
+            {
+                "product_type": "warrant",
+                "order_book_id": "101",
+                "name": "MINI L TEST",
+                "direction": "long",
+                "issuer": "Issuer A",
+                "sub_type": "MINI_FUTURE",
+                "leverage": 4.2,
+                "stop_loss": 8.0,
+                "underlying_order_book_id": "4478",
+                "underlying_name": "NVIDIA",
+                "underlying_instrument_type": "STOCK",
+                "underlying_country_code": "US",
+            },
+            {
+                "product_type": "warrant",
+                "order_book_id": "202",
+                "name": "TURBO L TEST",
+                "direction": "long",
+                "issuer": "Issuer B",
+                "sub_type": "KNOCK_OUT",
+                "leverage": 5.1,
+                "stop_loss": 4.0,
+                "underlying_order_book_id": "4478",
+                "underlying_name": "NVIDIA",
+            },
+        ]
+
+    def count_by_underlying(self, *_args, **_kwargs):
+        return len(self.rows)
+
+    def find_by_underlying(self, *_args, limit=1000, **_kwargs):
+        return list(self.rows[:limit])
+
+
+@pytest.mark.asyncio
+async def test_catalog_is_primary_universe_and_global_enrichment_precedes_paging():
+    service = LeveragedScreenService(object(), catalog=LocalUniverseCatalog())
+    fake = FakeMarket()
+    service._market = fake
+
+    first = await service.screen("4478", "long", ["warrant"], 1)
+    assert first["snapshot"]["discovery_source"] == "fresh_local_instrument_catalog"
+    assert first["snapshot"]["scanned_count"] == 2
+    assert fake.warrant_calls == []
+
+    enriched = await service.enrich_snapshot(
+        first["snapshot_id"], "4478", "long", 0, 1
+    )
+    assert fake.market_data_batch_calls == [["101", "202"]]
+    assert enriched["enrichment"]["attempted_count"] == 2
+    assert enriched["enrichment"]["scope"] == "complete_snapshot"
+    assert enriched["pagination"]["total"] == 2
+    assert enriched["pagination"]["returned"] == 1
+
+    second = await service.enrich_snapshot(
+        first["snapshot_id"], "4478", "long", 1, 1
+    )
+    assert fake.market_data_batch_calls == [["101", "202"]]
+    assert second["enrichment"]["cache_hit"] is True
+    assert second["pagination"]["returned"] == 1
+
+
 @pytest.mark.asyncio
 async def test_realtime_enrichment_has_no_artificial_page_maximum():
     service = LeveragedScreenService(object())
@@ -581,7 +648,7 @@ async def test_screen_tool_returns_public_fallback_when_auth_is_unavailable(monk
         }
 
     monkeypatch.setattr(LeveragedScreenService, "screen", fake_screen)
-    monkeypatch.setattr(LeveragedScreenService, "enrich_page", fake_enrich)
+    monkeypatch.setattr(LeveragedScreenService, "enrich_snapshot", fake_enrich)
 
     async with Client(mcp) as client:
         result = await client.call_tool(

@@ -94,6 +94,44 @@ def _normalize_candidate(item: Any, product_type: ProductType) -> dict[str, Any]
     }
 
 
+
+def _catalog_candidate(row: dict[str, Any]) -> dict[str, Any]:
+    underlying = {
+        key: value
+        for key, source_key in (
+            ("orderbookId", "underlying_order_book_id"),
+            ("name", "underlying_name"),
+            ("instrumentType", "underlying_instrument_type"),
+            ("countryCode", "underlying_country_code"),
+        )
+        if (value := row.get(source_key)) is not None
+    }
+    return {
+        key: value
+        for key, value in {
+            "product_type": row.get("product_type"),
+            "order_book_id": row.get("order_book_id"),
+            "name": row.get("name"),
+            "direction": row.get("direction"),
+            "issuer": row.get("issuer"),
+            "sub_type": row.get("sub_type"),
+            "leverage": row.get("leverage"),
+            "stop_loss": row.get("stop_loss"),
+            "underlying": underlying or None,
+        }.items()
+        if value is not None
+    }
+
+
+def _catalog_can_satisfy_filters(filters: "ScreenFilters") -> bool:
+    # Quote/spread/turnover filters require current market data. Keep the existing
+    # public filter-feed path for those so unauthenticated behavior does not regress.
+    return not (
+        filters.require_two_way_quote
+        or filters.max_spread_percent is not None
+        or filters.min_turnover is not None
+    )
+
 def _timestamp_ms(value: Any) -> int | None:
     if value is None or isinstance(value, bool):
         return None
@@ -402,7 +440,7 @@ def _available_filter_values(
     }
 
 
-@dataclass(frozen=True)
+@dataclass
 class _Snapshot:
     snapshot_id: str
     underlying_order_book_id: str
@@ -419,6 +457,9 @@ class _Snapshot:
     quote_complete_count: int
     eligible_quote_complete_count: int
     expires_at: datetime
+    discovery_source: str = "avanza_filter_feed"
+    execution_products: list[dict[str, Any]] | None = None
+    execution_metadata: dict[str, Any] | None = None
 
 
 class _SnapshotStore:
@@ -476,6 +517,7 @@ def _page(snapshot: _Snapshot, offset: int, page_size: int) -> dict[str, Any]:
             "eligible_count": total,
             "quote_complete_count": snapshot.quote_complete_count,
             "eligible_quote_complete_count": snapshot.eligible_quote_complete_count,
+            "discovery_source": snapshot.discovery_source,
             "atomic": False,
             "comparison_complete": all(
                 "error" not in family for family in snapshot.families.values()
@@ -713,6 +755,8 @@ class LeveragedScreenService:
         product_types: list[ProductType],
         page_size: int,
         filters: ScreenFilters | None = None,
+        *,
+        prefer_catalog: bool = True,
     ) -> dict[str, Any]:
         if not product_types or len(set(product_types)) != len(product_types):
             raise ValueError("product_types must contain unique product types")
@@ -723,55 +767,92 @@ class LeveragedScreenService:
         _validate_filters(selected_filters)
 
         started_at, timer = datetime.now(timezone.utc), perf_counter()
-        collectors = {
-            "certificate": self._collect_certificates,
-            "warrant": self._collect_warrants,
-        }
-        results = await asyncio.gather(
-            *(
-                collectors[product_type](
-                    underlying_order_book_id,
-                    direction,
-                    selected_filters,
-                )
-                for product_type in product_types
-            ),
-            return_exceptions=True,
-        )
-        completed_at = datetime.now(timezone.utc)
-
         families: dict[str, dict[str, Any]] = {}
         all_products: list[dict[str, Any]] = []
         upstream_issuers: list[str] = []
         upstream_sub_types: list[str] = []
         scanned_count = quote_complete_count = 0
-        for product_type, result in zip(product_types, results, strict=True):
-            if isinstance(result, Exception):
-                families[product_type] = {
-                    "upstream_total": None,
-                    "scanned_count": 0,
-                    "quote_complete_count": 0,
-                    "eligible_count": 0,
-                    "error": (
-                        "upstream_unavailable"
-                        if isinstance(result, AvanzaError)
-                        else "screen_failed"
-                    ),
-                }
-                continue
-            families[product_type] = {
-                key: result[key]
-                for key in (
-                    "upstream_total",
-                    "scanned_count",
-                    "quote_complete_count",
+        discovery_source = "avanza_filter_feed"
+
+        catalog_rows: list[dict[str, Any]] = []
+        if (
+            prefer_catalog
+            and self._catalog is not None
+            and hasattr(self._catalog, "find_by_underlying")
+            and _catalog_can_satisfy_filters(selected_filters)
+        ):
+            try:
+                catalog_count = self._catalog.count_by_underlying(
+                    underlying_order_book_id,
+                    direction=direction,
+                    product_types=product_types,
                 )
+                if catalog_count > 0:
+                    catalog_rows = self._catalog.find_by_underlying(
+                        underlying_order_book_id,
+                        direction=direction,
+                        product_types=product_types,
+                        limit=catalog_count,
+                    )
+            except (OSError, ValueError, AttributeError):
+                catalog_rows = []
+
+        if catalog_rows:
+            discovery_source = "fresh_local_instrument_catalog"
+            all_products = [_catalog_candidate(row) for row in catalog_rows]
+            scanned_count = len(all_products)
+            for product_type in product_types:
+                family_products = [
+                    item for item in all_products if item.get("product_type") == product_type
+                ]
+                families[product_type] = {
+                    "upstream_total": len(family_products),
+                    "scanned_count": len(family_products),
+                    "quote_complete_count": 0,
+                }
+        else:
+            collectors = {
+                "certificate": self._collect_certificates,
+                "warrant": self._collect_warrants,
             }
-            scanned_count += result["scanned_count"]
-            quote_complete_count += result["quote_complete_count"]
-            all_products.extend(result["products"])
-            upstream_issuers.extend(result.get("available_issuers", []))
-            upstream_sub_types.extend(result.get("available_sub_types", []))
+            results = await asyncio.gather(
+                *(
+                    collectors[product_type](
+                        underlying_order_book_id,
+                        direction,
+                        selected_filters,
+                    )
+                    for product_type in product_types
+                ),
+                return_exceptions=True,
+            )
+            for product_type, result in zip(product_types, results, strict=True):
+                if isinstance(result, Exception):
+                    families[product_type] = {
+                        "upstream_total": None,
+                        "scanned_count": 0,
+                        "quote_complete_count": 0,
+                        "eligible_count": 0,
+                        "error": (
+                            "upstream_unavailable"
+                            if isinstance(result, AvanzaError)
+                            else "screen_failed"
+                        ),
+                    }
+                    continue
+                families[product_type] = {
+                    key: result[key]
+                    for key in (
+                        "upstream_total",
+                        "scanned_count",
+                        "quote_complete_count",
+                    )
+                }
+                scanned_count += result["scanned_count"]
+                quote_complete_count += result["quote_complete_count"]
+                all_products.extend(result["products"])
+                upstream_issuers.extend(result.get("available_issuers", []))
+                upstream_sub_types.extend(result.get("available_sub_types", []))
 
         available_filter_values = _available_filter_values(
             all_products,
@@ -793,6 +874,7 @@ class LeveragedScreenService:
         eligible_quote_complete_count = sum(
             _has_two_way_quote(candidate) for candidate in products
         )
+        completed_at = datetime.now(timezone.utc)
         snapshot = _Snapshot(
             uuid4().hex,
             underlying_order_book_id,
@@ -809,9 +891,166 @@ class LeveragedScreenService:
             quote_complete_count,
             eligible_quote_complete_count,
             completed_at + _SNAPSHOT_TTL,
+            discovery_source,
         )
         _SNAPSHOTS.put(snapshot)
         return _page(snapshot, 0, page_size)
+
+    async def enrich_snapshot(
+        self,
+        snapshot_id: str,
+        underlying_order_book_id: str,
+        direction: Direction,
+        offset: int,
+        page_size: int,
+    ) -> dict[str, Any]:
+        """Enrich and globally rank the complete snapshot, then page the result."""
+        if offset < 0:
+            raise ValueError("offset must be >= 0")
+        if page_size < 1:
+            raise ValueError("page_size must be at least 1")
+
+        snapshot = _SNAPSHOTS.get(snapshot_id)
+        if (
+            snapshot.underlying_order_book_id != underlying_order_book_id
+            or snapshot.direction != direction
+        ):
+            raise ValueError(
+                "snapshot_id does not match the supplied underlying_order_book_id and direction"
+            )
+
+        if snapshot.execution_products is None:
+            started_at = datetime.now(timezone.utc)
+            timer = perf_counter()
+            selected_products = snapshot.products
+            order_book_ids = [str(product["order_book_id"]) for product in selected_products]
+            batch_error: str | None = None
+            try:
+                quotes = await self._market.get_authenticated_market_data_quotes(order_book_ids)
+            except AvanzaAuthError:
+                quotes = [None] * len(selected_products)
+                batch_error = "auth_required"
+            except AvanzaError:
+                quotes = [None] * len(selected_products)
+                batch_error = "upstream_unavailable"
+
+            products: list[dict[str, Any]] = []
+            for product, quote in zip(selected_products, quotes, strict=True):
+                retrieved_at = datetime.now(timezone.utc).isoformat()
+                if quote is None:
+                    products.append(
+                        {
+                            **product,
+                            "live_market_data_error": batch_error or "upstream_unavailable",
+                            "live_market_data_retrieved_at": retrieved_at,
+                        }
+                    )
+                    continue
+                products.append(
+                    {
+                        **product,
+                        "live_market_data": _compact_live_quote(quote),
+                        "live_market_data_retrieved_at": retrieved_at,
+                    }
+                )
+
+            products.sort(key=_execution_rank)
+            completed_at = datetime.now(timezone.utc)
+            authenticated_quote_count = sum(
+                product.get("live_market_data", {}).get("quote", {}).get("source")
+                == "authenticated_trading_critical"
+                for product in products
+            )
+            live_two_way_count = sum(
+                _has_two_way_quote(
+                    {
+                        "discovery_bid": product.get("live_market_data", {})
+                        .get("quote", {})
+                        .get("bid"),
+                        "discovery_ask": product.get("live_market_data", {})
+                        .get("quote", {})
+                        .get("ask"),
+                    }
+                )
+                for product in products
+            )
+            fresh_two_way_count = sum(
+                bool(
+                    product.get("live_market_data", {})
+                    .get("quote", {})
+                    .get("freshness", {})
+                    .get("execution_is_fresh")
+                )
+                for product in products
+            )
+            snapshot.execution_products = products
+            snapshot.execution_metadata = {
+                "started_at": started_at.isoformat(),
+                "completed_at": completed_at.isoformat(),
+                "duration_ms": round((perf_counter() - timer) * 1000, 3),
+                "attempted_count": len(products),
+                "enriched_count": sum("live_market_data" in product for product in products),
+                "not_found_count": sum(
+                    product.get("live_market_data_error") == "not_found" for product in products
+                ),
+                "upstream_error_count": sum(
+                    product.get("live_market_data_error") == "upstream_unavailable"
+                    for product in products
+                ),
+                "authenticated_quote_count": authenticated_quote_count,
+                "two_way_quote_count": live_two_way_count,
+                "fresh_two_way_quote_count": fresh_two_way_count,
+                "auth_worker_calls": 1 if products else 0,
+                "source": "authenticated_trading_critical_market_data_batch",
+                "scope": "complete_snapshot",
+                "cache_hit": False,
+                "current_call_upstream_requests": len(products),
+            }
+        else:
+            assert snapshot.execution_metadata is not None
+            snapshot.execution_metadata = {**snapshot.execution_metadata, "cache_hit": True}
+
+        products = snapshot.execution_products or []
+        total = len(products)
+        page = products[offset : offset + page_size]
+        returned = len(page)
+        has_more = offset + returned < total
+        return {
+            "snapshot_id": snapshot.snapshot_id,
+            "underlying_order_book_id": snapshot.underlying_order_book_id,
+            "direction": snapshot.direction,
+            "structural_snapshot": {
+                "eligible_count": len(snapshot.products),
+                "expires_at": snapshot.expires_at.isoformat(),
+                "ranking": _RANKING,
+                "ranking_quote_source": (
+                    "local_catalog"
+                    if snapshot.discovery_source == "fresh_local_instrument_catalog"
+                    else "delayed_filter_feed"
+                ),
+                "discovery_source": snapshot.discovery_source,
+            },
+            "enrichment": snapshot.execution_metadata,
+            "pagination": {
+                "total": total,
+                "offset": offset,
+                "page_size": page_size,
+                "returned": returned,
+                "has_more": has_more,
+                "next_offset": offset + returned if has_more else None,
+            },
+            "products": page,
+            "returned": returned,
+            "ordering": "execution_ranking",
+            "execution_ranking": _EXECUTION_RANKING,
+            "execution_freshness_basis": "bid_ask_updated_at",
+            "last_trade_role": "informational_only_for_leveraged_products",
+            "data_note": (
+                "The complete structural snapshot is authenticated before paging and globally "
+                "re-ranked from live bid/ask quality and freshness. page_size only controls "
+                "response pagination; it never limits the candidate universe."
+            ),
+        }
 
     async def enrich_page(
         self,

@@ -79,7 +79,7 @@ def test_catalog_replaces_atomically_and_supports_local_discovery(tmp_path: Path
     stats = catalog.stats()
     assert stats["row_count"] == 3
     assert stats["refreshed_at"] == "2026-09-27T12:00:00+00:00"
-    assert stats["schema_version"] == 1
+    assert stats["schema_version"] == 2
 
 
 def test_search_falls_back_to_tokenized_partial_matching_without_fts(
@@ -132,6 +132,8 @@ class PaginatedMarket:
                     sellPrice=10.2,
                     spread=2.0,
                     totalValueTraded=500_000,
+                    leverage=3.5,
+                    stopLoss=8.5,
                     underlyingInstrument={
                         "orderbookId": "4478",
                         "name": "NVIDIA",
@@ -176,6 +178,7 @@ class PaginatedMarket:
                     buyPrice=5.0,
                     sellPrice=5.1,
                     stopLoss=4.0,
+                    leverage=5.2,
                     totalValueTraded=750_000,
                     underlyingInstrument={
                         "orderbookId": "4478",
@@ -190,7 +193,7 @@ class PaginatedMarket:
 
 
 @pytest.mark.asyncio
-async def test_refresher_fetches_complete_families_but_persists_only_structural_fields(
+async def test_refresher_fetches_complete_families_and_persists_screening_structure(
     tmp_path: Path,
 ) -> None:
     market = PaginatedMarket()
@@ -206,15 +209,14 @@ async def test_refresher_fetches_complete_families_but_persists_only_structural_
 
     final = catalog.search("CERT FINAL")
     assert final[0]["order_book_id"] == "1999"
-    for stale_field in (
-        "buyPrice",
-        "sellPrice",
-        "spread",
-        "totalValueTraded",
-        "stopLoss",
-        "leverage",
-    ):
+    for stale_field in ("buyPrice", "sellPrice", "spread", "totalValueTraded"):
         assert stale_field not in final[0]
+    first_cert = catalog.find_by_order_book_id("1000")[0]
+    assert first_cert["leverage"] == 3.5
+    assert first_cert["stop_loss"] == 8.5
+    warrant = catalog.find_by_order_book_id("2001")[0]
+    assert warrant["leverage"] == 5.2
+    assert warrant["stop_loss"] == 4.0
 
 
 class RateLimitedMarket:

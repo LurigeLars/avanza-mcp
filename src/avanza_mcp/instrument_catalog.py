@@ -95,6 +95,8 @@ class CatalogInstrument:
     underlying_name: str | None = None
     underlying_instrument_type: str | None = None
     underlying_country_code: str | None = None
+    leverage: float | None = None
+    stop_loss: float | None = None
 
 
 class InstrumentCatalog:
@@ -135,6 +137,8 @@ class InstrumentCatalog:
                 underlying_name TEXT,
                 underlying_instrument_type TEXT,
                 underlying_country_code TEXT,
+                leverage REAL,
+                stop_loss REAL,
                 PRIMARY KEY (product_type, order_book_id)
             );
 
@@ -148,6 +152,12 @@ class InstrumentCatalog:
                 ON instruments (direction, product_type);
             """
         )
+        existing_columns = {
+            str(row[1]) for row in connection.execute("PRAGMA table_info(instruments)").fetchall()
+        }
+        for column, sql_type in (("leverage", "REAL"), ("stop_loss", "REAL")):
+            if column not in existing_columns:
+                connection.execute(f"ALTER TABLE instruments ADD COLUMN {column} {sql_type}")
         try:
             connection.execute(
                 """
@@ -219,8 +229,10 @@ class InstrumentCatalog:
                     underlying_order_book_id,
                     underlying_name,
                     underlying_instrument_type,
-                    underlying_country_code
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    underlying_country_code,
+                    leverage,
+                    stop_loss
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -236,6 +248,8 @@ class InstrumentCatalog:
                         row.underlying_name,
                         row.underlying_instrument_type,
                         row.underlying_country_code,
+                        row.leverage,
+                        row.stop_loss,
                     )
                     for row in normalized_rows
                 ],
@@ -268,7 +282,7 @@ class InstrumentCatalog:
                 "certificate_count": str(certificate_count),
                 "warrant_count": str(warrant_count),
                 "fts5_enabled": "1" if fts5_enabled else "0",
-                "schema_version": "1",
+                "schema_version": "2",
             }
             connection.executemany(
                 """
@@ -291,7 +305,7 @@ class InstrumentCatalog:
             "certificate_count": certificate_count,
             "warrant_count": warrant_count,
             "fts5_enabled": fts5_enabled,
-            "schema_version": 1,
+            "schema_version": 2,
         }
 
     @staticmethod
@@ -675,6 +689,12 @@ class InstrumentCatalogRefresher:
                 str(underlying["countryCode"])
                 if underlying.get("countryCode") is not None
                 else None
+            ),
+            leverage=(
+                float(raw["leverage"]) if raw.get("leverage") is not None else None
+            ),
+            stop_loss=(
+                float(raw["stopLoss"]) if raw.get("stopLoss") is not None else None
             ),
         )
 
