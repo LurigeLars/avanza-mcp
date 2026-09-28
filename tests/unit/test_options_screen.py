@@ -4,6 +4,7 @@ import pytest
 from fastmcp import Client
 
 from avanza_mcp import mcp
+from avanza_mcp.client.exceptions import AvanzaNotFoundError
 from avanza_mcp.services.options_screen_service import (
     OptionScreenSpec,
     OptionsScreenService,
@@ -153,6 +154,12 @@ class FakeMarket:
                 "isRealTime": True,
             }
         )
+
+
+class MissingUnderlyingQuoteMarket(FakeMarket):
+    async def get_stock_quote(self, order_book_id):
+        self.stock_quote_calls.append(order_book_id)
+        raise AvanzaNotFoundError("missing")
 
 
 class RankingFakeMarket(FakeMarket):
@@ -313,6 +320,32 @@ async def test_option_enrichment_pages_existing_snapshot_without_matrix_refetch(
     assert underlying_quote["freshness"]["source_updated_at"] == 123456999
     assert "bid_ask_updated_at" not in underlying_quote["freshness"]
     assert underlying_quote["freshness"]["real_time_flag_is_freshness_guarantee"] is False
+
+
+@pytest.mark.asyncio
+async def test_option_enrichment_keeps_public_underlying_when_shared_quote_fails():
+    service = OptionsScreenService(object())
+    fake = MissingUnderlyingQuoteMarket()
+    service._market = fake
+    first = await service.screen(
+        "5269",
+        1,
+        OptionScreenSpec(option_types=("STANDARD",)),
+    )
+
+    enriched = await service.enrich_page(
+        first["snapshot_id"],
+        "5269",
+        0,
+        1,
+    )
+
+    assert fake.option_info_public_only_calls == [True]
+    assert fake.stock_quote_calls == ["5269"]
+    assert enriched["enrichment"]["underlying_quote_shared"] is False
+    underlying_quote = enriched["options"][0]["market_data"]["underlying_quote"]
+    assert underlying_quote["is_real_time"] is False
+    assert underlying_quote["freshness"]["source_updated_at"] == 123456700
 
 
 @pytest.mark.asyncio
