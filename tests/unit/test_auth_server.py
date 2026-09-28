@@ -1,8 +1,5 @@
 """Authenticated server composition using credential-isolated workers."""
 
-import os
-import subprocess
-import sys
 from unittest.mock import Mock
 
 import httpx
@@ -63,7 +60,7 @@ async def test_auth_server_mounts_public_contract_and_adds_auth_tools():
     server = create_auth_server(broker)  # type: ignore[arg-type]
     async with Client(server) as client:
         tools = {tool.name for tool in await client.list_tools()}
-        assert len(tools) == 53
+        assert len(tools) == 52
         assert {
             "connect_avanza",
             "disconnect_avanza",
@@ -81,7 +78,7 @@ async def test_auth_server_mounts_public_contract_and_adds_auth_tools():
             "get_deals",
             "get_stop_loss_orders",
         } <= tools
-        assert {"get_credit_info", "get_current_offers", "get_forum_posts"}.isdisjoint(tools)
+        assert {"get_credit_info", "get_current_offers", "get_forum_posts", "enrich_leveraged_snapshot"}.isdisjoint(tools)
         assert len(await client.list_prompts()) == 3
 
         connected = await client.call_tool("connect_avanza", {})
@@ -141,39 +138,11 @@ def test_auth_transport_is_stdio(monkeypatch):
     server.run.assert_called_once_with()
 
 
-def test_cli_preserves_public_default(monkeypatch):
+def test_cli_uses_authenticated_server_by_default(monkeypatch):
     run = Mock()
-    monkeypatch.delenv("AVANZA_MCP_AUTH", raising=False)
-    monkeypatch.setattr("avanza_mcp.mcp.run", run)
-    avanza_mcp.main()
-    run.assert_called_once_with()
-
-
-def test_cli_selects_auth_stdio_from_environment(monkeypatch):
-    run = Mock()
-    monkeypatch.setenv("AVANZA_MCP_AUTH", "1")
     monkeypatch.setattr("avanza_mcp.auth.server.run_auth_server", run)
     avanza_mcp.main()
     run.assert_called_once_with()
-
-
-def test_cli_rejects_ambiguous_auth_environment(monkeypatch):
-    monkeypatch.setenv("AVANZA_MCP_AUTH", "true")
-    with pytest.raises(SystemExit):
-        avanza_mcp.main()
-
-
-def test_public_startup_does_not_import_account_modules():
-    script = """
-import sys
-from avanza_mcp import main, mcp
-mcp.run = lambda: None
-main()
-assert 'avanza_mcp.auth.server' not in sys.modules
-"""
-    env = os.environ.copy()
-    env.pop("AVANZA_MCP_AUTH", None)
-    subprocess.run([sys.executable, "-c", script], check=True, env=env)
 
 
 async def test_account_tool_surfaces_only_safe_diagnostic_class():
