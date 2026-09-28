@@ -189,7 +189,7 @@ async def screen_leveraged_instruments(
                 )
 
             discovery_ranking = result.get("ranking")
-            result["products"] = enriched.get("execution_shortlist", [])
+            result["products"] = enriched.get("products", [])
             result["returned"] = enriched.get("returned", 0)
             result["ranking"] = enriched.get("execution_ranking")
             result["discovery_ranking"] = discovery_ranking
