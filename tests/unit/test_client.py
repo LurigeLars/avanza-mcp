@@ -761,6 +761,31 @@ def test_authenticated_public_market_family_normalizes_dynamic_ids():
 
 
 @respx.mock
+async def test_get_public_bypasses_authenticated_session_reuse():
+    active = SessionMaterial((), "sentinel-token")
+    provider_calls = 0
+
+    def provider():
+        nonlocal provider_calls
+        provider_calls += 1
+        return active
+
+    path = PublicEndpoint.OPTION_INFO.format(id="123")
+    route = respx.get(f"https://www.avanza.se{path}").mock(
+        return_value=httpx.Response(200, json={"orderbookId": "123"})
+    )
+    client = AvanzaClient(session_provider=provider, max_retries=1)
+
+    async with client:
+        result = await client.get_public(path)
+
+    assert result == {"orderbookId": "123"}
+    assert route.call_count == 1
+    assert provider_calls == 0
+    assert "x-securitytoken" not in route.calls.last.request.headers
+
+
+@respx.mock
 async def test_post_public_bypasses_authenticated_session_reuse():
     active = SessionMaterial((), "sentinel-token")
     provider_calls = 0
