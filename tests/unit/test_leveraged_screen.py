@@ -26,8 +26,7 @@ class FakeMarket:
     def __init__(self):
         self.certificate_calls = []
         self.warrant_calls = []
-        self.certificate_info_calls = []
-        self.warrant_info_calls = []
+        self.market_data_quote_calls = []
 
     async def filter_certificates(self, request):
         self.certificate_calls.append(request)
@@ -66,62 +65,35 @@ class FakeMarket:
             totalNumberOfOrderbooks=1,
         )
 
-    async def get_certificate_info(self, order_book_id):
-        self.certificate_info_calls.append(order_book_id)
-        return FakeItem(
-            orderbookId=order_book_id,
-            quote={
+    async def get_authenticated_market_data_quote(self, order_book_id):
+        self.market_data_quote_calls.append(order_book_id)
+        if order_book_id == "101":
+            return {
                 "buy": 10.2,
                 "sell": 10.3,
                 "last": 10.25,
-                "spread": 0.98,
+                "highest": 10.5,
+                "lowest": 9.8,
+                "change": 0.2,
+                "changePercent": 2.0,
                 "totalValueTraded": 1000,
                 "totalVolumeTraded": 50,
-                "updated": 123456789,
-                "isRealTime": True,
-                "freshness": {
-                    "observedAt": 123456999,
-                    "sourceUpdatedAt": 123456789,
-                    "bidAskUpdatedAt": 123456789,
-                    "sourceUpdateAgeMs": 210,
-                    "bidAskAgeMs": 210,
-                    "upstreamIsRealTime": True,
-                    "realTimeFlagIsFreshnessGuarantee": False,
-                },
-            },
-            keyIndicators={"leverage": 4.4},
-        )
-
-    async def get_warrant_info(self, order_book_id):
-        self.warrant_info_calls.append(order_book_id)
-        return FakeItem(
-            orderbookId=order_book_id,
-            quote={
-                "buy": 5.2,
-                "sell": 5.3,
-                "last": 5.25,
-                "spread": 1.9,
-                "totalValueTraded": 2000,
-                "totalVolumeTraded": 75,
-                "updated": 123456790,
-                "isRealTime": True,
-                "freshness": {
-                    "observedAt": 123456999,
-                    "sourceUpdatedAt": 123456790,
-                    "bidAskUpdatedAt": 123456790,
-                    "sourceUpdateAgeMs": 209,
-                    "bidAskAgeMs": 209,
-                    "upstreamIsRealTime": True,
-                    "realTimeFlagIsFreshnessGuarantee": False,
-                },
-            },
-            keyIndicators={
-                "leverage": 5.3,
-                "barrierLevel": 3.0,
-                "financingLevel": 2.5,
-                "subType": "TURBO",
-            },
-        )
+                "timeOfLast": "2026-09-28T07:30:00.000+00:00",
+                "updated": "2026-09-28T07:30:01.000+00:00",
+            }
+        return {
+            "buy": 5.2,
+            "sell": 5.3,
+            "last": 5.25,
+            "highest": 5.5,
+            "lowest": 4.8,
+            "change": 0.1,
+            "changePercent": 1.9,
+            "totalValueTraded": 2000,
+            "totalVolumeTraded": 75,
+            "timeOfLast": "2026-09-28T07:30:00.500+00:00",
+            "updated": "2026-09-28T07:30:01.500+00:00",
+        }
 
 
 def test_discovery_spread_percent_is_midpoint_based_and_bounded():
@@ -175,11 +147,10 @@ async def test_realtime_enrichment_refetches_only_requested_snapshot_page():
         2,
     )
 
-    assert fake.certificate_info_calls == ["101"]
-    assert fake.warrant_info_calls == ["202"]
+    assert fake.market_data_quote_calls == ["101", "202"]
     assert enriched["enrichment"]["attempted_count"] == 2
     assert enriched["enrichment"]["enriched_count"] == 2
-    assert enriched["enrichment"]["realtime_quote_count"] == 2
+    assert enriched["enrichment"]["authenticated_quote_count"] == 2
     assert enriched["enrichment"]["two_way_quote_count"] == 2
     assert enriched["structural_snapshot"]["ranking_quote_source"] == "delayed_filter_feed"
     assert enriched["ordering"] == "structural_snapshot_order"
@@ -187,12 +158,15 @@ async def test_realtime_enrichment_refetches_only_requested_snapshot_page():
     by_id = {product["order_book_id"]: product for product in enriched["products"]}
     assert by_id["101"]["discovery_bid"] == 9.9
     assert by_id["101"]["live_market_data"]["quote"]["bid"] == 10.2
-    assert by_id["101"]["live_market_data"]["quote"]["is_real_time"] is True
     assert (
-        by_id["101"]["live_market_data"]["quote"]["freshness"]["bid_ask_age_ms"]
-        == 210
+        by_id["101"]["live_market_data"]["quote"]["source"]
+        == "authenticated_trading_critical"
     )
-    assert by_id["202"]["live_market_data"]["key_indicators"]["leverage"] == 5.3
+    assert (
+        by_id["101"]["live_market_data"]["quote"]["freshness"]["source_updated_at"]
+        == 1790580601000
+    )
+    assert by_id["202"]["live_market_data"]["quote"]["bid"] == 5.2
 
 
 @pytest.mark.asyncio
