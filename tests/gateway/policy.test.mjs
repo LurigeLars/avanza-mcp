@@ -11,22 +11,23 @@ import {
   rewriteResponse,
 } from '../../public/gateway/policy.mjs';
 
-test('default public allowlist contains the current 37 read-only Avanza tools', () => {
+test('default public allowlist contains the current 38 read-only Avanza tools', () => {
   const allowed = parseAllowedTools();
-  assert.equal(allowed.size, 37);
+  assert.equal(allowed.size, 38);
   assert.equal(allowed.has('search_instruments'), true);
   assert.equal(allowed.has('get_orderbook'), true);
   assert.equal(allowed.has('get_marketmaker_chart'), true);
   assert.equal(allowed.has('screen_options'), true);
   assert.equal(allowed.has('enrich_option_snapshot'), true);
-  assert.equal(DEFAULT_ALLOWED_TOOLS.split(',').length, 37);
+  assert.equal(allowed.has('enrich_leveraged_snapshot'), true);
+  assert.equal(DEFAULT_ALLOWED_TOOLS.split(',').length, 38);
 });
 
 test('authenticated profile adds exactly the 15 approved account/session tools', () => {
   const allowed = parseAllowedTools('@authenticated');
   assert.equal(AUTHENTICATED_EXTRA_TOOLS.split(',').length, 15);
-  assert.equal(AUTHENTICATED_ALLOWED_TOOLS.split(',').length, 52);
-  assert.equal(allowed.size, 52);
+  assert.equal(AUTHENTICATED_ALLOWED_TOOLS.split(',').length, 53);
+  assert.equal(allowed.size, 53);
   assert.equal(allowed.has('connect_avanza'), true);
   assert.equal(allowed.has('get_accounts'), true);
   assert.equal(allowed.has('get_active_orders'), true);
