@@ -857,6 +857,12 @@ async def test_public_filter_tools_remain_capped_at_100_rows():
     assert tools["filter_warrants"].input_schema["properties"]["limit"]["maximum"] == 100
 
 
+def test_default_progressive_execution_batch_size_is_300():
+    from avanza_mcp.services.leveraged_screen_service import _EXECUTION_BATCH_SIZE
+
+    assert _EXECUTION_BATCH_SIZE == 300
+
+
 def test_internal_leveraged_request_has_no_artificial_maximum():
     from avanza_mcp.services.leveraged_screen_service import (
         _LeveragedCertificateFilterRequest,

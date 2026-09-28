@@ -30,7 +30,7 @@ _EXECUTION_RANKING = (
     "fresh_two_way_quote, spread_percent_asc, bid_ask_age_ms_asc, turnover_desc"
 )
 _EXECUTION_STALE_AFTER_MS = 30_000
-_EXECUTION_BATCH_SIZE = 150
+_EXECUTION_BATCH_SIZE = 300
 _AVANZA_MARKET_TIMEZONE = ZoneInfo("Europe/Stockholm")
 
 

@@ -119,6 +119,10 @@ async def test_market_batch_validates_session_once_for_multiple_paths(
 
 
 
+def test_authenticated_market_batch_concurrency_is_16():
+    assert worker._MARKET_BATCH_CONCURRENCY == 16
+
+
 async def test_market_batch_fetches_with_bounded_concurrency_and_preserves_order(monkeypatch):
     seen_paths = []
     seen_concurrency = []
