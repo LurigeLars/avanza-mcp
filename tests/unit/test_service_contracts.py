@@ -27,6 +27,43 @@ def test_request_bounds(model, pagination):
         model(filter={}, sortBy={"field": "name", "order": "asc"}, **pagination)
 
 
+async def test_authenticated_market_data_quote_batch_preserves_alignment():
+    upstream = AsyncMock()
+    upstream.get_authenticated_market_data_batch.return_value = [
+        {
+            "quote": {
+                "buy": 10.0,
+                "sell": 10.1,
+                "updated": "2026-09-28T10:00:00",
+            }
+        },
+        None,
+        {
+            "quote": {
+                "buy": 20.0,
+                "sell": 20.1,
+                "updated": "2026-09-28T10:00:01",
+            }
+        },
+    ]
+    service = MarketDataService(upstream)
+
+    quotes = await service.get_authenticated_market_data_quotes(
+        ["101", "102", "103"]
+    )
+
+    assert quotes[0]["buy"] == 10.0
+    assert quotes[1] is None
+    assert quotes[2]["sell"] == 20.1
+    upstream.get_authenticated_market_data_batch.assert_awaited_once_with(
+        [
+            "/_api/trading-critical/rest/marketdata/101",
+            "/_api/trading-critical/rest/marketdata/102",
+            "/_api/trading-critical/rest/marketdata/103",
+        ]
+    )
+
+
 async def test_futures_dates_json_mode():
     request = FutureForwardMatrixRequest(
         filter={"endDates": ["2026-09-18"]},
