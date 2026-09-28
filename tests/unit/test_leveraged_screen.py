@@ -273,6 +273,50 @@ class LocalUniverseCatalog:
         return list(self.rows[:limit])
 
 
+
+@pytest.mark.asyncio
+async def test_leverage_filter_falls_back_from_catalog_to_filter_feed():
+    service = LeveragedScreenService(object(), catalog=LocalUniverseCatalog())
+    fake = FakeMarket()
+    service._market = fake
+
+    result = await service.screen(
+        "4478",
+        "long",
+        ["warrant"],
+        10,
+        filters=ScreenFilters(min_leverage=4.0, max_leverage=6.0),
+    )
+
+    assert result["snapshot"]["discovery_source"] == "avanza_filter_feed"
+    assert len(fake.warrant_calls) == 1
+    assert result["pagination"]["total"] == 1
+    assert result["products"][0]["leverage"] == pytest.approx(5.1)
+
+
+@pytest.mark.asyncio
+async def test_target_leverage_suitability_falls_back_from_catalog_to_filter_feed():
+    service = LeveragedScreenService(object(), catalog=LocalUniverseCatalog())
+    fake = FakeMarket()
+    service._market = fake
+
+    result = await service.screen(
+        "4478",
+        "long",
+        ["warrant"],
+        10,
+        suitability=SuitabilityCriteria(
+            target_leverage=5.0,
+            max_leverage_deviation=0.2,
+        ),
+    )
+
+    assert result["snapshot"]["discovery_source"] == "avanza_filter_feed"
+    assert len(fake.warrant_calls) == 1
+    assert result["pagination"]["total"] == 1
+    assert result["products"][0]["suitability"]["leverage_deviation"] == pytest.approx(0.1)
+
+
 @pytest.mark.asyncio
 async def test_catalog_is_primary_universe_and_global_enrichment_precedes_paging():
     service = LeveragedScreenService(object(), catalog=LocalUniverseCatalog())
