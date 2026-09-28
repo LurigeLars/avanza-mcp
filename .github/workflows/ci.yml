@@ -67,6 +67,10 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --locked --all-extras
+      - name: Verify full MCP import and catalog on Windows
+        run: |
+          uv run --locked python -c "from zoneinfo import ZoneInfo; from avanza_mcp import mcp; print(ZoneInfo('Europe/Stockholm')); print('Windows import OK')"
+          uv run --locked python scripts/benchmark_mcp_efficiency.py
       - name: Parse Windows PowerShell scripts
         shell: pwsh
         run: |
