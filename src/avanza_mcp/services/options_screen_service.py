@@ -359,6 +359,7 @@ class _OptionMarketSnapshot:
     enriched_count: int
     not_found_count: int
     retrieval_span_ms: int | None
+    underlying_quote_shared: bool
     expires_at: datetime
 
 
@@ -822,6 +823,7 @@ class OptionsScreenService:
                         for option in options
                     ),
                     retrieval_span_ms=retrieval_span_ms,
+                    underlying_quote_shared=underlying_quote_shared,
                     expires_at=snapshot.expires_at,
                 )
                 _MARKET_SNAPSHOTS.put(market_snapshot)
@@ -850,9 +852,7 @@ class OptionsScreenService:
                 "current_call_upstream_requests": current_call_upstream_requests,
                 "option_info_transport": "public",
                 "underlying_quote_transport": "authenticated_if_connected_else_public",
-                "underlying_quote_shared": (
-                    underlying_quote_shared if not cache_hit else True
-                ),
+                "underlying_quote_shared": market_snapshot.underlying_quote_shared,
             }
             ordering = "market_quality"
             page_total = len(source_options)
