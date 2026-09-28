@@ -4,7 +4,6 @@ __version__ = "2.1.0"
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-import os
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -100,14 +99,7 @@ from . import tools  # noqa: F401, E402
 
 
 def main() -> None:
-    """Entry point for the MCP server."""
-    auth_mode = os.environ.get("AVANZA_MCP_AUTH")
-    if auth_mode is None:
-        mcp.run()
-        return
-    if auth_mode != "1":
-        raise SystemExit("AVANZA_MCP_AUTH must be 1 when set")
-
+    """Entry point for the single authenticated read-only server."""
     from .auth.server import run_auth_server
 
     run_auth_server()
