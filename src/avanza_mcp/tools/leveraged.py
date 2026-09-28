@@ -23,6 +23,17 @@ PageSize = Annotated[
         ),
     ),
 ]
+RealtimePageSize = Annotated[
+    int,
+    Field(
+        ge=1,
+        le=10,
+        description=(
+            "Number of shortlisted products to refetch from instrument-info endpoints. "
+            "Capped at 10 to bound live upstream load."
+        ),
+    ),
+]
 PageOffset = Annotated[int, Field(ge=0, description="Zero-based row offset in the snapshot.")]
 SnapshotId = Annotated[
     str,
@@ -154,6 +165,41 @@ async def screen_leveraged_instruments(
                 page_size,
                 product_types=product_types,
                 filters=selected_filters if filters_were_supplied else None,
+            )
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
+    return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def enrich_leveraged_snapshot(
+    ctx: Context,
+    snapshot_id: SnapshotId,
+    underlying_order_book_id: OrderBookId,
+    direction: Literal["long", "short"],
+    offset: PageOffset = 0,
+    page_size: RealtimePageSize = 5,
+):
+    """Refetch a small leveraged snapshot shortlist with current instrument-info quotes.
+
+    The parent screen uses Avanza's filter feed for full-universe discovery and ranking; live
+    testing shows those discovery prices can lag authenticated instrument-info quotes by about
+    fifteen minutes. This tool preserves the structural snapshot order and refetches only the
+    requested page.
+
+    page_size is intentionally capped at 10. Inspect each returned quote's is_real_time and
+    freshness fields before treating bid/ask as execution evidence. Repeated calls refetch rather
+    than cache so the returned shortlist can be refreshed close to execution time.
+    """
+    service = LeveragedScreenService(ctx.lifespan_context["client"])
+    try:
+        with api_errors():
+            result = await service.enrich_page(
+                snapshot_id,
+                underlying_order_book_id,
+                direction,
+                offset,
+                page_size,
             )
     except ValueError as exc:
         raise ToolError(str(exc)) from exc
