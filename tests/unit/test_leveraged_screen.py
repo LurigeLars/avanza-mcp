@@ -212,11 +212,10 @@ async def test_realtime_enrichment_refetches_only_requested_snapshot_page():
     )
     assert enriched["enrichment"]["two_way_quote_count"] == 2
     assert enriched["structural_snapshot"]["ranking_quote_source"] == "delayed_filter_feed"
-    assert enriched["ordering"] == "structural_snapshot_order"
+    assert enriched["ordering"] == "execution_ranking"
     assert enriched["execution_freshness_basis"] == "bid_ask_updated_at"
     assert enriched["last_trade_role"] == "informational_only_for_leveraged_products"
     assert enriched["execution_ranking"].startswith("fresh_two_way_quote")
-    assert len(enriched["execution_shortlist"]) == 2
 
     by_id = {product["order_book_id"]: product for product in enriched["products"]}
     assert by_id["101"]["discovery_bid"] == 9.9
@@ -560,12 +559,7 @@ async def test_screen_tool_has_unbounded_page_size_and_filter_contract():
     ):
         assert field in props
 
-    enrich = tools["enrich_leveraged_snapshot"]
-    enrich_props = enrich.input_schema["properties"]
-    assert enrich_props["page_size"]["minimum"] == 1
-    assert "maximum" not in enrich_props["page_size"]
-    assert enrich_props["page_size"]["default"] == 5
-    assert enrich_props["snapshot_id"]["pattern"] == "^[0-9a-f]{32}$"
+    assert "enrich_leveraged_snapshot" not in tools
 
 
 @pytest.mark.asyncio

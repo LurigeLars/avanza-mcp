@@ -8,7 +8,7 @@ from fastmcp import Context
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from .. import _authenticated_market_data_configured, mcp
+from .. import mcp
 from ..models.common import OrderBookId
 from ..services.leveraged_screen_service import LeveragedScreenService, ScreenFilters
 from ._helpers import READ_ONLY, api_errors
@@ -20,16 +20,6 @@ PageSize = Annotated[
         description=(
             "Rows to return from the ranked snapshot page. No fixed upper bound; "
             "pagination.total/has_more/next_offset make partial results explicit."
-        ),
-    ),
-]
-RealtimePageSize = Annotated[
-    int,
-    Field(
-        ge=1,
-        description=(
-            "Number of shortlisted products to refetch from authenticated trading-critical "
-            "market data. No fixed upper bound; each product causes one governed upstream request."
         ),
     ),
 ]
@@ -67,7 +57,6 @@ MinTurnover = Annotated[
     Field(description="Minimum reported turnover; candidates with unknown turnover are excluded."),
 ]
 
-_AUTO_EXECUTION_SHORTLIST_SIZE = 10
 
 
 def _screen_filters(
@@ -122,10 +111,11 @@ async def screen_leveraged_instruments(
     Avanza. Omit product/filter arguments when paging, or repeat semantically equivalent values.
     Always inspect pagination.total, pagination.has_more and pagination.next_offset.
 
-    When authenticated market-data delegation is configured, a new snapshot automatically
-    refetches up to the top ten discovery candidates through the isolated auth worker and returns
-    an execution shortlist re-ranked from authenticated bid/ask. Leveraged execution freshness
-    is based on bid/ask update age; last_trade is informational only.
+    This tool is authenticated-only at runtime. It uses Avanza's structural filter feed internally
+    to discover and rank the full eligible universe, then refetches exactly the requested page
+    through the isolated auth worker before returning it. page_size therefore controls both the
+    returned row count and authenticated execution verification; there is no fixed shortlist cap.
+    Leveraged execution freshness is based on bid/ask update age; last_trade is informational only.
     """
     selected = product_types or ["certificate", "warrant"]
     selected_filters = _screen_filters(
@@ -173,89 +163,48 @@ async def screen_leveraged_instruments(
                 filters=selected_filters if filters_were_supplied else None,
             )
 
-        if (
-            snapshot_id is None
-            and result.get("products")
-            and _authenticated_market_data_configured()
-        ):
-            enrichment_size = min(
-                _AUTO_EXECUTION_SHORTLIST_SIZE,
-                int(result.get("pagination", {}).get("total") or 0),
+        if result.get("products"):
+            with api_errors():
+                enriched = await service.enrich_page(
+                    result["snapshot_id"],
+                    underlying_order_book_id,
+                    direction,
+                    offset,
+                    page_size,
+                )
+
+            authenticated_count = int(
+                enriched.get("enrichment", {}).get("authenticated_quote_count") or 0
             )
-            if enrichment_size > 0:
-                with api_errors():
-                    enriched = await service.enrich_page(
-                        result["snapshot_id"],
-                        underlying_order_book_id,
-                        direction,
-                        0,
-                        enrichment_size,
-                    )
-                authenticated_count = int(
-                    enriched.get("enrichment", {}).get("authenticated_quote_count") or 0
+            if authenticated_count == 0 and any(
+                product.get("live_market_data_error") == "auth_required"
+                for product in enriched.get("products", [])
+            ):
+                raise ToolError(
+                    "AVANZA_AUTH_REQUIRED: Call connect_avanza, complete BankID locally, then retry."
                 )
-                status = (
-                    "authenticated"
-                    if authenticated_count > 0
-                    else "auth_required"
-                    if any(
-                        product.get("live_market_data_error") == "auth_required"
-                        for product in enriched.get("products", [])
-                    )
-                    else "unavailable"
-                )
-                result["execution"] = {
-                    "status": status,
-                    "scope": "top_discovery_candidates",
-                    "requested_count": enrichment_size,
-                    "ranking": enriched.get("execution_ranking"),
-                    "freshness_basis": enriched.get("execution_freshness_basis"),
-                    "last_trade_role": enriched.get("last_trade_role"),
-                    "enrichment": enriched.get("enrichment"),
-                    "products": (
-                        enriched.get("execution_shortlist", [])
-                        if status == "authenticated"
-                        else []
-                    ),
-                }
-    except ValueError as exc:
-        raise ToolError(str(exc)) from exc
-    return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
 
-
-@mcp.tool(annotations=READ_ONLY)
-async def enrich_leveraged_snapshot(
-    ctx: Context,
-    snapshot_id: SnapshotId,
-    underlying_order_book_id: OrderBookId,
-    direction: Literal["long", "short"],
-    offset: PageOffset = 0,
-    page_size: RealtimePageSize = 5,
-):
-    """Refetch a leveraged shortlist through authenticated trading-critical market data.
-
-    The parent screen uses Avanza's filter feed for full-universe discovery and ranking; live
-    testing shows those discovery prices can lag authenticated trading-critical quotes by about
-    fifteen minutes. This tool preserves structural snapshot order in products and also returns
-    execution_shortlist, re-ranked from authenticated bid/ask quality and freshness.
-
-    There is no fixed page-size upper bound. Each returned product still requires one governed
-    upstream market-data request, so large pages may take substantially longer. The trading-
-    critical quote does not expose an is_real_time flag; inspect quote.source and bid/ask freshness
-    before treating prices as execution evidence. For leveraged market-maker products, last_trade
-    is informational only and does not affect execution freshness or ranking. Repeated calls
-    refetch rather than cache.
-    """
-    service = LeveragedScreenService(ctx.lifespan_context["client"])
-    try:
-        with api_errors():
-            result = await service.enrich_page(
-                snapshot_id,
-                underlying_order_book_id,
-                direction,
-                offset,
-                page_size,
+            discovery_ranking = result.get("ranking")
+            result["products"] = enriched.get("products", [])
+            result["returned"] = enriched.get("returned", 0)
+            result["ranking"] = enriched.get("execution_ranking")
+            result["discovery_ranking"] = discovery_ranking
+            result["execution"] = {
+                "status": (
+                    "authenticated" if authenticated_count > 0 else "unavailable"
+                ),
+                "freshness_basis": enriched.get("execution_freshness_basis"),
+                "last_trade_role": enriched.get("last_trade_role"),
+                "enrichment": enriched.get("enrichment"),
+            }
+            result["data_note"] = (
+                "The complete eligible universe is discovered structurally before paging. "
+                "The returned page is then refetched through authenticated trading-critical "
+                "market data and re-ranked from bid/ask quality and bid/ask freshness. "
+                "discovery_bid/discovery_ask are retained only as structural provenance. "
+                "For leveraged market-maker products, last_trade is informational only."
             )
     except ValueError as exc:
         raise ToolError(str(exc)) from exc
     return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+

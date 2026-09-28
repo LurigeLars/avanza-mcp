@@ -42,23 +42,21 @@ Requires [uv](https://docs.astral.sh/uv/) and Python 3.12+.
 
 | Client | Connection | Account access |
 |---|---|---|
-| Claude Desktop, Cursor, VS Code | local stdio from a checkout | **yes**, with `AVANZA_MCP_AUTH=1` |
+| Claude Desktop, Cursor, VS Code | local stdio from a checkout | **yes**, through the single authenticated-capable runtime |
 | Claude Code, Codex | local loopback gateway `127.0.0.1:8769` | yes, when the background stack runs with auth |
-| ChatGPT and other cloud chats | Cloudflare Access -> gateway -> `127.0.0.1:8767` | **yes**, when the gateway uses the `@authenticated` profile |
+| ChatGPT and other cloud chats | Cloudflare Access -> gateway -> `127.0.0.1:8767` | **yes**, through the same authenticated-capable runtime |
 | Any client, no checkout | `uvx avanza-mcp` from PyPI | **no** |
 
-**`AVANZA_MCP_AUTH=1` is the switch.** Unset, `main()` serves the 37-tool public
-market-data surface. Set to `1`, it starts the authenticated server instead and adds 15 reviewed
-session/account tools: `connect_avanza`, `disconnect_avanza`, `get_auth_status`, `get_accounts`,
+A source checkout starts one authenticated-capable read-only server. Its surface contains
+52 tools: 37 market-data tools plus 15 reviewed session/account tools including
+`connect_avanza`, `disconnect_avanza`, `get_auth_status`, `get_accounts`,
 `get_holdings`, `get_transactions`, `get_watchlists`, `get_price_alerts`,
 `get_portfolio_insights`, `get_portfolio_snapshot`, `get_instrument_news`,
 `get_insider_transactions`, `get_active_orders`, `get_deals`, and `get_stop_loss_orders`.
-The combined surface is 52 tools.
-The screening tools `screen_options`, `screen_leveraged_instruments`, and
-`enrich_option_snapshot` are already part of the public 37-tool surface. Authentication happens
-when `connect_avanza` is called, through a local browser and BankID; nothing is requested at
-startup and banking credentials never pass through the chat. The MCP surface exposes no order
-placement, editing, transfers, or withdrawals.
+Authentication itself remains explicit: `connect_avanza` opens the local browser/BankID flow,
+nothing is requested at startup, and banking credentials never pass through chat. Market discovery
+may use Avanza's public endpoints internally, but that is an implementation detail rather than a
+separate MCP mode. The MCP surface exposes no order placement, editing, transfers, or withdrawals.
 
 `uvx avanza-mcp` installs the published PyPI package, which is **not this fork** and has no account
 access. Use it only when you have no checkout, and do not expect holdings from it.
@@ -73,8 +71,7 @@ Both launch the server over stdio from a checkout. Replace the path with your ow
   "mcpServers": {
     "avanza": {
       "command": "uv",
-      "args": ["run", "--directory", "/path/to/avanza-mcp", "--frozen", "avanza-mcp"],
-      "env": { "AVANZA_MCP_AUTH": "1" }
+      "args": ["run", "--directory", "/path/to/avanza-mcp", "--frozen", "avanza-mcp"]
     }
   }
 }
@@ -86,8 +83,7 @@ Both launch the server over stdio from a checkout. Replace the path with your ow
 - **Cursor:** add it to `.cursor/mcp.json` in your project, or `~/.cursor/mcp.json` globally. Enable
   the server in Cursor's MCP settings.
 
-Drop the `env` block for public market data only. To check which surface you got, look at the
-server name in the handshake: `Avanza MCP Authenticated Server` against `Avanza MCP`.
+The source checkout always exposes the same authenticated-capable read-only surface.
 
 </details>
 
@@ -103,7 +99,7 @@ codex mcp add avanza --url http://127.0.0.1:8769/mcp
 ```
 
 This keeps the canonical FastMCP server on port 8767 while presenting the compact
-37-tool catalog on port 8769. Use `/mcp` in Claude Code or `codex mcp list` to
+52-tool read-only catalog on port 8769. Use `/mcp` in Claude Code or `codex mcp list` to
 verify the connection.
 
 The portable stdio form remains available when no background HTTP stack is installed. It is the
@@ -116,7 +112,7 @@ claude mcp add avanza -- uvx avanza-mcp
 For the account surface without the background stack, point the client at a checkout instead:
 
 ```bash
-claude mcp add avanza --env AVANZA_MCP_AUTH=1 -- uv run --directory /path/to/avanza-mcp --frozen avanza-mcp
+claude mcp add avanza -- uv run --directory /path/to/avanza-mcp --frozen avanza-mcp
 ```
 
 The stdio form talks directly to FastMCP and therefore exposes the full raw schemas.
@@ -134,8 +130,7 @@ Add to `.vscode/mcp.json`, or open **MCP: Open User Configuration** for global s
     "avanza": {
       "type": "stdio",
       "command": "uv",
-      "args": ["run", "--directory", "/path/to/avanza-mcp", "--frozen", "avanza-mcp"],
-      "env": { "AVANZA_MCP_AUTH": "1" }
+      "args": ["run", "--directory", "/path/to/avanza-mcp", "--frozen", "avanza-mcp"]
     }
   }
 }
@@ -276,16 +271,13 @@ docker compose -f compose.public.yaml up -d
 ```
 
 The public gateway requires a valid Cloudflare Access JWT. Both model-facing gateway
-modes use explicit reviewed allowlists, strip client credentials before forwarding,
-compact tool schemas to reduce model-context overhead, and remove duplicate structured
-tool-result payloads when an equivalent text result is already present. The default
-profile exposes the 37 public read-only market tools; the `@authenticated` profile adds
-the reviewed account/session tools. New MCP tools are not exposed through either
-model-facing gateway until the allowlist is reviewed.
+deployments use the same explicit reviewed 52-tool read-only allowlist, strip client
+credentials before forwarding, compact tool schemas to reduce model-context overhead,
+and remove duplicate structured tool-result payloads when an equivalent text result is
+already present. New MCP tools are not exposed until the allowlist is reviewed.
 
-This project does not provide a hosted endpoint. The default gateway profile is
-credential-free; the optional `@authenticated` profile can expose reviewed read-only
-account tools while Avanza session credentials remain on the Windows host.
+This project does not provide a hosted endpoint. Avanza session credentials remain on
+the Windows host and are never forwarded through the gateway.
 
 Optional authenticated read-only access uses a loopback BankID flow and an isolated
 auth-worker architecture. The long-lived FastMCP/control-plane process does not receive
@@ -311,9 +303,9 @@ Three session modes are available:
   If unused, it logs out after five minutes. Approved public market-data calls may reuse
   the in-memory session during that bounded window.
 
-The Cloudflare gateway may expose the reviewed authenticated read-only MCP tools when
-configured with the `@authenticated` profile, but Avanza session credentials remain on
-the Windows host and never traverse Docker, Cloudflare, or the MCP result channel.
+The Cloudflare gateway exposes the reviewed read-only MCP surface, while Avanza session
+credentials remain on the Windows host and never traverse Docker, Cloudflare, or the MCP
+result channel.
 There are no order-placement, order-edit, cancellation, transfer, or withdrawal tools.
 
 Intentionally not exposed by the authenticated MCP surface: `get_credit_info`,
@@ -348,7 +340,7 @@ If a desktop client cannot find `uvx`, use its absolute executable path. See [DE
 
 ## Tools
 
-The public market-data surface exposes 37 read-only tools. Search first to obtain an `order_book_id`; history tools expose pagination. Data is latest available, not guaranteed live.
+The source-checkout server exposes one 52-tool read-only surface: 37 market-data tools plus 15 session/account tools. Search first to obtain an `order_book_id`; history tools expose pagination. Data is latest available, not guaranteed live.
 
 | Category | Tool | Description |
 |----------|------|-------------|
@@ -390,10 +382,9 @@ The public market-data surface exposes 37 read-only tools. Search first to obtai
 | Additional | `get_short_selling` | Short-selling history |
 | Additional | `get_marketmaker_chart` | Traded-product OHLC and market-maker data |
 
-Authenticated mode keeps the same 37 public market-data tools and adds 15 reviewed read-only
-account/session tools, including `get_portfolio_snapshot` for one bounded current-state
-portfolio read. With the gateway's `@authenticated` profile, the 52-tool combined
-surface is available behind Cloudflare Access.
+The 15 session/account tools include `get_portfolio_snapshot` for one bounded
+current-state portfolio read. The same 52-tool read-only surface is available behind
+Cloudflare Access.
 
 ## Prompts
 

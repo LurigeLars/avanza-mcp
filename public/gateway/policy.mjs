@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
 
-export const DEFAULT_ALLOWED_TOOLS = [
+const MARKET_TOOLS = [
   'search_instruments',
   'get_instrument_by_order_book_id',
   'get_stock_info',
@@ -37,12 +37,11 @@ export const DEFAULT_ALLOWED_TOOLS = [
   'get_short_selling',
   'get_marketmaker_chart',
   'screen_leveraged_instruments',
-  'enrich_leveraged_snapshot',
   'screen_options',
   'enrich_option_snapshot',
 ].join(',');
 
-export const AUTHENTICATED_EXTRA_TOOLS = [
+const AUTH_TOOLS = [
   'connect_avanza',
   'disconnect_avanza',
   'get_auth_status',
@@ -60,13 +59,14 @@ export const AUTHENTICATED_EXTRA_TOOLS = [
   'get_stop_loss_orders',
 ].join(',');
 
-export const AUTHENTICATED_ALLOWED_TOOLS =
-  `${DEFAULT_ALLOWED_TOOLS},${AUTHENTICATED_EXTRA_TOOLS}`;
+export const ALL_ALLOWED_TOOLS = `${MARKET_TOOLS},${AUTH_TOOLS}`;
 
 export function parseAllowedTools(value) {
-  const selected = value === '@authenticated'
-    ? AUTHENTICATED_ALLOWED_TOOLS
-    : (value || DEFAULT_ALLOWED_TOOLS);
+  // One authenticated runtime/tool profile. Keep the old @authenticated token as
+  // a migration alias so existing local gateway env files do not break on upgrade.
+  const selected = !value || value === '@authenticated'
+    ? ALL_ALLOWED_TOOLS
+    : value;
   return new Set(selected.split(',').map(item => item.trim()).filter(Boolean));
 }
 
