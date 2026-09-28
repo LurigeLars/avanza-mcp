@@ -32,9 +32,9 @@ async def test_authenticated_gateway_allowlist_matches_auth_server_tool_surface(
     async with Client(create_auth_server(AuthProcessBroker(mode="one_shot"))) as client:
         server_tools = {tool.name for tool in await client.list_tools()}
 
-    assert len(public_tools) == 37
+    assert len(public_tools) == 38
     assert len(extra_tools) == 15
-    assert len(allowed_tools) == 52
+    assert len(allowed_tools) == 53
     assert allowed_tools == server_tools
     assert {"get_credit_info", "get_current_offers", "get_forum_posts"}.isdisjoint(
         allowed_tools
