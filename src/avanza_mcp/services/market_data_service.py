@@ -178,6 +178,27 @@ class MarketDataService:
             raise ValueError("Expected recognized trading-critical quote fields")
         return quote
 
+    async def get_authenticated_market_data_quotes(
+        self, instrument_ids: list[str]
+    ) -> list[dict[str, Any] | None]:
+        """Fetch aligned trading-critical quotes through one authenticated batch."""
+        paths = [
+            AuthenticatedMarketEndpoint.TRADING_CRITICAL_MARKET_DATA.format(id=value)
+            for value in instrument_ids
+        ]
+        payloads = await self._client.get_authenticated_market_data_batch(paths)
+        quotes: list[dict[str, Any] | None] = []
+        for payload in payloads:
+            if payload is None or not isinstance(payload.get("quote"), dict):
+                quotes.append(None)
+                continue
+            quote = TypeAdapter(dict[str, Any]).validate_python(payload["quote"])
+            if not {"updated", "buy", "sell", "last"} & quote.keys():
+                quotes.append(None)
+                continue
+            quotes.append(quote)
+        return quotes
+
     async def get_fund_sustainability(self, instrument_id: str) -> FundSustainability:
         """Fetch fund sustainability, ESG scores, and environmental data."""
         endpoint = PublicEndpoint.FUND_SUSTAINABILITY.format(id=instrument_id)
