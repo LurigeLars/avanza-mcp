@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
 
-export const DEFAULT_ALLOWED_TOOLS = [
+const MARKET_TOOLS = [
   'search_instruments',
   'get_instrument_by_order_book_id',
   'get_stock_info',
@@ -59,7 +59,7 @@ const AUTH_TOOLS = [
   'get_stop_loss_orders',
 ].join(',');
 
-export const ALL_ALLOWED_TOOLS = `${DEFAULT_ALLOWED_TOOLS},${AUTH_TOOLS}`;
+export const ALL_ALLOWED_TOOLS = `${MARKET_TOOLS},${AUTH_TOOLS}`;
 
 export function parseAllowedTools(value) {
   // One authenticated runtime/tool profile. Keep the old @authenticated token as
