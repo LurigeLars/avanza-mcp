@@ -230,6 +230,72 @@ class AuthProcessBroker:
         )
         return None
 
+    async def market_data_batch(
+        self, paths: list[str]
+    ) -> list[dict[str, Any] | None] | None:
+        """Fetch reviewed trading-critical market data in one isolated worker."""
+        self._ensure_open()
+        if not paths:
+            return []
+        if any(
+            authenticated_public_request_family("GET", path)
+            != "trading_critical_market_data"
+            for path in paths
+        ):
+            return None
+
+        family = "trading_critical_market_data"
+        retry_after = self._market_auth_backoff_until.get(family)
+        now = monotonic()
+        if retry_after is not None:
+            if retry_after > now:
+                return None
+            self._market_auth_backoff_until.pop(family, None)
+
+        command = {
+            "action": "market_batch",
+            "paths": list(paths),
+        }
+        try:
+            async with self._operation_lock:
+                if self.mode == "persistent":
+                    if self._persistent_disconnect_active():
+                        return None
+                    response = await self._run_once(command)
+                else:
+                    async with self._daemon_lock:
+                        process = self._live_daemon()
+                        if process is None:
+                            return None
+                        status_response = await self._command(process, {"action": "status"})
+                        status = self._status_from_response(status_response)
+                        if status.state != "connected":
+                            return None
+                        response = await self._command(process, command)
+        except AuthWorkerOperationError:
+            self._market_auth_backoff_until[family] = (
+                monotonic() + _MARKET_AUTH_FAILURE_BACKOFF_SECONDS
+            )
+            return None
+
+        if response.get("ok") is True:
+            raw = response.get("result")
+            if (
+                not isinstance(raw, list)
+                or len(raw) != len(paths)
+                or any(item is not None and not isinstance(item, dict) for item in raw)
+            ):
+                raise AuthWorkerOperationError("Invalid market batch result from worker")
+            self._market_auth_backoff_until.pop(family, None)
+            return raw
+        code = response.get("code")
+        if code in {"no_session", "auth_required", "auth_expired"}:
+            return None
+        self._market_auth_backoff_until[family] = (
+            monotonic() + _MARKET_AUTH_FAILURE_BACKOFF_SECONDS
+        )
+        return None
+
     async def aclose(self) -> None:
         if self._closed:
             return
