@@ -1,5 +1,16 @@
 # Avanza MCP Server
 
+## Current deployment and security posture
+
+The maintained deployment is local-first and read-only. The canonical FastMCP runtime stays on loopback; remote clients reach it only through the reviewed gateway and Cloudflare Access.
+
+- Market-data and authenticated account tools are read-only; no order placement, transfers, withdrawals, or credential-entry tools are exposed.
+- Avanza session material remains on the host and is handled by the isolated authentication worker; it is not forwarded through the public gateway.
+- Model-facing gateways use an explicit reviewed tool allowlist and compact schemas/results.
+- The Windows background runtime is designed to run without elevation; installation does not require a privileged service account.
+- Public gateway containers run non-root with a read-only filesystem, dropped Linux capabilities, and `no-new-privileges`.
+- Machine-specific paths, identities, Cloudflare values, account identifiers, and credentials belong only in local ignored configuration.
+
 ## About this fork
 
 This is a maintained fork of [AnteWall/avanza-mcp](https://github.com/AnteWall/avanza-mcp). It keeps the upstream read-only market-data surface while adding a local-first deployment and agent layer.
