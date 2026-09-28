@@ -147,6 +147,18 @@ class _ReusableMarketProcess:
     returncode = None
 
 
+async def test_persistent_market_worker_prewarm_uses_market_daemon(monkeypatch):
+    broker = AuthProcessBroker(mode="persistent")
+    command = AsyncMock(return_value={"ok": True})
+    monkeypatch.setattr(broker, "_persistent_market_command", command)
+
+    try:
+        await broker.warm_market_worker()
+        command.assert_awaited_once_with({"action": "warm"})
+    finally:
+        await broker.aclose()
+
+
 async def test_persistent_market_requests_reuse_one_market_daemon(monkeypatch):
     broker = AuthProcessBroker(mode="persistent")
     process = _ReusableMarketProcess()
