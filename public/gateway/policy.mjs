@@ -37,6 +37,7 @@ export const DEFAULT_ALLOWED_TOOLS = [
   'get_short_selling',
   'get_marketmaker_chart',
   'screen_leveraged_instruments',
+  'enrich_leveraged_snapshot',
   'screen_options',
   'enrich_option_snapshot',
 ].join(',');
