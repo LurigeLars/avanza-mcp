@@ -11,6 +11,7 @@ from avanza_mcp import mcp
 from avanza_mcp.services.leveraged_screen_service import (
     LeveragedScreenService,
     ScreenFilters,
+    SuitabilityCriteria,
     _discovery_spread_percent,
     _execution_rank,
     _timestamp_ms,
@@ -286,7 +287,9 @@ async def test_catalog_is_primary_universe_and_global_enrichment_precedes_paging
     enriched = await service.enrich_snapshot(
         first["snapshot_id"], "4478", "long", 0, 1
     )
-    assert fake.market_data_batch_calls == [["101", "202"]]
+    assert len(fake.market_data_batch_calls) == 2
+    assert fake.market_data_batch_calls[0] == ["101", "202"]
+    assert set(fake.market_data_batch_calls[1]) == {"101", "202"}
     assert enriched["enrichment"]["attempted_count"] == 2
     assert enriched["enrichment"]["scope"] == "complete_snapshot_progressive"
     assert enriched["pagination"]["total"] == 2
@@ -295,10 +298,63 @@ async def test_catalog_is_primary_universe_and_global_enrichment_precedes_paging
     second = await service.enrich_snapshot(
         first["snapshot_id"], "4478", "long", 1, 1
     )
-    assert fake.market_data_batch_calls == [["101", "202"]]
+    assert len(fake.market_data_batch_calls) == 2
     assert second["enrichment"]["cache_hit"] is True
     assert second["pagination"]["returned"] == 1
 
+
+
+
+
+@pytest.mark.asyncio
+async def test_suitability_filters_target_leverage_and_stop_loss_buffer():
+    service = LeveragedScreenService(object(), catalog=LocalUniverseCatalog())
+    fake = FakeMarket()
+    service._market = fake
+
+    result = await service.screen(
+        "4478",
+        "long",
+        ["warrant"],
+        10,
+        suitability=SuitabilityCriteria(
+            target_leverage=5.0,
+            max_leverage_deviation=0.2,
+            min_stop_loss_buffer_percent=10.0,
+        ),
+    )
+
+    assert result["pagination"]["total"] == 1
+    assert result["products"][0]["order_book_id"] == "202"
+    assert result["products"][0]["suitability"]["leverage_deviation"] == pytest.approx(0.1)
+    assert result["products"][0]["suitability"]["stop_loss_buffer_percent"] > 20
+    assert result["suitability"] == {
+        "target_leverage": 5.0,
+        "max_leverage_deviation": 0.2,
+        "min_stop_loss_buffer_percent": 10.0,
+    }
+    assert result["suitability_context"]["underlying_reference_source"] == (
+        "authenticated_trading_critical"
+    )
+    assert fake.market_data_quote_calls == ["4478"]
+
+
+def test_suitability_requires_explicit_leverage_tolerance():
+    service = LeveragedScreenService(object(), catalog=LocalUniverseCatalog())
+
+    with pytest.raises(
+        ValueError,
+        match="target_leverage and max_leverage_deviation must be supplied together",
+    ):
+        asyncio.run(
+            service.screen(
+                "4478",
+                "long",
+                ["warrant"],
+                10,
+                suitability=SuitabilityCriteria(target_leverage=5.0),
+            )
+        )
 
 
 class FourRowLocalUniverseCatalog(LocalUniverseCatalog):
@@ -348,23 +404,26 @@ async def test_full_execution_scan_progresses_by_internal_batch_and_ranks_only_w
     complete = await service.enrich_snapshot(
         first["snapshot_id"], "4478", "long", 0, 1
     )
-    assert len(fake.market_data_batch_calls) == 2
+    assert len(fake.market_data_batch_calls) == 3
     assert {
         order_book_id
-        for batch in fake.market_data_batch_calls
+        for batch in fake.market_data_batch_calls[:2]
         for order_book_id in batch
     } == {"101", "202", "303", "404"}
+    assert set(fake.market_data_batch_calls[2]) == {"101", "202", "303", "404"}
     assert complete["enrichment"]["attempted_count"] == 4
     assert complete["enrichment"]["remaining_count"] == 0
     assert complete["enrichment"]["scan_complete"] is True
     assert complete["ordering"] == "execution_ranking"
     assert complete["pagination"]["total"] == 4
     assert complete["pagination"]["returned"] == 1
+    assert complete["enrichment"]["final_refresh"]["requested_count"] == 4
+    assert complete["enrichment"]["final_refresh"]["refreshed_count"] == 4
 
     cached = await service.enrich_snapshot(
         first["snapshot_id"], "4478", "long", 1, 1
     )
-    assert len(fake.market_data_batch_calls) == 2
+    assert len(fake.market_data_batch_calls) == 3
     assert cached["enrichment"]["cache_hit"] is True
     assert cached["pagination"]["returned"] == 1
 
@@ -839,6 +898,9 @@ async def test_screen_tool_has_unbounded_page_size_and_filter_contract():
         "sub_types",
         "min_leverage",
         "max_leverage",
+        "target_leverage",
+        "max_leverage_deviation",
+        "min_stop_loss_buffer_percent",
         "require_two_way_quote",
         "max_spread_percent",
         "min_turnover",
