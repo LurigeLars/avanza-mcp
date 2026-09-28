@@ -1209,7 +1209,9 @@ class LeveragedScreenService:
             snapshot.execution_products.sort(
                 key=lambda candidate: _execution_rank(
                     candidate,
-                    prefer_target_leverage=snapshot.suitability.target_leverage is not None,
+                    prefer_target_leverage=(
+                        snapshot.suitability.target_leverage is not None
+                    ),
                 )
             )
 
@@ -1257,11 +1259,13 @@ class LeveragedScreenService:
                     for product in snapshot.execution_products:
                         _refresh_live_freshness(product, final_observed_at)
                     snapshot.execution_products.sort(
-            key=lambda candidate: _execution_rank(
-                candidate,
-                prefer_target_leverage=snapshot.suitability.target_leverage is not None,
-            )
-        )
+                        key=lambda candidate: _execution_rank(
+                            candidate,
+                            prefer_target_leverage=(
+                                snapshot.suitability.target_leverage is not None
+                            ),
+                        )
+                    )
 
                 snapshot.final_refresh_completed = True
                 snapshot.final_refresh_metadata = {
@@ -1489,7 +1493,14 @@ class LeveragedScreenService:
             )
             for product in products
         )
-        products.sort(key=_execution_rank)
+        products.sort(
+            key=lambda candidate: _execution_rank(
+                candidate,
+                prefer_target_leverage=(
+                    snapshot.suitability.target_leverage is not None
+                ),
+            )
+        )
 
         return {
             "snapshot_id": snapshot.snapshot_id,
