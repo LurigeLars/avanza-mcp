@@ -113,11 +113,13 @@ async def screen_leveraged_instruments(
 
     This tool always runs. A fresh local daily instrument catalog is used as the primary structural
     universe when it can satisfy the requested filters; Avanza's filter feed is the fallback. With a
-    valid authenticated session, the complete eligible universe is refetched through the isolated
-    auth worker, globally execution-ranked, and only then paginated. page_size therefore controls
-    response size, not the candidate pool. Without auth, the tool falls back to public structural
-    discovery instead of failing. For authenticated leveraged data, freshness is based on bid/ask
-    update age; last_trade is informational only.
+    valid authenticated session, the complete eligible universe is progressively refetched through
+    bounded auth-worker batches. Repeat the returned snapshot_id until
+    execution.enrichment.scan_complete is true. No provisional execution ranking is exposed before
+    the full universe has been attempted; after completion it is globally ranked and only then
+    paginated. page_size controls response size, not the candidate pool. Without auth, the tool
+    falls back to public structural discovery instead of failing. For authenticated leveraged data,
+    freshness is based on bid/ask update age; last_trade is informational only.
     """
     selected = product_types or ["certificate", "warrant"]
     selected_filters = _screen_filters(
@@ -175,32 +177,53 @@ async def screen_leveraged_instruments(
                     page_size,
                 )
 
-            authenticated_count = int(
-                enriched.get("enrichment", {}).get("authenticated_quote_count") or 0
-            )
-            if authenticated_count > 0:
+            enrichment = enriched.get("enrichment", {})
+            scan_complete = bool(enrichment.get("scan_complete"))
+            batch_error = enrichment.get("error")
+            authenticated_count = int(enrichment.get("authenticated_quote_count") or 0)
+
+            if batch_error is None and not scan_complete:
                 discovery_ranking = result.get("ranking")
+                result["structural_pagination"] = result.get("pagination")
+                result["products"] = []
+                result["returned"] = 0
+                result["pagination"] = enriched.get("pagination")
+                result["ranking"] = None
+                result["discovery_ranking"] = discovery_ranking
+                result["execution"] = {
+                    "status": "authenticated_partial",
+                    "freshness_basis": enriched.get("execution_freshness_basis"),
+                    "last_trade_role": enriched.get("last_trade_role"),
+                    "enrichment": enrichment,
+                }
+                result["data_note"] = (
+                    "The full live universe scan is still in progress. Repeat this tool with the "
+                    "same snapshot_id until execution.enrichment.scan_complete is true. No "
+                    "provisional execution ranking is returned. page_size only controls the final "
+                    "returned slice and never limits candidate evaluation."
+                )
+            elif batch_error is None and scan_complete and authenticated_count > 0:
+                discovery_ranking = result.get("ranking")
+                result["structural_pagination"] = result.get("pagination")
                 result["products"] = enriched.get("products", [])
                 result["returned"] = enriched.get("returned", 0)
+                result["pagination"] = enriched.get("pagination")
                 result["ranking"] = enriched.get("execution_ranking")
                 result["discovery_ranking"] = discovery_ranking
                 result["execution"] = {
                     "status": "authenticated",
                     "freshness_basis": enriched.get("execution_freshness_basis"),
                     "last_trade_role": enriched.get("last_trade_role"),
-                    "enrichment": enriched.get("enrichment"),
+                    "enrichment": enrichment,
                 }
                 result["data_note"] = (
-                    "The complete eligible universe is authenticated and globally re-ranked before "
-                    "paging. page_size only controls the returned slice and never limits candidate "
-                    "evaluation. For leveraged market-maker products, last_trade is informational "
-                    "only."
+                    "The complete eligible universe has been authenticated and globally re-ranked "
+                    "before paging. page_size only controls the returned slice and never limits "
+                    "candidate evaluation. For leveraged market-maker products, last_trade is "
+                    "informational only."
                 )
             else:
-                auth_required = any(
-                    product.get("live_market_data_error") == "auth_required"
-                    for product in enriched.get("products", [])
-                )
+                auth_required = batch_error == "auth_required"
                 if (
                     snapshot_id is None
                     and result.get("snapshot", {}).get("discovery_source")
@@ -225,11 +248,13 @@ async def screen_leveraged_instruments(
                         else "authenticated_market_data_unavailable"
                     ),
                     "data_quality": "discovery_only",
+                    "enrichment": enrichment,
                 }
                 result["data_note"] = (
-                    "No usable authenticated trading-critical quote was available, so this call "
-                    "returned the public discovery page instead of failing. discovery_bid and "
-                    "discovery_ask may be delayed and are not execution-grade prices."
+                    "No usable authenticated trading-critical quote batch was available, so this "
+                    "call returned structural public discovery instead of a live global ranking. "
+                    "discovery_bid and discovery_ask may be delayed and are not execution-grade "
+                    "prices."
                 )
     except ValueError as exc:
         raise ToolError(str(exc)) from exc

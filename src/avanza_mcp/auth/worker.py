@@ -439,49 +439,45 @@ async def _market_batch_operation(
         async with AvanzaClient(
             session_provider=lambda: auth.session,
             session_invalidated=auth.invalidate_session,
+            max_connections=_MARKET_BATCH_CONCURRENCY,
+            max_keepalive_connections=_MARKET_BATCH_CONCURRENCY,
+            max_in_flight_requests=_MARKET_BATCH_CONCURRENCY,
         ) as client:
-            semaphore = asyncio.Semaphore(_MARKET_BATCH_CONCURRENCY)
-
-            async def fetch_one(path: str) -> tuple[str | None, dict[str, Any] | None]:
-                async with semaphore:
-                    try:
-                        response = await client.request_authenticated("GET", path)
-                    except AvanzaAuthError:
-                        return "auth_expired", None
-                    except Exception:
-                        return None, None
-
-                    if response.status_code == 401:
-                        return "auth_expired", None
-                    if response.status_code != 200:
-                        return None, None
-
-                    try:
-                        payload = response.json()
-                        projected = _project_authenticated_market_payload(
-                            "marketdata", payload
-                        )
-                    except (ValueError, TypeError):
-                        return None, None
-
-                    if _contains_forbidden_market_result(projected):
-                        return "unsafe_upstream_payload", None
-                    if not isinstance(projected, dict):
-                        return None, None
-                    return None, projected
-
-            fetched = await asyncio.gather(*(fetch_one(path) for path in paths))
+            responses = await client.request_authenticated_batch(
+                paths,
+                max_concurrency=_MARKET_BATCH_CONCURRENCY,
+            )
+    except AvanzaAuthError:
+        await auth.invalidate_session()
+        return {"ok": False, "code": "auth_expired"}
     except Exception:
         return {"ok": False, "code": "read_error"}
 
-    codes = [code for code, _ in fetched if code is not None]
-    if "auth_expired" in codes:
-        await auth.invalidate_session()
-        return {"ok": False, "code": "auth_expired"}
-    if "unsafe_upstream_payload" in codes:
-        return {"ok": False, "code": "unsafe_upstream_payload"}
+    results: list[dict[str, Any] | None] = []
+    for response in responses:
+        if response is None:
+            results.append(None)
+            continue
+        if response.status_code == 401:
+            await auth.invalidate_session()
+            return {"ok": False, "code": "auth_expired"}
+        if response.status_code != 200:
+            results.append(None)
+            continue
+        try:
+            payload = response.json()
+            projected = _project_authenticated_market_payload("marketdata", payload)
+        except (ValueError, TypeError):
+            results.append(None)
+            continue
+        if _contains_forbidden_market_result(projected):
+            return {"ok": False, "code": "unsafe_upstream_payload"}
+        if not isinstance(projected, dict):
+            results.append(None)
+            continue
+        results.append(projected)
 
-    return {"ok": True, "result": [result for _, result in fetched]}
+    return {"ok": True, "result": results}
 
 
 async def _run_once(command: dict[str, Any]) -> None:

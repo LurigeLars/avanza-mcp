@@ -419,6 +419,60 @@ class TestAvanzaClientRequests:
             assert client._authenticated_client is None
             assert client._authenticated_session is None
 
+    @respx.mock
+    async def test_authenticated_batch_really_overlaps_and_preserves_order(
+        self, method, monkeypatch
+    ):
+        if method != "get":
+            return
+
+        active = SessionMaterial((), "sentinel-token")
+        in_flight = 0
+        max_in_flight = 0
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal in_flight, max_in_flight
+            in_flight += 1
+            max_in_flight = max(max_in_flight, in_flight)
+            try:
+                await asyncio.sleep(0.02)
+                value = int(request.url.path.rsplit("/", 1)[-1])
+                return httpx.Response(200, json={"quote": {"buy": value}})
+            finally:
+                in_flight -= 1
+
+        route = respx.route(
+            method="GET",
+            url__regex=re.compile(
+                r"https://www\.avanza\.se/_api/trading-critical/rest/marketdata/\d+"
+            ),
+        ).mock(side_effect=handler)
+        client = AvanzaClient(
+            session_provider=lambda: active,
+            max_retries=1,
+            max_connections=8,
+            max_keepalive_connections=8,
+            max_in_flight_requests=8,
+            min_request_interval=0,
+            request_jitter=0,
+        )
+        paths = [
+            f"/_api/trading-critical/rest/marketdata/{index}"
+            for index in range(1, 9)
+        ]
+
+        async with client:
+            responses = await client.request_authenticated_batch(
+                paths, max_concurrency=8
+            )
+
+        assert route.call_count == 8
+        assert max_in_flight > 1
+        assert [
+            response.json()["quote"]["buy"] if response is not None else None
+            for response in responses
+        ] == list(range(1, 9))
+
     async def test_request_authenticated_rejects_non_relative_same_origin_paths(self, method):
         if method != "get":
             return
