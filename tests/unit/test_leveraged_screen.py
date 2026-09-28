@@ -62,6 +62,7 @@ class FakeMarket:
                     issuer="Issuer B",
                     subType="TURBO",
                     leverage=5.1,
+                    stopLoss=4.0,
                     buyPrice=4.95,
                     sellPrice=5.05,
                     totalValueTraded=654321,
@@ -271,6 +272,50 @@ class LocalUniverseCatalog:
 
     def find_by_underlying(self, *_args, limit=1000, **_kwargs):
         return list(self.rows[:limit])
+
+
+
+@pytest.mark.asyncio
+async def test_leverage_filter_falls_back_from_catalog_to_filter_feed():
+    service = LeveragedScreenService(object(), catalog=LocalUniverseCatalog())
+    fake = FakeMarket()
+    service._market = fake
+
+    result = await service.screen(
+        "4478",
+        "long",
+        ["warrant"],
+        10,
+        filters=ScreenFilters(min_leverage=4.0, max_leverage=6.0),
+    )
+
+    assert result["snapshot"]["discovery_source"] == "avanza_filter_feed"
+    assert len(fake.warrant_calls) == 1
+    assert result["pagination"]["total"] == 1
+    assert result["products"][0]["leverage"] == pytest.approx(5.1)
+
+
+@pytest.mark.asyncio
+async def test_target_leverage_suitability_falls_back_from_catalog_to_filter_feed():
+    service = LeveragedScreenService(object(), catalog=LocalUniverseCatalog())
+    fake = FakeMarket()
+    service._market = fake
+
+    result = await service.screen(
+        "4478",
+        "long",
+        ["warrant"],
+        10,
+        suitability=SuitabilityCriteria(
+            target_leverage=5.0,
+            max_leverage_deviation=0.2,
+        ),
+    )
+
+    assert result["snapshot"]["discovery_source"] == "avanza_filter_feed"
+    assert len(fake.warrant_calls) == 1
+    assert result["pagination"]["total"] == 1
+    assert result["products"][0]["suitability"]["leverage_deviation"] == pytest.approx(0.1)
 
 
 @pytest.mark.asyncio
