@@ -17,12 +17,16 @@ class FakeBroker:
     def __init__(self):
         self.closed = False
         self.opened = 0
+        self.warmed = 0
         self.account_calls = []
         self.market_calls = []
         self.market_batch_calls = []
         self.market_response = None
         self.market_batch_response = None
         self.account_results = {}
+
+    async def warm_market_worker(self):
+        self.warmed += 1
 
     async def connect(self):
         self.opened += 1
@@ -94,6 +98,7 @@ async def test_auth_server_mounts_public_contract_and_adds_auth_tools():
 
     assert broker.closed
     assert broker.opened == 1
+    assert broker.warmed == 1
     assert broker.account_calls == [("accounts", {})]
 
 

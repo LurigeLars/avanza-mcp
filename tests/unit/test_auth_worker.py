@@ -152,6 +152,7 @@ async def test_persistent_market_daemon_reuses_validation_and_client(
 
     def feed(loop, queue):
         for payload in (
+            {"action": "warm"},
             {
                 "action": "market",
                 "method": "GET",
@@ -185,6 +186,7 @@ async def test_persistent_market_daemon_reuses_validation_and_client(
         if line.strip()
     ]
     assert payloads == [
+        {"ok": True},
         {"ok": True, "result": {"last": 1}},
         {"ok": True, "result": {"last": 2}},
         {"ok": True},

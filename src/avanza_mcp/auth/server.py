@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import date
@@ -117,6 +118,7 @@ def create_auth_server(broker: AuthProcessBroker | None = None) -> FastMCP:
             broker.market_request,
             broker.market_data_batch,
         )
+        warm_task = asyncio.create_task(broker.warm_market_worker())
         try:
             async with AvanzaClient(
                 authenticated_request_delegate=broker.market_request,
@@ -124,6 +126,12 @@ def create_auth_server(broker: AuthProcessBroker | None = None) -> FastMCP:
             ) as client:
                 yield {"client": client}
         finally:
+            if not warm_task.done():
+                warm_task.cancel()
+            try:
+                await warm_task
+            except asyncio.CancelledError:
+                pass
             try:
                 await broker.aclose()
             finally:
