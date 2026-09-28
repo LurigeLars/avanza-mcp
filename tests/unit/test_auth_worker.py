@@ -118,6 +118,10 @@ async def test_market_batch_validates_session_once_for_multiple_paths(
     assert store.saves == 0
 
 
+def test_authenticated_market_batch_pacing_is_75ms():
+    assert worker._MARKET_BATCH_MIN_REQUEST_INTERVAL == 0.075
+
+
 
 def test_authenticated_market_batch_concurrency_is_16():
     assert worker._MARKET_BATCH_CONCURRENCY == 16
@@ -139,6 +143,7 @@ async def test_market_batch_fetches_with_bounded_concurrency_and_preserves_order
         def __init__(self, *args, **kwargs):
             assert kwargs["max_connections"] == worker._MARKET_BATCH_CONCURRENCY
             assert kwargs["max_in_flight_requests"] == worker._MARKET_BATCH_CONCURRENCY
+            assert kwargs["min_request_interval"] == worker._MARKET_BATCH_MIN_REQUEST_INTERVAL
 
         async def __aenter__(self):
             return self
