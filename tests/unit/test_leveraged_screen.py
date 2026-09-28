@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -533,6 +534,73 @@ async def test_snapshot_filter_mismatch_is_rejected():
             1,
             filters=ScreenFilters(issuers=("Issuer A",)),
         )
+
+
+@pytest.mark.asyncio
+async def test_screen_tool_returns_public_fallback_when_auth_is_unavailable(monkeypatch):
+    async def fake_screen(self, *_args, **_kwargs):
+        return {
+            "snapshot_id": "a" * 32,
+            "underlying_order_book_id": "4478",
+            "direction": "long",
+            "product_types": ["warrant"],
+            "filters": {},
+            "families": {},
+            "snapshot": {},
+            "pagination": {
+                "total": 1,
+                "offset": 0,
+                "page_size": 1,
+                "returned": 1,
+                "has_more": False,
+                "next_offset": None,
+            },
+            "products": [
+                {
+                    "product_type": "warrant",
+                    "order_book_id": "202",
+                    "name": "MINI L TEST",
+                    "discovery_bid": 10.0,
+                    "discovery_ask": 10.1,
+                }
+            ],
+            "returned": 1,
+            "ranking": "two_way_quote, spread_percent_asc, turnover_desc",
+        }
+
+    async def fake_enrich(self, *_args, **_kwargs):
+        return {
+            "products": [
+                {
+                    "order_book_id": "202",
+                    "live_market_data_error": "auth_required",
+                }
+            ],
+            "returned": 1,
+            "enrichment": {"authenticated_quote_count": 0},
+        }
+
+    monkeypatch.setattr(LeveragedScreenService, "screen", fake_screen)
+    monkeypatch.setattr(LeveragedScreenService, "enrich_page", fake_enrich)
+
+    async with Client(mcp) as client:
+        result = await client.call_tool(
+            "screen_leveraged_instruments",
+            {
+                "underlying_order_book_id": "4478",
+                "direction": "long",
+                "product_types": ["warrant"],
+                "page_size": 1,
+            },
+        )
+
+    payload = json.loads(result.content[0].text)
+    assert payload["products"][0]["discovery_bid"] == 10.0
+    assert payload["execution"] == {
+        "status": "public_fallback",
+        "reason": "auth_required",
+        "data_quality": "discovery_only",
+    }
 
 
 @pytest.mark.asyncio
