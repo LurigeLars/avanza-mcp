@@ -8,7 +8,7 @@ from fastmcp import Context
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from .. import mcp
+from .. import _authenticated_market_data_configured, mcp
 from ..models.common import OrderBookId
 from ..services.leveraged_screen_service import LeveragedScreenService, ScreenFilters
 from ._helpers import READ_ONLY, api_errors
@@ -67,6 +67,8 @@ MinTurnover = Annotated[
     Field(description="Minimum reported turnover; candidates with unknown turnover are excluded."),
 ]
 
+_AUTO_EXECUTION_SHORTLIST_SIZE = 10
+
 
 def _screen_filters(
     issuers: list[str] | None,
@@ -119,6 +121,11 @@ async def screen_leveraged_instruments(
     With snapshot_id, returns another page from that same frozen ranking without refetching
     Avanza. Omit product/filter arguments when paging, or repeat semantically equivalent values.
     Always inspect pagination.total, pagination.has_more and pagination.next_offset.
+
+    When authenticated market-data delegation is configured, a new snapshot automatically
+    refetches up to the top ten discovery candidates through the isolated auth worker and returns
+    an execution shortlist re-ranked from authenticated bid/ask. Leveraged execution freshness
+    is based on bid/ask update age; last_trade is informational only.
     """
     selected = product_types or ["certificate", "warrant"]
     selected_filters = _screen_filters(
@@ -165,6 +172,52 @@ async def screen_leveraged_instruments(
                 product_types=product_types,
                 filters=selected_filters if filters_were_supplied else None,
             )
+
+        if (
+            snapshot_id is None
+            and result.get("products")
+            and _authenticated_market_data_configured()
+        ):
+            enrichment_size = min(
+                _AUTO_EXECUTION_SHORTLIST_SIZE,
+                int(result.get("pagination", {}).get("total") or 0),
+            )
+            if enrichment_size > 0:
+                with api_errors():
+                    enriched = await service.enrich_page(
+                        result["snapshot_id"],
+                        underlying_order_book_id,
+                        direction,
+                        0,
+                        enrichment_size,
+                    )
+                authenticated_count = int(
+                    enriched.get("enrichment", {}).get("authenticated_quote_count") or 0
+                )
+                status = (
+                    "authenticated"
+                    if authenticated_count > 0
+                    else "auth_required"
+                    if any(
+                        product.get("live_market_data_error") == "auth_required"
+                        for product in enriched.get("products", [])
+                    )
+                    else "unavailable"
+                )
+                result["execution"] = {
+                    "status": status,
+                    "scope": "top_discovery_candidates",
+                    "requested_count": enrichment_size,
+                    "ranking": enriched.get("execution_ranking"),
+                    "freshness_basis": enriched.get("execution_freshness_basis"),
+                    "last_trade_role": enriched.get("last_trade_role"),
+                    "enrichment": enriched.get("enrichment"),
+                    "products": (
+                        enriched.get("execution_shortlist", [])
+                        if status == "authenticated"
+                        else []
+                    ),
+                }
     except ValueError as exc:
         raise ToolError(str(exc)) from exc
     return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
@@ -183,13 +236,15 @@ async def enrich_leveraged_snapshot(
 
     The parent screen uses Avanza's filter feed for full-universe discovery and ranking; live
     testing shows those discovery prices can lag authenticated trading-critical quotes by about
-    fifteen minutes. This tool preserves structural snapshot order and refetches only the
-    requested page through one isolated auth worker and one session validation.
+    fifteen minutes. This tool preserves structural snapshot order in products and also returns
+    execution_shortlist, re-ranked from authenticated bid/ask quality and freshness.
 
     There is no fixed page-size upper bound. Each returned product still requires one governed
     upstream market-data request, so large pages may take substantially longer. The trading-
-    critical quote does not expose an is_real_time flag; inspect quote.source and quote.freshness
-    ages before treating bid/ask as execution evidence. Repeated calls refetch rather than cache.
+    critical quote does not expose an is_real_time flag; inspect quote.source and bid/ask freshness
+    before treating prices as execution evidence. For leveraged market-maker products, last_trade
+    is informational only and does not affect execution freshness or ranking. Repeated calls
+    refetch rather than cache.
     """
     service = LeveragedScreenService(ctx.lifespan_context["client"])
     try:
