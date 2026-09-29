@@ -269,8 +269,7 @@ class TestAvanzaClientRequests:
                 "last": 203.0,
                 "updated": "2026-09-28T07:30:01.000+00:00",
                 "timeOfLast": "2026-09-28T07:29:59.000+00:00",
-            },
-            "orderDepth": {"levels": [{}]},
+            }
         }
         assert route.call_count == 1
         assert route.calls.last.request.headers["x-securitytoken"] == "sentinel-token"
