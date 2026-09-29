@@ -229,10 +229,8 @@ def _project_authenticated_market_payload(kind: str, value: Any) -> Any:
         return _project_mapping(value, _AUTH_QUOTE_FIELDS)
 
     if kind == "marketdata":
-        root = _project_mapping(value, frozenset({"quote", "orderDepth"}))
+        root = _project_mapping(value, frozenset({"quote"}))
         root["quote"] = _project_mapping(root.get("quote"), _AUTH_QUOTE_FIELDS)
-        if "orderDepth" in root:
-            root["orderDepth"] = _project_rest_order_depth(root["orderDepth"])
         return root
 
     if kind == "trades":
