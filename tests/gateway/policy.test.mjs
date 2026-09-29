@@ -11,7 +11,7 @@ import {
 
 test('default allowlist is the single authenticated read-only Avanza surface', () => {
   const allowed = parseAllowedTools();
-  assert.equal(allowed.size, 52);
+  assert.equal(allowed.size, 53);
   assert.equal(allowed.has('search_instruments'), true);
   assert.equal(allowed.has('screen_leveraged_instruments'), true);
   assert.equal(allowed.has('enrich_leveraged_snapshot'), false);
