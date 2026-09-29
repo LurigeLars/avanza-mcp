@@ -18,6 +18,8 @@ from .. import (
     mcp as public_mcp,
 )
 from ..client.base import AvanzaClient
+from ..models.common import OrderBookId
+from ..models.stock import LiveOrderDepth
 from ..models.account import (
     Accounts,
     ActiveOrders,
@@ -234,6 +236,62 @@ def create_auth_server(broker: AuthProcessBroker | None = None) -> FastMCP:
     async def get_auth_status() -> AuthStatus:
         """Return safe Avanza connection state without credentials or identity."""
         return await broker.status()
+
+    @server.tool(annotations=_READ_TOOL)
+    async def get_orderbook_depth(
+        order_book_id: OrderBookId,
+        max_levels: Annotated[int, Field(ge=1, le=50)] = 10,
+    ) -> LiveOrderDepth:
+        """Get the first live authenticated ORDER_DEPTH snapshot, then close the stream.
+
+        Returns at most max_levels exactly as exposed upstream. Empty bid/ask sides
+        are null, no deeper book is reconstructed, and receivedTime is null when the
+        SSE payload does not expose a source timestamp.
+        """
+        try:
+            raw = await broker.order_depth_snapshot(order_book_id, max_levels)
+        except AuthWorkerRequired:
+            raise ToolError(
+                "AVANZA_AUTH_REQUIRED: Call connect_avanza, complete BankID locally, then retry."
+            ) from None
+        except AuthWorkerExpired:
+            raise ToolError(
+                "AVANZA_AUTH_EXPIRED: Call connect_avanza, complete BankID locally, then retry."
+            ) from None
+        except AuthWorkerOperationError as exc:
+            code = str(exc)
+            safe_messages = {
+                "read_timeout": "Avanza order-depth stream timed out before a snapshot.",
+                "read_disconnect": "Avanza order-depth stream closed before a snapshot.",
+                "read_rate_limited": "Avanza rate-limited the order-depth stream. Retry later.",
+                "read_error_response_shape": "Avanza returned malformed order-depth data.",
+                "unsafe_upstream_payload": "Avanza returned an unsafe order-depth payload.",
+                "read_error": "Avanza could not provide order-depth data. Retry later.",
+            }
+            if code in safe_messages:
+                raise ToolError(safe_messages[code]) from None
+            session_code = _safe_session_diagnostic(code)
+            if session_code is not None:
+                raise ToolError(
+                    "Avanza could not validate the authenticated session. "
+                    f"Safe diagnostic: session_validation_{session_code}."
+                ) from None
+            broker_code = _SAFE_BROKER_DIAGNOSTICS.get(code)
+            if broker_code is not None:
+                raise ToolError(
+                    "Avanza could not provide order-depth data. "
+                    f"Safe diagnostic: {broker_code}."
+                ) from None
+            raise ToolError("Avanza could not provide order-depth data.") from None
+
+        try:
+            return LiveOrderDepth.model_validate(raw)
+        except (ValidationError, TypeError, ValueError) as exc:
+            diagnostic = _safe_model_validation_diagnostic(exc)
+            raise ToolError(
+                "Avanza returned invalid order-depth data. "
+                f"Safe diagnostic: server_validation_{diagnostic}."
+            ) from None
 
     @server.tool(annotations=_READ_TOOL)
     async def get_accounts() -> Accounts:
