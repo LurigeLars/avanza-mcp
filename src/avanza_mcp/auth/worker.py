@@ -35,7 +35,8 @@ _MARKET_BATCH_CONCURRENCY = 16
 _MARKET_BATCH_MIN_REQUEST_INTERVAL = 0.05
 _MARKET_SESSION_REVALIDATE_SECONDS = 15 * 60
 _ORDER_DEPTH_TIMEOUT_SECONDS = 3.0
-_MEMORY_ONLY_IDLE_SECONDS = 15 * 60
+_MEMORY_ONLY_IDLE_SECONDS = 60 * 60
+_MEMORY_ONLY_ABSOLUTE_SECONDS = 16 * 60 * 60
 _ONE_SHOT_IDLE_SECONDS = 5 * 60
 _TERMINAL_STATES = frozenset({"connected", "disconnected", "denied", "timed_out", "error"})
 _ALLOWED_ACCOUNT_OPERATIONS = frozenset(
@@ -856,14 +857,33 @@ async def _run_persistent_market_daemon(parent_pid: int) -> None:
             await client.__aexit__(None, None, None)
 
 
+def _daemon_session_expired(
+    *,
+    mode: str,
+    now: float,
+    last_activity: float | None,
+    session_started_at: float | None,
+) -> bool:
+    if last_activity is not None:
+        idle_seconds = (
+            _MEMORY_ONLY_IDLE_SECONDS
+            if mode == "memory_only"
+            else _ONE_SHOT_IDLE_SECONDS
+        )
+        if now - last_activity >= idle_seconds:
+            return True
+
+    return (
+        mode == "memory_only"
+        and session_started_at is not None
+        and now - session_started_at >= _MEMORY_ONLY_ABSOLUTE_SECONDS
+    )
+
+
 async def _run_daemon(mode: str, parent_pid: int) -> None:
     if mode not in {"memory_only", "one_shot"}:
         _emit({"ok": False, "code": "invalid_mode"})
         return
-
-    idle_seconds = (
-        _MEMORY_ONLY_IDLE_SECONDS if mode == "memory_only" else _ONE_SHOT_IDLE_SECONDS
-    )
     auth = BrowserAuth(
         store=None,
         session_idle_seconds=_INTERNAL_BROWSER_IDLE_SECONDS,
@@ -872,22 +892,30 @@ async def _run_daemon(mode: str, parent_pid: int) -> None:
     loop = asyncio.get_running_loop()
     _start_stdin_reader(loop, queue)
     last_activity: float | None = None
+    session_started_at: float | None = None
 
     try:
         while True:
+            now = time.monotonic()
             if not _parent_alive(parent_pid):
                 if auth.session is not None:
                     await auth.disconnect()
                 return
 
-            if auth.session is not None and last_activity is None:
-                last_activity = time.monotonic()
-            if auth.session is None:
+            if auth.session is not None:
+                if last_activity is None:
+                    last_activity = now
+                if session_started_at is None:
+                    session_started_at = now
+            else:
                 last_activity = None
-            if (
-                auth.session is not None
-                and last_activity is not None
-                and time.monotonic() - last_activity >= idle_seconds
+                session_started_at = None
+
+            if auth.session is not None and _daemon_session_expired(
+                mode=mode,
+                now=now,
+                last_activity=last_activity,
+                session_started_at=session_started_at,
             ):
                 await auth.disconnect()
                 return
@@ -965,7 +993,11 @@ async def _run_daemon(mode: str, parent_pid: int) -> None:
 
             _emit({"ok": False, "code": "operation_not_allowed"})
     finally:
-        await auth.aclose()
+        try:
+            if auth.session is not None:
+                await auth.disconnect()
+        finally:
+            await auth.aclose()
 
 
 async def _read_first_command() -> dict[str, Any] | None:

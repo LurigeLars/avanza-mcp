@@ -202,7 +202,7 @@ included Scheduled Task installer:
 pwsh -File .\scripts\windows\install-public-http-task.ps1
 ```
 
-The default session mode is `persistent`. To choose a stricter mode when installing
+The default session mode is `memory_only`. To choose another mode when installing
 or replacing the task:
 
 ```powershell
@@ -301,14 +301,15 @@ an upstream Avanza property and is not fabricated by the MCP.
 
 Three session modes are available:
 
-- `persistent` (default): the verified Avanza session is stored in the native OS
+- `persistent`: the verified Avanza session is stored in the native OS
   credential store. Each authenticated operation starts a short-lived worker, which
   loads the session once and runs session validation concurrently with the approved
   read. The result is released only after validation succeeds; refreshed material is
   persisted only when it changed. The worker then closes its HTTP clients and exits.
-- `memory_only`: no reusable Avanza session is written to the OS credential store.
-  A dedicated isolated worker keeps the session only in its process memory and performs
-  remote logout plus exits after 15 minutes without an authenticated read-only operation.
+- `memory_only` (default): no reusable Avanza session is written to the OS credential
+  store. A dedicated isolated worker keeps the session only in its process memory,
+  performs remote logout after 60 minutes without an authenticated read-only operation,
+  and enforces a non-sliding 16-hour absolute lifetime from session establishment.
 - `one_shot`: no persistent session is written. After BankID, the isolated worker
   permits one explicit authenticated account workflow, performs remote logout, and exits.
   If unused, it logs out after five minutes. Approved public market-data calls may reuse

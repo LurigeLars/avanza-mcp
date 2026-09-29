@@ -207,6 +207,44 @@ def test_persistent_market_session_revalidation_is_bounded():
     assert worker._MARKET_SESSION_REVALIDATE_SECONDS == 15 * 60
 
 
+def test_memory_only_session_policy_is_60_min_idle_and_16h_absolute():
+    assert worker._MEMORY_ONLY_IDLE_SECONDS == 60 * 60
+    assert worker._MEMORY_ONLY_ABSOLUTE_SECONDS == 16 * 60 * 60
+
+
+def test_memory_only_idle_timeout_slides_with_recent_activity():
+    assert not worker._daemon_session_expired(
+        mode="memory_only",
+        now=60 * 60,
+        last_activity=30 * 60,
+        session_started_at=0,
+    )
+    assert worker._daemon_session_expired(
+        mode="memory_only",
+        now=90 * 60,
+        last_activity=30 * 60,
+        session_started_at=0,
+    )
+
+
+def test_memory_only_absolute_timeout_never_slides_with_activity():
+    assert worker._daemon_session_expired(
+        mode="memory_only",
+        now=16 * 60 * 60,
+        last_activity=(16 * 60 * 60) - 1,
+        session_started_at=0,
+    )
+
+
+def test_one_shot_does_not_inherit_memory_only_absolute_timeout():
+    assert not worker._daemon_session_expired(
+        mode="one_shot",
+        now=16 * 60 * 60,
+        last_activity=(16 * 60 * 60) - 1,
+        session_started_at=0,
+    )
+
+
 def test_authenticated_market_batch_pacing_is_50ms():
     assert worker._MARKET_BATCH_MIN_REQUEST_INTERVAL == 0.05
 
@@ -403,3 +441,45 @@ def test_emit_uses_dedicated_protocol_stream(monkeypatch):
 
     assert ordinary.getvalue() == ""
     assert json.loads(protocol.getvalue()) == {"ok": True, "result": {"value": 1}}
+
+
+async def test_memory_daemon_fail_safe_disconnects_on_unexpected_error(monkeypatch):
+    session = SessionMaterial((), "token")
+    instances = []
+
+    class FakeBrowserAuth:
+        def __init__(self, *args, **kwargs):
+            self.session = None
+            self.disconnect_calls = 0
+            self.close_calls = 0
+            instances.append(self)
+
+        async def open_browser(self):
+            self.session = session
+            raise RuntimeError("synthetic failure")
+
+        async def disconnect(self):
+            self.disconnect_calls += 1
+            self.session = None
+            return None
+
+        async def aclose(self):
+            self.close_calls += 1
+
+    def feed(loop, queue):
+        loop.call_soon(queue.put_nowait, json.dumps({"action": "connect"}))
+
+    monkeypatch.setattr(worker, "BrowserAuth", FakeBrowserAuth)
+    monkeypatch.setattr(worker, "_start_stdin_reader", feed)
+    monkeypatch.setattr(worker, "_parent_alive", lambda _pid: True)
+
+    try:
+        await worker._run_daemon("memory_only", 123)
+    except RuntimeError as exc:
+        assert str(exc) == "synthetic failure"
+    else:
+        raise AssertionError("expected synthetic failure")
+
+    assert len(instances) == 1
+    assert instances[0].disconnect_calls == 1
+    assert instances[0].close_calls == 1

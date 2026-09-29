@@ -1,7 +1,7 @@
 param(
     [string]$TaskName = "AvanzaMcpHttpServer",
     [ValidateSet("persistent", "memory_only", "one_shot")]
-    [string]$SessionMode = "persistent"
+    [string]$SessionMode = "memory_only"
 )
 
 $ErrorActionPreference = "Stop"

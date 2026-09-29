@@ -20,6 +20,14 @@ def test_http_launcher_runs_authenticated_fastmcp_in_process() -> None:
     assert "fastmcp.exe" not in source
 
 
+def test_http_launcher_and_installer_default_to_memory_only() -> None:
+    launcher = (WINDOWS / "run-public-http-hidden.py").read_text(encoding="utf-8")
+    installer = (WINDOWS / "install-public-http-task.ps1").read_text(encoding="utf-8")
+
+    assert 'os.environ.get("AVANZA_SESSION_MODE", "memory_only")' in launcher
+    assert '[string]$SessionMode = "memory_only"' in installer
+
+
 def test_local_gateway_uses_dedicated_port_auth_surface_and_kill_on_close_job() -> None:
     source = (WINDOWS / "run-local-gateway-hidden.py").read_text(encoding="utf-8")
     helper = (WINDOWS / "_job_process.py").read_text(encoding="utf-8")
