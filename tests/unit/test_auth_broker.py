@@ -14,9 +14,9 @@ from avanza_mcp.auth.broker import (
 )
 
 
-def test_session_mode_defaults_to_persistent(monkeypatch):
+def test_session_mode_defaults_to_memory_only(monkeypatch):
     monkeypatch.delenv("AVANZA_SESSION_MODE", raising=False)
-    assert session_mode_from_environment() == "persistent"
+    assert session_mode_from_environment() == "memory_only"
 
 
 @pytest.mark.parametrize("mode", ["persistent", "memory_only", "one_shot"])
