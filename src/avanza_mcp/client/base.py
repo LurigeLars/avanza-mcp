@@ -2,6 +2,7 @@
 
 import asyncio
 import copy
+import json
 import logging
 import re
 import math
@@ -25,6 +26,7 @@ from tenacity import (
 
 from .. import __version__
 from .endpoints import (
+    AuthenticatedMarketEndpoint,
     authenticated_public_request_allowed,
     authenticated_public_request_family,
 )
@@ -90,14 +92,147 @@ def _project_mapping(value: Any, fields: frozenset[str]) -> dict[str, Any]:
     return {key: value[key] for key in fields if key in value}
 
 
+def _project_rest_order_depth(value: Any) -> dict[str, Any]:
+    """Project nested REST order depth to a credential-free allowlist."""
+    root = _project_mapping(
+        value,
+        frozenset(
+            {
+                "receivedTime",
+                "levels",
+                "marketMakerExpected",
+                "marketMakerLevelInAsk",
+                "marketMakerLevelInBid",
+            }
+        ),
+    )
+    levels = root.get("levels", [])
+    if not isinstance(levels, list):
+        raise ValueError("Expected authenticated order-depth levels")
+    projected_levels: list[dict[str, Any]] = []
+    for level in levels:
+        projected = _project_mapping(level, frozenset({"buySide", "sellSide"}))
+        for side in ("buySide", "sellSide"):
+            if side in projected and projected[side] is not None:
+                projected[side] = _project_mapping(
+                    projected[side], _AUTH_ORDER_SIDE_FIELDS
+                )
+        projected_levels.append(projected)
+    root["levels"] = projected_levels
+    return root
+
+
+def _depth_number(value: Any, field: str) -> float | None:
+    if value is None:
+        return None
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value < 0
+    ):
+        raise ValueError(f"Invalid {field}")
+    return float(value)
+
+
+def _project_sse_side(
+    level: dict[str, Any], price_field: str, volume_field: str
+) -> tuple[float | None, float | None]:
+    price = _depth_number(level.get(price_field), price_field)
+    volume = _depth_number(level.get(volume_field), volume_field)
+
+    # Avanza's live feed has been observed encoding an absent side as 0/0.
+    # Normalize that sentinel to null/null rather than exposing a fictitious order.
+    if (price is None or price == 0) and (volume is None or volume == 0):
+        return None, None
+    if price is None or volume is None or price <= 0 or volume <= 0:
+        raise ValueError("Incomplete order-depth side")
+    return price, volume
+
+
+def _optional_nonnegative_int(value: Any, field: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"Invalid {field}")
+    if not math.isfinite(value) or value < 0 or int(value) != value:
+        raise ValueError(f"Invalid {field}")
+    return int(value)
+
+
+def _optional_market_maker_level(value: Any, field: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"Invalid {field}")
+    if not math.isfinite(value) or int(value) != value:
+        raise ValueError(f"Invalid {field}")
+    parsed = int(value)
+    return parsed if parsed >= 0 else None
+
+
+def _project_sse_order_depth_payload(
+    value: Any, *, order_book_id: str, max_levels: int
+) -> dict[str, Any]:
+    """Strictly project one flat ORDER_DEPTH SSE snapshot."""
+    if not isinstance(value, dict):
+        raise ValueError("Expected ORDER_DEPTH object")
+
+    observed_id = value.get("orderbookId")
+    if isinstance(observed_id, bool):
+        raise ValueError("Invalid orderbookId")
+    observed_id = str(observed_id) if observed_id is not None else ""
+    if observed_id != order_book_id:
+        raise ValueError("ORDER_DEPTH orderbookId mismatch")
+
+    levels = value.get("levels")
+    if not isinstance(levels, list):
+        raise ValueError("Expected ORDER_DEPTH levels")
+
+    projected_levels: list[dict[str, Any]] = []
+    for level in levels[:max_levels]:
+        if not isinstance(level, dict):
+            raise ValueError("Invalid ORDER_DEPTH level")
+        buy_price, buy_volume = _project_sse_side(
+            level, "buyPrice", "buyVolume"
+        )
+        sell_price, sell_volume = _project_sse_side(
+            level, "sellPrice", "sellVolume"
+        )
+        projected_levels.append(
+            {
+                "buyPrice": buy_price,
+                "buyVolume": buy_volume,
+                "sellPrice": sell_price,
+                "sellVolume": sell_volume,
+            }
+        )
+
+    return {
+        "orderBookId": order_book_id,
+        "receivedTime": _optional_nonnegative_int(
+            value.get("receivedTime"), "receivedTime"
+        ),
+        "levels": projected_levels,
+        "marketMakerLevelInAsk": _optional_market_maker_level(
+            value.get("marketMakerLevelInAsk"), "marketMakerLevelInAsk"
+        ),
+        "marketMakerLevelInBid": _optional_market_maker_level(
+            value.get("marketMakerLevelInBid"), "marketMakerLevelInBid"
+        ),
+    }
+
+
 def _project_authenticated_market_payload(kind: str, value: Any) -> Any:
     """Strictly project authenticated market responses to known public fields."""
     if kind == "quote":
         return _project_mapping(value, _AUTH_QUOTE_FIELDS)
 
     if kind == "marketdata":
-        root = _project_mapping(value, frozenset({"quote"}))
+        root = _project_mapping(value, frozenset({"quote", "orderDepth"}))
         root["quote"] = _project_mapping(root.get("quote"), _AUTH_QUOTE_FIELDS)
+        if "orderDepth" in root:
+            root["orderDepth"] = _project_rest_order_depth(root["orderDepth"])
         return root
 
     if kind == "trades":
@@ -106,21 +241,7 @@ def _project_authenticated_market_payload(kind: str, value: Any) -> Any:
         return [_project_mapping(item, _AUTH_TRADE_FIELDS) for item in value]
 
     if kind == "orderdepth":
-        root = _project_mapping(value, frozenset({"receivedTime", "levels"}))
-        levels = root.get("levels", [])
-        if not isinstance(levels, list):
-            raise ValueError("Expected authenticated order-depth levels")
-        projected_levels: list[dict[str, Any]] = []
-        for level in levels:
-            projected = _project_mapping(level, frozenset({"buySide", "sellSide"}))
-            for side in ("buySide", "sellSide"):
-                if side in projected and projected[side] is not None:
-                    projected[side] = _project_mapping(
-                        projected[side], _AUTH_ORDER_SIDE_FIELDS
-                    )
-            projected_levels.append(projected)
-        root["levels"] = projected_levels
-        return root
+        return _project_rest_order_depth(value)
 
     raise ValueError("Unapproved authenticated market response")
 
@@ -656,6 +777,136 @@ class AvanzaClient:
             path,
             params=params,
             require_authenticated=True,
+        )
+
+    async def get_authenticated_order_depth_snapshot(
+        self,
+        order_book_id: str,
+        *,
+        max_levels: int = 10,
+        timeout: float = 3.0,
+    ) -> dict[str, Any]:
+        """Read the first valid ORDER_DEPTH SSE snapshot through the auth session."""
+        if (
+            not order_book_id
+            or not order_book_id.isascii()
+            or not order_book_id.isdecimal()
+        ):
+            raise ValueError("Order-book id must contain only ASCII numeric digits")
+        if (
+            not isinstance(max_levels, int)
+            or isinstance(max_levels, bool)
+            or not 1 <= max_levels <= 50
+        ):
+            raise ValueError("max_levels must be an integer between 1 and 50")
+        if not math.isfinite(timeout) or timeout <= 0 or timeout > 10:
+            raise ValueError("timeout must be finite and between 0 and 10 seconds")
+
+        path = AuthenticatedMarketEndpoint.ORDER_DEPTH_PUSH.format(id=order_book_id)
+        self._require_same_origin_authenticated_path(path)
+        if (
+            self._session_provider is None
+            or self._base_url.rstrip("/") != self.DEFAULT_BASE_URL
+        ):
+            raise AvanzaAuthError("No authenticated Avanza session is available")
+
+        headers = {
+            "Accept": "text/event-stream",
+            "Accept-Language": "en-US,en;q=0.6",
+            "aza-do-not-touch-session": "true",
+            "Cache-Control": "no-cache",
+            "Content-Type": "application/json",
+            "Pragma": "no-cache",
+            "Referer": (
+                f"https://www.avanza.se/handla/order.html/kop/{order_book_id}"
+            ),
+        }
+
+        def parse_snapshot(event: str, data_lines: list[str]) -> dict[str, Any] | None:
+            if event != "ORDER_DEPTH":
+                return None
+            try:
+                payload = json.loads("\n".join(data_lines))
+            except json.JSONDecodeError as error:
+                raise ValueError("Malformed ORDER_DEPTH JSON") from error
+            return _project_sse_order_depth_payload(
+                payload,
+                order_book_id=order_book_id,
+                max_levels=max_levels,
+            )
+
+        async with self._request_semaphore:
+            await self._pace_request_start()
+            async with self._client_lock:
+                session = self._session_provider()
+                if session is None:
+                    raise AvanzaAuthError(
+                        "No authenticated Avanza session is available"
+                    )
+                auth_client = await self._ensure_authenticated_client_locked(session)
+
+                try:
+                    async with asyncio.timeout(timeout):
+                        async with auth_client.stream(
+                            "GET", path, headers=headers
+                        ) as response:
+                            if response.status_code in (401, 403):
+                                if self._session_invalidated is not None:
+                                    await self._session_invalidated()
+                                raise AvanzaAuthError(
+                                    "Authenticated order-depth stream was denied"
+                                )
+                            if response.status_code == 429:
+                                self._note_rate_limit(None)
+                                raise AvanzaRateLimitError(
+                                    None, "Authenticated order-depth stream rate limited"
+                                )
+                            if response.status_code != 200:
+                                raise AvanzaAPIError(
+                                    response.status_code,
+                                    "Authenticated order-depth stream failed",
+                                )
+
+                            event = ""
+                            data_lines: list[str] = []
+                            async for line in response.aiter_lines():
+                                if line == "":
+                                    snapshot = parse_snapshot(event, data_lines)
+                                    if snapshot is not None:
+                                        return snapshot
+                                    event = ""
+                                    data_lines = []
+                                    continue
+                                if line.startswith(":"):
+                                    continue
+                                field, separator, raw_value = line.partition(":")
+                                if not separator:
+                                    raw_value = ""
+                                elif raw_value.startswith(" "):
+                                    raw_value = raw_value[1:]
+                                if field == "event":
+                                    event = raw_value.strip()
+                                elif field == "data":
+                                    data_lines.append(raw_value)
+
+                            snapshot = parse_snapshot(event, data_lines)
+                            if snapshot is not None:
+                                return snapshot
+                except TimeoutError as error:
+                    raise AvanzaTimeoutError(
+                        "Order-depth stream timed out before ORDER_DEPTH"
+                    ) from error
+                except httpx.TimeoutException as error:
+                    raise AvanzaTimeoutError(
+                        "Order-depth stream timed out before ORDER_DEPTH"
+                    ) from error
+                except httpx.HTTPError as error:
+                    raise AvanzaNetworkError(
+                        "Order-depth stream failed before ORDER_DEPTH"
+                    ) from error
+
+        raise AvanzaNetworkError(
+            "Order-depth stream closed before an ORDER_DEPTH snapshot"
         )
 
     async def get_authenticated_market_data_batch(
