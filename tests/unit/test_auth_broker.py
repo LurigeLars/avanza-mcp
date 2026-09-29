@@ -223,7 +223,7 @@ async def test_persistent_order_depth_cancellation_stops_market_worker(monkeypat
     await started.wait()
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await task
+        _ = await task
 
     assert broker._market_daemon is None
     stop.assert_awaited_once_with(process)

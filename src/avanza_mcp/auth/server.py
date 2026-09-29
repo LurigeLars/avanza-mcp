@@ -133,6 +133,7 @@ def create_auth_server(broker: AuthProcessBroker | None = None) -> FastMCP:
             try:
                 await warm_task
             except asyncio.CancelledError:
+                # Expected during lifespan teardown after cancelling the warm-up task.
                 pass
             try:
                 await broker.aclose()

@@ -486,6 +486,7 @@ class InstrumentCatalog:
                         if rows:
                             return [self._row_to_dict(row) for row in rows]
                     except sqlite3.OperationalError:
+                        # FTS5 can be unavailable or reject syntax; fall back to LIKE below.
                         pass
 
             tokens = re.findall(r"[\w.-]+", text, flags=re.UNICODE) or [text]
