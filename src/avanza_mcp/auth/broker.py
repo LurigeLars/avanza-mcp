@@ -56,7 +56,7 @@ class AuthWorkerOperationError(AuthWorkerError):
 
 
 def session_mode_from_environment() -> SessionMode:
-    value = os.environ.get("AVANZA_SESSION_MODE", "persistent").strip().lower()
+    value = os.environ.get("AVANZA_SESSION_MODE", "memory_only").strip().lower()
     if value not in SESSION_MODES:
         allowed = ", ".join(sorted(SESSION_MODES))
         raise RuntimeError(f"AVANZA_SESSION_MODE must be one of: {allowed}")
