@@ -19,7 +19,7 @@ from avanza_mcp.auth.server import create_auth_server
 from avanza_mcp.client.bankid import SessionMaterial
 from avanza_mcp.client.base import (
     AvanzaClient,
-    _project_authenticated_market_payload,
+    _project_rest_order_depth,
 )
 from avanza_mcp.client.exceptions import (
     AvanzaAuthError,
@@ -343,35 +343,9 @@ async def test_order_depth_projection_cannot_leak_auth_or_session_fields():
     assert "cookies" not in serialized
 
 
-def test_marketdata_projection_retains_safe_order_depth_only():
-    projected = _project_authenticated_market_payload(
-        "marketdata",
+def test_reusable_rest_order_depth_projection_strips_sensitive_fields():
+    projected = _project_rest_order_depth(
         {
-            "quote": {"buy": 10, "sell": 10.1, "securityToken": "must-not-leak"},
-            "orderDepth": {
-                "receivedTime": 123,
-                "marketMakerExpected": True,
-                "levels": [
-                    {
-                        "buySide": {
-                            "price": 10,
-                            "volume": 100,
-                            "priceString": "10.00",
-                            "accountId": "must-not-leak",
-                        },
-                        "sellSide": None,
-                        "cookies": ["must-not-leak"],
-                    }
-                ],
-                "sessionId": "must-not-leak",
-            },
-            "accountId": "must-not-leak",
-        },
-    )
-
-    assert projected == {
-        "quote": {"buy": 10, "sell": 10.1},
-        "orderDepth": {
             "receivedTime": 123,
             "marketMakerExpected": True,
             "levels": [
@@ -380,11 +354,29 @@ def test_marketdata_projection_retains_safe_order_depth_only():
                         "price": 10,
                         "volume": 100,
                         "priceString": "10.00",
+                        "accountId": "must-not-leak",
                     },
                     "sellSide": None,
+                    "cookies": ["must-not-leak"],
                 }
             ],
-        },
+            "sessionId": "must-not-leak",
+        }
+    )
+
+    assert projected == {
+        "receivedTime": 123,
+        "marketMakerExpected": True,
+        "levels": [
+            {
+                "buySide": {
+                    "price": 10,
+                    "volume": 100,
+                    "priceString": "10.00",
+                },
+                "sellSide": None,
+            }
+        ],
     }
     assert "must-not-leak" not in json.dumps(projected)
 
