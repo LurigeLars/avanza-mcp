@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 from pydantic import Field
 
 from ..client.base import AvanzaClient
-from ..client.exceptions import AvanzaAuthError, AvanzaError, AvanzaNotFoundError
+from ..client.exceptions import AvanzaAuthError, AvanzaError
 from ..instrument_catalog import InstrumentCatalog, fresh_default_instrument_catalog
 from ..models.certificate import CertificateFilter, CertificateFilterRequest
 from ..models.filter import SortBy
