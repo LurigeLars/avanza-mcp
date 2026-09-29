@@ -19,7 +19,7 @@ test('default allowlist is the single authenticated read-only Avanza surface', (
   assert.equal(allowed.has('get_accounts'), true);
   assert.equal(allowed.has('get_stop_loss_orders'), true);
   assert.equal(allowed.has('future_place_order'), false);
-  assert.equal(ALL_ALLOWED_TOOLS.split(',').length, 52);
+  assert.equal(ALL_ALLOWED_TOOLS.split(',').length, 53);
 });
 
 test('legacy authenticated profile token maps to the same single surface', () => {
