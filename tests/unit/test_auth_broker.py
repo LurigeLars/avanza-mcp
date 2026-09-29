@@ -1,5 +1,6 @@
 """Policy tests for the credential-isolating auth broker."""
 
+import asyncio
 import json
 
 import pytest
@@ -194,6 +195,39 @@ async def test_persistent_market_requests_reuse_one_market_daemon(monkeypatch):
     finally:
         broker._market_daemon = None
         await broker.aclose()
+
+
+async def test_persistent_order_depth_cancellation_stops_market_worker(monkeypatch):
+    broker = AuthProcessBroker(mode="persistent")
+    process = _ReusableMarketProcess()
+    started = asyncio.Event()
+    blocker = asyncio.Event()
+
+    async def blocked_command(active_process, command, timeout=90.0):
+        assert active_process is process
+        assert command == {
+            "action": "order_depth",
+            "order_book_id": "741117",
+            "max_levels": 10,
+        }
+        started.set()
+        await blocker.wait()
+
+    spawn = AsyncMock(return_value=process)
+    stop = AsyncMock()
+    monkeypatch.setattr(broker, "_spawn", spawn)
+    monkeypatch.setattr(broker, "_command", blocked_command)
+    monkeypatch.setattr(broker, "_stop_process", stop)
+
+    task = asyncio.create_task(broker.order_depth_snapshot("741117"))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert broker._market_daemon is None
+    stop.assert_awaited_once_with(process)
+    await broker.aclose()
 
 
 async def test_persistent_account_stops_reusable_market_daemon(monkeypatch):

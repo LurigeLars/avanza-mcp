@@ -86,6 +86,7 @@ class AuthenticatedMarketEndpoint(Enum):
     """Reviewed read-only endpoints that require an authenticated Avanza session."""
 
     TRADING_CRITICAL_MARKET_DATA = "/_api/trading-critical/rest/marketdata/{id}"
+    ORDER_DEPTH_PUSH = "/_push/order-depth-web-push/{id}"
 
     def format(self, **kwargs: str | int) -> str:
         if "id" in kwargs:

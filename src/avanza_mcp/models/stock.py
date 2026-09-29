@@ -293,3 +293,22 @@ class OrderDepth(AvanzaModel):
 
     receivedTime: int | None = None  # May be None when market is closed
     levels: list[OrderLevel] = []  # Empty list when no order book data available
+
+
+class LiveOrderDepthLevel(AvanzaModel):
+    """One flattened bid/ask level from Avanza's ORDER_DEPTH SSE snapshot."""
+
+    buyPrice: float | None
+    buyVolume: float | None
+    sellPrice: float | None
+    sellVolume: float | None
+
+
+class LiveOrderDepth(AvanzaModel):
+    """First bounded snapshot from Avanza's authenticated order-depth SSE stream."""
+
+    orderBookId: str
+    receivedTime: int | None
+    levels: list[LiveOrderDepthLevel]
+    marketMakerLevelInAsk: int | None
+    marketMakerLevelInBid: int | None

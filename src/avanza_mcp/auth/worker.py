@@ -20,7 +20,13 @@ from ..client.base import (
     _project_authenticated_market_payload,
 )
 from ..client.endpoints import authenticated_public_request_allowed
-from ..client.exceptions import AvanzaAuthError
+from ..client.exceptions import (
+    AvanzaAPIError,
+    AvanzaAuthError,
+    AvanzaNetworkError,
+    AvanzaRateLimitError,
+    AvanzaTimeoutError,
+)
 from .browser import AuthStatus, BrowserAuth
 from .store import AuthStoreError, create_session_store
 
@@ -28,6 +34,7 @@ _INTERNAL_BROWSER_IDLE_SECONDS = 365 * 24 * 60 * 60
 _MARKET_BATCH_CONCURRENCY = 16
 _MARKET_BATCH_MIN_REQUEST_INTERVAL = 0.05
 _MARKET_SESSION_REVALIDATE_SECONDS = 15 * 60
+_ORDER_DEPTH_TIMEOUT_SECONDS = 3.0
 _MEMORY_ONLY_IDLE_SECONDS = 15 * 60
 _ONE_SHOT_IDLE_SECONDS = 5 * 60
 _TERMINAL_STATES = frozenset({"connected", "disconnected", "denied", "timed_out", "error"})
@@ -429,6 +436,60 @@ async def _market_operation(
         return await execute(transient_client)
 
 
+async def _order_depth_operation(
+    auth: BrowserAuth | _RequestAuth,
+    command: dict[str, Any],
+    client: AvanzaClient | None = None,
+) -> dict[str, Any]:
+    """Read one bounded ORDER_DEPTH event without exposing session material."""
+    if auth.session is None:
+        return {"ok": False, "code": "no_session"}
+
+    try:
+        order_book_id = _numeric_order_book_id(command["order_book_id"])
+        max_levels = _bounded_int(
+            command.get("max_levels"), default=10, minimum=1, maximum=50
+        )
+    except (KeyError, TypeError, ValueError):
+        return {"ok": False, "code": "protocol_error"}
+
+    async def execute(active_client: AvanzaClient) -> dict[str, Any]:
+        try:
+            result = await active_client.get_authenticated_order_depth_snapshot(
+                order_book_id,
+                max_levels=max_levels,
+                timeout=_ORDER_DEPTH_TIMEOUT_SECONDS,
+            )
+        except AvanzaAuthError:
+            await auth.invalidate_session()
+            return {"ok": False, "code": "auth_expired"}
+        except AvanzaTimeoutError:
+            return {"ok": False, "code": "read_timeout"}
+        except AvanzaNetworkError:
+            return {"ok": False, "code": "read_disconnect"}
+        except AvanzaRateLimitError:
+            return {"ok": False, "code": "read_rate_limited"}
+        except (ValueError, TypeError):
+            return {"ok": False, "code": "read_error_response_shape"}
+        except AvanzaAPIError:
+            return {"ok": False, "code": "read_error"}
+        except Exception:
+            return {"ok": False, "code": "read_error"}
+
+        if _contains_forbidden_market_result(result):
+            return {"ok": False, "code": "unsafe_upstream_payload"}
+        return {"ok": True, "result": result}
+
+    if client is not None:
+        return await execute(client)
+
+    async with AvanzaClient(
+        session_provider=lambda: auth.session,
+        session_invalidated=auth.invalidate_session,
+    ) as transient_client:
+        return await execute(transient_client)
+
+
 async def _market_batch_operation(
     auth: BrowserAuth | _RequestAuth,
     command: dict[str, Any],
@@ -520,7 +581,7 @@ async def _run_once(command: dict[str, Any]) -> None:
         if not isinstance(operation, str) or not isinstance(arguments, dict):
             _emit({"ok": False, "code": "protocol_error"})
             return
-    elif action not in {"market", "market_batch"}:
+    elif action not in {"market", "market_batch", "order_depth"}:
         _emit({"ok": False, "code": "operation_not_allowed"})
         return
 
@@ -542,6 +603,10 @@ async def _run_once(command: dict[str, Any]) -> None:
     elif action == "market_batch":
         operation_task = asyncio.create_task(
             _market_batch_operation(request_auth, command)
+        )
+    elif action == "order_depth":
+        operation_task = asyncio.create_task(
+            _order_depth_operation(request_auth, command)
         )
     else:
         operation_task = asyncio.create_task(_market_operation(request_auth, command))
@@ -581,6 +646,8 @@ async def _run_once(command: dict[str, Any]) -> None:
             result = await _account_operation(retry_auth, operation, arguments)
         elif action == "market_batch":
             result = await _market_batch_operation(retry_auth, command)
+        elif action == "order_depth":
+            result = await _order_depth_operation(retry_auth, command)
         else:
             result = await _market_operation(retry_auth, command)
 
@@ -746,7 +813,7 @@ async def _run_persistent_market_daemon(parent_pid: int) -> None:
             if action == "shutdown":
                 _emit({"ok": True})
                 return
-            if action not in {"warm", "market", "market_batch"}:
+            if action not in {"warm", "market", "market_batch", "order_depth"}:
                 _emit({"ok": False, "code": "operation_not_allowed"})
                 continue
 
@@ -765,6 +832,8 @@ async def _run_persistent_market_daemon(parent_pid: int) -> None:
             previous_session = auth.session
             if action == "market_batch":
                 result = await _market_batch_operation(auth, command, client)
+            elif action == "order_depth":
+                result = await _order_depth_operation(auth, command, client)
             else:
                 result = await _market_operation(auth, command, client)
 
@@ -774,6 +843,8 @@ async def _run_persistent_market_daemon(parent_pid: int) -> None:
                 if error is None and auth is not None and client is not None:
                     if action == "market_batch":
                         result = await _market_batch_operation(auth, command, client)
+                    elif action == "order_depth":
+                        result = await _order_depth_operation(auth, command, client)
                     else:
                         result = await _market_operation(auth, command, client)
                 else:
@@ -881,6 +952,12 @@ async def _run_daemon(mode: str, parent_pid: int) -> None:
                 continue
             if action == "market_batch":
                 response = await _market_batch_operation(auth, command)
+                if response.get("ok") is True and mode == "memory_only":
+                    last_activity = time.monotonic()
+                _emit(response)
+                continue
+            if action == "order_depth":
+                response = await _order_depth_operation(auth, command)
                 if response.get("ok") is True and mode == "memory_only":
                     last_activity = time.monotonic()
                 _emit(response)

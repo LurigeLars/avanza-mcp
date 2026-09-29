@@ -316,6 +316,59 @@ class AuthProcessBroker:
         )
         return None
 
+    async def order_depth_snapshot(
+        self, order_book_id: str, max_levels: int = 10
+    ) -> dict[str, Any]:
+        """Read one live multi-level order-depth snapshot in the isolated worker."""
+        self._ensure_open()
+        if (
+            not order_book_id
+            or not order_book_id.isascii()
+            or not order_book_id.isdecimal()
+        ):
+            raise AuthWorkerOperationError("Invalid order_book_id")
+        if (
+            not isinstance(max_levels, int)
+            or isinstance(max_levels, bool)
+            or not 1 <= max_levels <= 50
+        ):
+            raise AuthWorkerOperationError("Invalid max_levels")
+
+        command = {
+            "action": "order_depth",
+            "order_book_id": order_book_id,
+            "max_levels": max_levels,
+        }
+        async with self._operation_lock:
+            if self.mode == "persistent":
+                if self._persistent_disconnect_active():
+                    raise AuthWorkerOperationError("Disconnect confirmation is pending")
+                response = await self._persistent_market_command(command)
+            else:
+                async with self._daemon_lock:
+                    process = self._live_daemon()
+                    if process is None:
+                        raise AuthWorkerRequired
+                    status_response = await self._command(process, {"action": "status"})
+                    status = self._status_from_response(status_response)
+                    if status.state == "awaiting_disconnect":
+                        raise AuthWorkerOperationError(
+                            "Disconnect confirmation is pending"
+                        )
+                    if status.state != "connected":
+                        raise AuthWorkerRequired
+                    try:
+                        response = await self._command(process, command)
+                    except asyncio.CancelledError:
+                        if self._daemon is process:
+                            self._daemon = None
+                        await self._stop_process(process)
+                        raise
+        result = self._result_from_response(response)
+        if not isinstance(result, dict):
+            raise AuthWorkerOperationError("Invalid order-depth result from worker")
+        return result
+
     async def aclose(self) -> None:
         if self._closed:
             return
@@ -418,6 +471,11 @@ class AuthProcessBroker:
                 self._market_daemon = process
             try:
                 return await self._command(process, command)
+            except asyncio.CancelledError:
+                if self._market_daemon is process:
+                    self._market_daemon = None
+                await self._stop_process(process)
+                raise
             except AuthWorkerOperationError:
                 if self._market_daemon is process:
                     self._market_daemon = None
