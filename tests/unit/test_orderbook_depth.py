@@ -286,7 +286,7 @@ async def test_order_depth_cancellation_closes_stream_socket():
         await stream.started.wait()
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
-            await task
+            _ = await task
 
     assert stream.closed is True
 
