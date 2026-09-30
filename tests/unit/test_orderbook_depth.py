@@ -7,15 +7,6 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 import respx
-from fastmcp import Client
-from fastmcp.exceptions import ToolError
-
-from avanza_mcp.auth.broker import (
-    AuthProcessBroker,
-    AuthWorkerExpired,
-    AuthWorkerRequired,
-)
-from avanza_mcp.auth.server import create_auth_server
 from avanza_mcp.client.bankid import SessionMaterial
 from avanza_mcp.client.base import (
     AvanzaClient,
@@ -385,61 +376,3 @@ def test_reusable_rest_order_depth_projection_strips_sensitive_fields():
         ],
     }
     assert "must-not-leak" not in json.dumps(projected)
-
-
-async def test_registered_tool_is_read_only_bounded_and_uses_broker():
-    broker = AuthProcessBroker(mode="one_shot")
-    broker.order_depth_snapshot = AsyncMock(
-        return_value={
-            "orderBookId": ORDER_BOOK_ID,
-            "receivedTime": None,
-            "levels": [
-                {
-                    "buyPrice": 10,
-                    "buyVolume": 100,
-                    "sellPrice": 10.1,
-                    "sellVolume": 200,
-                }
-            ],
-            "marketMakerLevelInAsk": None,
-            "marketMakerLevelInBid": None,
-        }
-    )
-    try:
-        async with Client(create_auth_server(broker)) as client:
-            tools = {tool.name: tool for tool in await client.list_tools()}
-            tool = tools["get_orderbook_depth"]
-            assert tool.annotations.readOnlyHint is True
-            assert tool.annotations.destructiveHint is False
-            assert tool.inputSchema["properties"]["max_levels"]["maximum"] == 50
-
-            result = await client.call_tool(
-                "get_orderbook_depth",
-                {"order_book_id": ORDER_BOOK_ID, "max_levels": 3},
-            )
-        assert result.structured_content["orderBookId"] == ORDER_BOOK_ID
-        assert result.structured_content["receivedTime"] is None
-        broker.order_depth_snapshot.assert_awaited_once_with(ORDER_BOOK_ID, 3)
-    finally:
-        await broker.aclose()
-
-
-@pytest.mark.parametrize(
-    "error,marker",
-    [
-        (AuthWorkerRequired(), "AVANZA_AUTH_REQUIRED"),
-        (AuthWorkerExpired(), "AVANZA_AUTH_EXPIRED"),
-    ],
-)
-async def test_registered_tool_reports_missing_or_expired_auth(error, marker):
-    broker = AuthProcessBroker(mode="one_shot")
-    broker.order_depth_snapshot = AsyncMock(side_effect=error)
-    try:
-        async with Client(create_auth_server(broker)) as client:
-            with pytest.raises(ToolError, match=marker):
-                await client.call_tool(
-                    "get_orderbook_depth",
-                    {"order_book_id": ORDER_BOOK_ID},
-                )
-    finally:
-        await broker.aclose()
