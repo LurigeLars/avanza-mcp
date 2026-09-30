@@ -299,6 +299,57 @@ async def test_market_batch_fetches_with_bounded_concurrency_and_preserves_order
     assert seen_concurrency == [worker._MARKET_BATCH_CONCURRENCY]
 
 
+async def test_instrument_news_batch_preserves_order_and_explicit_failures(monkeypatch):
+    from avanza_mcp.client.accounts import AccountReadError
+    from avanza_mcp.models.account import InstrumentNews, NewsArticle
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+    class FakeAccountClient:
+        def __init__(self, client):
+            assert isinstance(client, FakeClient)
+
+        async def news(self, order_book_id, limit):
+            assert limit == 3
+            if order_book_id == "2":
+                raise AccountReadError("http_500")
+            await asyncio.sleep(0)
+            return InstrumentNews(
+                articles=[
+                    NewsArticle(
+                        published_at="2026-09-30",
+                        headline=f"news-{order_book_id}",
+                    )
+                ],
+                truncated=False,
+            )
+
+    monkeypatch.setattr(worker, "AvanzaClient", FakeClient)
+    monkeypatch.setattr(worker, "AccountClient", FakeAccountClient)
+    auth = worker._RequestAuth(SessionMaterial((), "token"))
+
+    result = await worker._account_operation(
+        auth,
+        "instrument_news_batch",
+        {"order_book_ids": ["1", "2", "3"], "limit_per_instrument": 3},
+    )
+
+    assert result["ok"] is True
+    assert [item["order_book_id"] for item in result["result"]["items"]] == ["1", "3"]
+    assert [
+        item["articles"][0]["headline"] for item in result["result"]["items"]
+    ] == ["news-1", "news-3"]
+    assert result["result"]["failed_order_book_ids"] == ["2"]
+
+
 async def test_invalid_validation_discards_concurrent_success(monkeypatch, capsys):
     session = SessionMaterial((), "token")
     store = FakeStore(session)
