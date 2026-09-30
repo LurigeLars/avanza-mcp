@@ -13,6 +13,7 @@ from datetime import date
 from typing import Any, TextIO
 
 from ..client.accounts import AccountAuthExpired, AccountClient, AccountReadError
+from ..models.account import InstrumentNewsBatch, InstrumentNewsBatchItem
 from ..client.bankid import BankIDClient, BankIDError, SessionMaterial
 from ..client.base import (
     AvanzaClient,
@@ -49,6 +50,7 @@ _ALLOWED_ACCOUNT_OPERATIONS = frozenset(
         "portfolio_insights",
         "portfolio_snapshot",
         "instrument_news",
+        "instrument_news_batch",
         "insider_transactions",
         "active_orders",
         "deals",
@@ -335,6 +337,51 @@ async def _account_operation(
                     _bounded_int(
                         arguments.get("limit"), default=20, minimum=1, maximum=100
                     ),
+                )
+            elif operation == "instrument_news_batch":
+                _only_arguments(arguments, {"order_book_ids", "limit_per_instrument"})
+                raw_ids = arguments.get("order_book_ids")
+                if (
+                    not isinstance(raw_ids, list)
+                    or not 1 <= len(raw_ids) <= 100
+                ):
+                    raise ValueError
+                order_book_ids = [_numeric_order_book_id(value) for value in raw_ids]
+                if len(set(order_book_ids)) != len(order_book_ids):
+                    raise ValueError
+                limit = _bounded_int(
+                    arguments.get("limit_per_instrument"),
+                    default=5,
+                    minimum=1,
+                    maximum=20,
+                )
+                semaphore = asyncio.Semaphore(8)
+
+                async def fetch_news(order_book_id: str):
+                    async with semaphore:
+                        try:
+                            return order_book_id, await account.news(order_book_id, limit), None
+                        except AccountAuthExpired:
+                            raise
+                        except AccountReadError:
+                            return order_book_id, None, order_book_id
+
+                rows = await asyncio.gather(
+                    *(fetch_news(order_book_id) for order_book_id in order_book_ids)
+                )
+                result = InstrumentNewsBatch(
+                    items=[
+                        InstrumentNewsBatchItem(
+                            order_book_id=order_book_id,
+                            articles=news.articles,
+                            truncated=news.truncated,
+                        )
+                        for order_book_id, news, failed in rows
+                        if news is not None and failed is None
+                    ],
+                    failed_order_book_ids=[
+                        failed for _, _, failed in rows if failed is not None
+                    ],
                 )
             elif operation == "insider_transactions":
                 _only_arguments(arguments, {"order_book_id", "limit"})

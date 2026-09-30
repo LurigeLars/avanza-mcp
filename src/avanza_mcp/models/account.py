@@ -167,6 +167,17 @@ class InstrumentNews(PrivateModel):
     truncated: bool
 
 
+class InstrumentNewsBatchItem(PrivateModel):
+    order_book_id: str
+    articles: list[NewsArticle]
+    truncated: bool
+
+
+class InstrumentNewsBatch(PrivateModel):
+    items: list[InstrumentNewsBatchItem]
+    failed_order_book_ids: list[str]
+
+
 class ForumPost(PrivateModel):
     author: str
     title: str

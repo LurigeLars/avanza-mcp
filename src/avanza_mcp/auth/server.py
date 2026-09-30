@@ -28,6 +28,7 @@ from ..models.account import (
     Holdings,
     InsiderTransactions,
     InstrumentNews,
+    InstrumentNewsBatch,
     PortfolioInsights,
     PortfolioSnapshot,
     PriceAlerts,
@@ -359,6 +360,30 @@ def create_auth_server(broker: AuthProcessBroker | None = None) -> FastMCP:
             InstrumentNews,
             "Avanza could not provide instrument news. Retry later.",
             {"order_book_id": order_book_id, "limit": limit},
+        )
+
+    @server.tool(annotations=_READ_TOOL)
+    async def get_instrument_news_batch(
+        order_book_ids: list[Annotated[str, Field(pattern=r"^[0-9]+$")]],
+        limit_per_instrument: Annotated[int, Field(ge=1, le=20)] = 5,
+    ) -> InstrumentNewsBatch:
+        """Get bounded news for many instruments in one authenticated worker call.
+
+        The response preserves per-instrument identity and explicitly lists failed IDs so callers
+        can treat coverage as partial instead of assuming missing news means no news.
+        """
+        if not order_book_ids or len(order_book_ids) > 100:
+            raise ToolError("order_book_ids must contain 1 to 100 instruments")
+        if len(set(order_book_ids)) != len(order_book_ids):
+            raise ToolError("order_book_ids must be unique")
+        return await account_result(
+            "instrument_news_batch",
+            InstrumentNewsBatch,
+            "Avanza could not provide instrument news batch. Retry later.",
+            {
+                "order_book_ids": order_book_ids,
+                "limit_per_instrument": limit_per_instrument,
+            },
         )
 
     @server.tool(annotations=_READ_TOOL)

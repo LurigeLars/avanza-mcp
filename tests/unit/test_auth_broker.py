@@ -287,6 +287,7 @@ def test_worker_account_allowlist_excludes_hidden_internal_operations():
         "portfolio_insights",
         "portfolio_snapshot",
         "instrument_news",
+        "instrument_news_batch",
         "insider_transactions",
         "active_orders",
         "deals",
