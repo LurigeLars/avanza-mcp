@@ -64,7 +64,7 @@ async def test_auth_server_mounts_public_contract_and_adds_auth_tools():
     server = create_auth_server(broker)  # type: ignore[arg-type]
     async with Client(server) as client:
         tools = {tool.name for tool in await client.list_tools()}
-        assert len(tools) == 53
+        assert len(tools) == 54
         assert {
             "connect_avanza",
             "disconnect_avanza",
@@ -78,6 +78,7 @@ async def test_auth_server_mounts_public_contract_and_adds_auth_tools():
             "get_portfolio_insights",
             "get_portfolio_snapshot",
             "get_instrument_news",
+            "get_instrument_news_batch",
             "get_insider_transactions",
             "get_active_orders",
             "get_deals",
@@ -271,6 +272,43 @@ async def test_account_tool_surfaces_only_fixed_broker_diagnostics(
     async with Client(create_auth_server(DiagnosticBroker())) as client:  # type: ignore[arg-type]
         with pytest.raises(ToolError, match=rf"Safe diagnostic: {diagnostic}"):
             await client.call_tool("get_watchlists", {})
+
+
+async def test_instrument_news_batch_tool_delegates_once_and_preserves_partial_coverage():
+    broker = FakeBroker()
+    broker.account_results["instrument_news_batch"] = {
+        "items": [
+            {
+                "order_book_id": "123",
+                "articles": [
+                    {
+                        "published_at": "2026-09-30T12:00:00",
+                        "headline": "News",
+                        "summary": None,
+                        "source": "Source",
+                        "category": None,
+                        "url": "/article",
+                    }
+                ],
+                "truncated": False,
+            }
+        ],
+        "failed_order_book_ids": ["456"],
+    }
+
+    async with Client(create_auth_server(broker)) as client:  # type: ignore[arg-type]
+        result = await client.call_tool(
+            "get_instrument_news_batch",
+            {"order_book_ids": ["123", "456"], "limit_per_instrument": 5},
+        )
+
+    assert result.structured_content == broker.account_results["instrument_news_batch"]
+    assert broker.account_calls == [
+        (
+            "instrument_news_batch",
+            {"order_book_ids": ["123", "456"], "limit_per_instrument": 5},
+        )
+    ]
 
 
 async def test_portfolio_snapshot_tool_is_bounded_and_delegates_once():
