@@ -64,11 +64,12 @@ async def test_auth_server_mounts_public_contract_and_adds_auth_tools():
     server = create_auth_server(broker)  # type: ignore[arg-type]
     async with Client(server) as client:
         tools = {tool.name for tool in await client.list_tools()}
-        assert len(tools) == 53
+        assert len(tools) == 54
         assert {
             "connect_avanza",
             "disconnect_avanza",
             "get_auth_status",
+            "get_execution_quote",
             "get_accounts",
             "get_holdings",
             "get_transactions",
@@ -118,6 +119,51 @@ async def test_existing_market_tools_delegate_authenticated_request_without_sess
     assert method == "GET"
     assert path == "/_api/market-guide/stock/123/quote"
     assert kwargs.get("params") is None
+
+
+async def test_execution_quote_uses_trading_critical_projection_and_stays_compact():
+    broker = FakeBroker()
+    broker.market_response = httpx.Response(
+        200,
+        json={
+            "quote": {
+                "buy": 227.10,
+                "sell": 227.20,
+                "last": 226.90,
+                "updated": "2026-09-30T12:30:01.000",
+                "timeOfLast": "2026-09-30T12:29:59.000",
+                "isRealTime": True,
+                "highest": 999,
+                "accountId": "must-not-leak",
+            },
+            "orderDepth": {"accountId": "must-not-leak"},
+            "trades": [{"accountId": "must-not-leak"}],
+        },
+    )
+
+    async with Client(create_auth_server(broker)) as client:  # type: ignore[arg-type]
+        result = await client.call_tool(
+            "get_execution_quote", {"order_book_id": "4478"}
+        )
+
+    assert result.structured_content == {
+        "orderBookId": "4478",
+        "source": "authenticated_trading_critical",
+        "buy": 227.10,
+        "sell": 227.20,
+        "last": 226.90,
+        "updated": "2026-09-30T12:30:01.000",
+        "timeOfLast": "2026-09-30T12:29:59.000",
+        "isRealTime": True,
+    }
+    assert "must-not-leak" not in str(result.structured_content)
+    assert broker.market_calls == [
+        (
+            "GET",
+            "/_api/trading-critical/rest/marketdata/4478",
+            {"params": None, "json": None},
+        )
+    ]
 
 
 async def test_auth_lifespan_resets_global_worker_delegate():
