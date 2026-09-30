@@ -111,6 +111,12 @@ async def test_order_depth_ignores_info_then_returns_order_depth_snapshot():
         assert request.headers["Accept"] == "text/event-stream"
         assert request.headers["aza-do-not-touch-session"] == "true"
         assert request.headers["Referer"].endswith("/" + ORDER_BOOK_ID)
+        assert request.headers["Sec-Fetch-Dest"] == "empty"
+        assert request.headers["Sec-Fetch-Mode"] == "cors"
+        assert request.headers["Sec-Fetch-Site"] == "same-origin"
+        assert request.headers["Sec-Ch-Ua-Mobile"] == "?0"
+        assert request.headers["Sec-Ch-Ua-Platform"] == '"macOS"'
+        assert "Mozilla/5.0" in request.headers["User-Agent"]
         assert request.headers["X-SecurityToken"] == "test-token"
         return sse_response(
             b"event: info\ndata: connected\nid: i-1\nretry: 1000\n\n",
