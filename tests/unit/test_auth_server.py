@@ -83,7 +83,7 @@ async def test_auth_server_mounts_public_contract_and_adds_auth_tools():
             "get_deals",
             "get_stop_loss_orders",
         } <= tools
-        assert {"get_credit_info", "get_current_offers", "get_forum_posts", "enrich_leveraged_snapshot"}.isdisjoint(tools)
+        assert {"get_credit_info", "get_current_offers", "get_forum_posts", "enrich_leveraged_snapshot", "get_orderbook_depth"}.isdisjoint(tools)
         assert len(await client.list_prompts()) == 3
 
         connected = await client.call_tool("connect_avanza", {})
