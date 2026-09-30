@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from datetime import date
 from typing import Annotated, Any, Literal, TypeVar
 
-from fastmcp import FastMCP
+from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 from pydantic import BaseModel, Field, ValidationError
 
@@ -18,8 +18,10 @@ from .. import (
     mcp as public_mcp,
 )
 from ..client.base import AvanzaClient
+from ..client.exceptions import AvanzaAuthError, AvanzaError
 from ..models.common import OrderBookId
 from ..models.stock import LiveOrderDepth
+from ..services.market_data_service import MarketDataService
 from ..models.account import (
     Accounts,
     ActiveOrders,
@@ -237,6 +239,36 @@ def create_auth_server(broker: AuthProcessBroker | None = None) -> FastMCP:
     async def get_auth_status() -> AuthStatus:
         """Return safe Avanza connection state without credentials or identity."""
         return await broker.status()
+
+    @server.tool(annotations=_READ_TOOL)
+    async def get_execution_quote(
+        ctx: Context,
+        order_book_id: OrderBookId,
+    ) -> dict[str, Any]:
+        """Get authenticated trading-critical bid/ask for execution checks.
+
+        Use updated for quote freshness; last/timeOfLast is trade evidence, not
+        proof that the current bid/ask is fresh. Requires an Avanza login.
+        """
+        try:
+            quote = await MarketDataService(
+                ctx.lifespan_context["client"]
+            ).get_authenticated_market_data_quote(order_book_id)
+        except AvanzaAuthError:
+            raise ToolError(
+                "AVANZA_AUTH_REQUIRED: Call connect_avanza, complete BankID locally, then retry."
+            ) from None
+        except (AvanzaError, TypeError, ValueError):
+            raise ToolError("Avanza could not provide an execution quote.") from None
+
+        result: dict[str, Any] = {
+            "orderBookId": order_book_id,
+            "source": "authenticated_trading_critical",
+        }
+        for key in ("buy", "sell", "last", "updated", "timeOfLast", "isRealTime"):
+            if key in quote:
+                result[key] = quote[key]
+        return result
 
     @server.tool(annotations=_READ_TOOL)
     async def get_orderbook_depth(

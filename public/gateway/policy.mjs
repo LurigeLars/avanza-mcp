@@ -45,6 +45,7 @@ const AUTH_TOOLS = [
   'connect_avanza',
   'disconnect_avanza',
   'get_auth_status',
+  'get_execution_quote',
   'get_orderbook_depth',
   'get_accounts',
   'get_holdings',
