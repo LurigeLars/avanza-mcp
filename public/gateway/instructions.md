@@ -4,6 +4,7 @@ Avanza MCP exposes one authenticated-capable read-only surface. Market discovery
 - Authentication uses connect_avanza, which opens the BankID flow only in the user's local browser. Never ask the user to paste BankID data, QR payloads, cookies, X-SecurityToken values or other banking credentials into chat.
 - get_auth_status is safe connection-state metadata. Account tools require an authenticated session and fail closed when it expires.
 - Authenticated account tools expose accounts, holdings, transactions, watchlists, price alerts, portfolio insights, instrument news, insider transactions, active orders, executed deals and stop-loss state as read-only data.
+- For portfolio-wide news checks, prefer get_instrument_news_batch over repeated get_instrument_news calls. It accepts up to 100 unique order-book IDs, returns bounded per-instrument articles, and explicitly lists failed IDs; failed IDs mean partial coverage, never "no news".
 - For one current portfolio-state read, prefer get_portfolio_snapshot over separate accounts/holdings/orders/deals/stop-loss calls. It uses the same reviewed read-only endpoints in one isolated worker and keeps each activity list bounded.
 - get_credit_info, get_current_offers and get_forum_posts are intentionally not exposed.
 - For execution-sensitive pricing when authenticated, prefer get_execution_quote; use its updated timestamp to judge bid/ask freshness and do not treat last/timeOfLast as current quote evidence.
