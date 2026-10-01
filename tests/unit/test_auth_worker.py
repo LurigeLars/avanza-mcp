@@ -207,21 +207,21 @@ def test_persistent_market_session_revalidation_is_bounded():
     assert worker._MARKET_SESSION_REVALIDATE_SECONDS == 15 * 60
 
 
-def test_memory_only_session_policy_is_60_min_idle_and_16h_absolute():
-    assert worker._MEMORY_ONLY_IDLE_SECONDS == 60 * 60
+def test_memory_only_session_policy_is_2h_idle_and_16h_absolute():
+    assert worker._MEMORY_ONLY_IDLE_SECONDS == 2 * 60 * 60
     assert worker._MEMORY_ONLY_ABSOLUTE_SECONDS == 16 * 60 * 60
 
 
 def test_memory_only_idle_timeout_slides_with_recent_activity():
     assert not worker._daemon_session_expired(
         mode="memory_only",
-        now=60 * 60,
+        now=120 * 60,
         last_activity=30 * 60,
         session_started_at=0,
     )
     assert worker._daemon_session_expired(
         mode="memory_only",
-        now=90 * 60,
+        now=150 * 60,
         last_activity=30 * 60,
         session_started_at=0,
     )
