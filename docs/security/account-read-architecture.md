@@ -33,7 +33,7 @@ Worker commands are operation names plus bounded tool arguments. No generic arbi
 
 ## Session modes
 
-### persistent (default)
+### persistent
 
 The verified session is stored in the native OS credential store. On Windows this is Windows Credential Manager. Each authenticated operation still starts a fresh worker process. The worker loads the stored session once, then runs remote session validation and the requested approved read concurrently. The operation result is released only if validation also succeeds; invalid or inconclusive validation fails closed. Refreshed session material is written back only when it actually changed. The authenticated HTTP clients are then closed and the worker exits.
 
@@ -42,13 +42,14 @@ requests use the same short-lived worker pattern, including certificate/warrant 
 and details, leveraged screening dependencies, options/futures, ETFs, funds and stock
 market data.
 
-### memory_only
+### memory_only (default)
 
 No reusable Avanza session is written to the OS credential store. BankID is performed
-inside a dedicated isolated worker. Successful authenticated read-only operations reset
-the 15-minute idle timer.
+inside a dedicated isolated worker. Successful authenticated account and ordinary market-data
+operations reset the 60-minute idle timer. Order-depth SSE snapshots deliberately do not reset
+it, matching Avanza's `aza-do-not-touch-session: true` semantics.
 
-After 15 minutes without an authenticated account operation the worker sends Avanza remote logout, clears local HTTP/session state, and exits. A process/server/computer restart therefore requires BankID again.
+After 60 minutes without qualifying authenticated activity the worker sends Avanza remote logout, clears local HTTP/session state, and exits. The memory-only session also has a 16-hour absolute lifetime that activity cannot extend. A process/server/computer restart therefore requires BankID again.
 
 ### one_shot
 
