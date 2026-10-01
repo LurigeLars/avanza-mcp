@@ -46,10 +46,10 @@ market data.
 
 No reusable Avanza session is written to the OS credential store. BankID is performed
 inside a dedicated isolated worker. Successful authenticated account and ordinary market-data
-operations reset the 60-minute idle timer. Order-depth SSE snapshots deliberately do not reset
+operations reset the 2-hour idle timer. Order-depth SSE snapshots deliberately do not reset
 it, matching Avanza's `aza-do-not-touch-session: true` semantics.
 
-After 60 minutes without qualifying authenticated activity the worker sends Avanza remote logout, clears local HTTP/session state, and exits. The memory-only session also has a 16-hour absolute lifetime that activity cannot extend. A process/server/computer restart therefore requires BankID again.
+After 2 hours without qualifying authenticated activity the worker sends Avanza remote logout, clears local HTTP/session state, and exits. The memory-only session also has a 16-hour absolute lifetime that activity cannot extend. A process/server/computer restart therefore requires BankID again.
 
 ### one_shot
 
