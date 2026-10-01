@@ -245,6 +245,68 @@ def test_one_shot_does_not_inherit_memory_only_absolute_timeout():
     )
 
 
+async def test_order_depth_does_not_extend_memory_only_idle_timer(monkeypatch, capsys):
+    session = SessionMaterial((), "token")
+    clock = {"now": 0.0}
+    instances = []
+
+    class FakeBrowserAuth:
+        def __init__(self, *args, **kwargs):
+            self.session = None
+            self.disconnect_calls = 0
+            instances.append(self)
+
+        async def open_browser(self):
+            self.session = session
+            return worker.AuthStatus(state="connected", message="connected")
+
+        async def disconnect(self):
+            self.disconnect_calls += 1
+            self.session = None
+            return worker.AuthStatus(state="disconnected", message="disconnected")
+
+        async def open_disconnect_browser(self):
+            return await self.disconnect()
+
+        def status(self):
+            state = "connected" if self.session is not None else "disconnected"
+            return worker.AuthStatus(state=state, message=state)
+
+        async def aclose(self):
+            return None
+
+    async def order_depth(auth, command):
+        assert auth.session is session
+        clock["now"] = worker._MEMORY_ONLY_IDLE_SECONDS + 1
+        return {"ok": True, "result": {"bids": [], "asks": []}}
+
+    def feed(_loop, queue):
+        queue.put_nowait(json.dumps({"action": "connect"}))
+        queue.put_nowait(json.dumps({"action": "order_depth", "order_book_id": "123"}))
+        queue.put_nowait(json.dumps({"action": "shutdown"}))
+        queue.put_nowait(None)
+
+    monkeypatch.setattr(worker, "BrowserAuth", FakeBrowserAuth)
+    monkeypatch.setattr(worker, "_order_depth_operation", order_depth)
+    monkeypatch.setattr(worker, "_start_stdin_reader", feed)
+    monkeypatch.setattr(worker, "_parent_alive", lambda _pid: True)
+    monkeypatch.setattr(worker.time, "monotonic", lambda: clock["now"])
+
+    await worker._run_daemon("memory_only", 123)
+
+    payloads = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if line.strip()
+    ]
+    assert [payload["status"]["state"] if "status" in payload else "result" for payload in payloads] == [
+        "connected",
+        "result",
+    ]
+    assert len(instances) == 1
+    assert instances[0].disconnect_calls == 1
+
+
 def test_authenticated_market_batch_pacing_is_50ms():
     assert worker._MARKET_BATCH_MIN_REQUEST_INTERVAL == 0.05
 
