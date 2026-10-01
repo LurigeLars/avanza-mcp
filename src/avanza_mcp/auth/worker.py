@@ -1033,8 +1033,8 @@ async def _run_daemon(mode: str, parent_pid: int) -> None:
                 continue
             if action == "order_depth":
                 response = await _order_depth_operation(auth, command)
-                if response.get("ok") is True and mode == "memory_only":
-                    last_activity = time.monotonic()
+                # Avanza's order-depth SSE explicitly asks the server not to touch
+                # the session idle timer, so keep our local inactivity semantics aligned.
                 _emit(response)
                 continue
 
