@@ -42,3 +42,9 @@ testpaths = ["tests"]
 markers = [
     "integration: marks tests as integration tests (may hit real APIs)",
 ]
+
+[tool.uv]
+constraint-dependencies = [
+    "PyJWT>=2.15.1,<3.0.0",
+    "urllib3>=2.8.0,<3.0.0",
+]
