@@ -19,7 +19,7 @@ async def test_stdio_discovery_and_prompt():
     async with Client(transport) as client:
         assert client.server_info is not None
         assert client.server_info.version == __version__
-        assert len(await client.list_tools()) == 54
+        assert len(await client.list_tools()) == 55
         assert len(await client.list_prompts()) == 3
         prompt = await client.get_prompt("compare_funds", {"fund_names": '["A", "B"]'})
         assert "order_book_id" in prompt.messages[0].content.text
