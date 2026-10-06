@@ -139,13 +139,23 @@ class AccountClient:
         )
 
     async def transactions(
-        self, *, from_date: date | None, to_date: date | None, limit: int
+        self,
+        *,
+        from_date: date | None,
+        to_date: date | None,
+        limit: int,
+        isin: str | None = None,
+        transaction_types: list[str] | None = None,
     ) -> Transactions:
         params: dict[str, str | int] = {"maxElements": limit}
         if from_date is not None:
             params["from"] = from_date.isoformat()
         if to_date is not None:
             params["to"] = to_date.isoformat()
+        if isin is not None:
+            params["isin"] = isin
+        if transaction_types:
+            params["transactionTypes"] = ",".join(transaction_types)
         body = await self._get(_TRANSACTIONS, params=params)
         values = body.get("transactions")
         total = body.get("transactionsAfterFiltering")

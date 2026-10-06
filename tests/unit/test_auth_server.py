@@ -347,6 +347,45 @@ async def test_instrument_news_batch_tool_delegates_once_and_preserves_partial_c
     ]
 
 
+async def test_transactions_tool_forwards_optional_filters_without_new_tool():
+    broker = FakeBroker()
+    broker.account_results["transactions"] = {
+        "transactions": [],
+        "returned": 0,
+        "total_reported": 0,
+        "truncated": False,
+        "first_transaction_date": None,
+    }
+
+    async with Client(create_auth_server(broker)) as client:  # type: ignore[arg-type]
+        tools = {tool.name for tool in await client.list_tools()}
+        assert len(tools) == 59
+        result = await client.call_tool(
+            "get_transactions",
+            {
+                "from_date": "2026-01-01",
+                "to_date": "2026-01-31",
+                "limit": 25,
+                "isin": "SE0000115446",
+                "transaction_types": ["BUY", "SELL"],
+            },
+        )
+
+    assert result.structured_content == broker.account_results["transactions"]
+    assert broker.account_calls == [
+        (
+            "transactions",
+            {
+                "from_date": "2026-01-01",
+                "to_date": "2026-01-31",
+                "limit": 25,
+                "isin": "SE0000115446",
+                "transaction_types": ["BUY", "SELL"],
+            },
+        )
+    ]
+
+
 async def test_portfolio_snapshot_tool_is_bounded_and_delegates_once():
     broker = FakeBroker()
     broker.account_results["portfolio_snapshot"] = {

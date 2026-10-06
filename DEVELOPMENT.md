@@ -84,6 +84,17 @@ uv run pytest tests/integration -v
 
 Unit tests use mocks or an in-process FastMCP client. Integration tests contact the
 real public API and can be affected by upstream availability or schema changes.
+
+For a bounded live smoke test of the authenticated read-only contracts, first connect
+Avanza normally through the local MCP runtime, then run:
+
+```bash
+uv run python scripts/probe-auth-contracts.py
+```
+
+The probe never starts authentication, never carries credentials, and never prints
+account payloads. It exits with code 2 when no existing Avanza session is connected
+and reports only PASS/FAIL for a small fixed set of read-only account endpoints.
 Offline transport checks also start a stdio subprocess and a loopback HTTP server;
 neither makes upstream API calls. Release publishing is gated on the unit suite.
 The guidance test checks rendered prompts, JSON list validation, the 34-tool /

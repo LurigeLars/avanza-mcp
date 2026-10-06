@@ -422,10 +422,21 @@ def create_auth_server(broker: AuthProcessBroker | None = None) -> FastMCP:
         from_date: date | None = None,
         to_date: date | None = None,
         limit: Annotated[int, Field(ge=1, le=1000)] = 100,
+        isin: Annotated[
+            str, Field(min_length=1, max_length=32, pattern=r"^[A-Za-z0-9]+$")
+        ] | None = None,
+        transaction_types: list[
+            Literal["DIVIDEND", "BUY", "SELL", "WITHDRAW", "DEPOSIT", "UNKNOWN"]
+        ] | None = None,
     ) -> Transactions:
-        """Get bounded transaction history; totals disclose truncation."""
+        """Get bounded transaction history with optional ISIN/type filters."""
         if from_date is not None and to_date is not None and from_date > to_date:
             raise ToolError("from_date must not be after to_date")
+        if transaction_types is not None:
+            if not 1 <= len(transaction_types) <= 6:
+                raise ToolError("transaction_types must contain 1 to 6 values")
+            if len(set(transaction_types)) != len(transaction_types):
+                raise ToolError("transaction_types must be unique")
         return await account_result(
             "transactions",
             Transactions,
@@ -434,6 +445,8 @@ def create_auth_server(broker: AuthProcessBroker | None = None) -> FastMCP:
                 "from_date": from_date.isoformat() if from_date else None,
                 "to_date": to_date.isoformat() if to_date else None,
                 "limit": limit,
+                "isin": isin,
+                "transaction_types": transaction_types,
             },
         )
 

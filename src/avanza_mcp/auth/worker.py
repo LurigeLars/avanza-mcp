@@ -150,6 +150,9 @@ def _contains_forbidden_market_result(value: Any) -> bool:
 _PORTFOLIO_PERIODS = frozenset(
     {"TODAY", "ONE_WEEK", "THIS_YEAR", "THREE_YEARS_ROLLING"}
 )
+_TRANSACTION_TYPES = frozenset(
+    {"DIVIDEND", "BUY", "SELL", "WITHDRAW", "DEPOSIT", "UNKNOWN"}
+)
 
 
 _PROTOCOL_STDOUT: TextIO | None = None
@@ -294,19 +297,51 @@ async def _account_operation(
                 _only_arguments(arguments, frozenset())
                 result = await account.holdings()
             elif operation == "transactions":
-                _only_arguments(arguments, {"from_date", "to_date", "limit"})
+                _only_arguments(
+                    arguments,
+                    {"from_date", "to_date", "limit", "isin", "transaction_types"},
+                )
                 raw_from = arguments.get("from_date")
                 raw_to = arguments.get("to_date")
                 from_date = date.fromisoformat(raw_from) if raw_from else None
                 to_date = date.fromisoformat(raw_to) if raw_to else None
                 if from_date is not None and to_date is not None and from_date > to_date:
                     raise ValueError
+
+                raw_isin = arguments.get("isin")
+                isin = None
+                if raw_isin is not None:
+                    isin = str(raw_isin)
+                    if (
+                        not 1 <= len(isin) <= 32
+                        or not isin.isascii()
+                        or not isin.isalnum()
+                    ):
+                        raise ValueError
+
+                raw_types = arguments.get("transaction_types")
+                transaction_types = None
+                if raw_types is not None:
+                    if (
+                        not isinstance(raw_types, list)
+                        or not 1 <= len(raw_types) <= len(_TRANSACTION_TYPES)
+                    ):
+                        raise ValueError
+                    transaction_types = [str(value) for value in raw_types]
+                    if (
+                        len(set(transaction_types)) != len(transaction_types)
+                        or any(value not in _TRANSACTION_TYPES for value in transaction_types)
+                    ):
+                        raise ValueError
+
                 result = await account.transactions(
                     from_date=from_date,
                     to_date=to_date,
                     limit=_bounded_int(
                         arguments.get("limit"), default=100, minimum=1, maximum=1000
                     ),
+                    isin=isin,
+                    transaction_types=transaction_types,
                 )
             elif operation == "watchlists":
                 _only_arguments(arguments, frozenset())
