@@ -598,6 +598,87 @@ async def test_memory_daemon_fail_safe_disconnects_on_unexpected_error(monkeypat
     assert instances[0].close_calls == 1
 
 
+async def test_transactions_account_operation_validates_filters_and_delegates(monkeypatch):
+    from avanza_mcp.models.account import Transactions
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+    seen = {}
+
+    class FakeAccountClient:
+        def __init__(self, client):
+            assert isinstance(client, FakeClient)
+
+        async def transactions(
+            self, *, from_date, to_date, limit, isin=None, transaction_types=None
+        ):
+            seen["args"] = {
+                "from_date": from_date,
+                "to_date": to_date,
+                "limit": limit,
+                "isin": isin,
+                "transaction_types": transaction_types,
+            }
+            return Transactions(
+                transactions=[],
+                returned=0,
+                total_reported=0,
+                truncated=False,
+            )
+
+    monkeypatch.setattr(worker, "AvanzaClient", FakeClient)
+    monkeypatch.setattr(worker, "AccountClient", FakeAccountClient)
+    auth = worker._RequestAuth(SessionMaterial((), "token"))
+
+    result = await worker._account_operation(
+        auth,
+        "transactions",
+        {
+            "from_date": "2026-01-01",
+            "to_date": "2026-01-31",
+            "limit": 25,
+            "isin": "SE0000115446",
+            "transaction_types": ["BUY", "SELL"],
+        },
+    )
+
+    assert result["ok"] is True
+    assert seen["args"]["limit"] == 25
+    assert seen["args"]["isin"] == "SE0000115446"
+    assert seen["args"]["transaction_types"] == ["BUY", "SELL"]
+
+
+async def test_transactions_account_operation_rejects_unknown_type(monkeypatch):
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+    monkeypatch.setattr(worker, "AvanzaClient", FakeClient)
+    auth = worker._RequestAuth(SessionMaterial((), "token"))
+
+    result = await worker._account_operation(
+        auth,
+        "transactions",
+        {"transaction_types": ["BUY", "NOT_A_TYPE"]},
+    )
+
+    assert result == {"ok": False, "code": "invalid_arguments"}
+
+
 async def test_forum_posts_account_operation_is_bounded_and_delegates(monkeypatch):
     from avanza_mcp.models.account import ForumPost, ForumPosts
 
