@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import html
+import base64
 import urllib.request
 
-import pytest
 
 ASSETS = {
     "api": "https://forum.placera.se/assets/isObject-DvdnBDox.js",
@@ -14,51 +13,31 @@ ASSETS = {
 
 
 def _fetch(url: str) -> str:
-    request = urllib.request.Request(
-        url,
-        headers={"User-Agent": "avanza-mcp-contract-probe/1.0"},
-    )
+    request = urllib.request.Request(url, headers={"User-Agent": "avanza-mcp-contract-probe/1.0"})
     with urllib.request.urlopen(request, timeout=20) as response:
         return response.read().decode("utf-8")
 
 
-def _snippets(source: str, terms: list[str], radius: int = 900) -> dict[str, list[str]]:
-    result: dict[str, list[str]] = {}
-    for term in terms:
-        rows = []
-        start = 0
-        while len(rows) < 4:
-            index = source.find(term, start)
-            if index < 0:
-                break
-            rows.append(source[max(0, index - radius): index + len(term) + radius])
-            start = index + len(term)
-        result[term] = rows
-    return result
+def _window(source: str, marker: str, before: int = 250, after: int = 1200) -> str:
+    index = source.find(marker)
+    if index < 0:
+        return "MISSING"
+    return source[max(0, index-before):index+len(marker)+after]
 
 
-@pytest.mark.parametrize("asset", ["api", "auth"])
-def test_public_placera_contract_probe(asset):
-    source = html.unescape(_fetch(ASSETS[asset]))
-    terms = (
-        [
-            "Authorization",
-            "Bearer",
-            "/v1/posts",
-            "posts",
-            "STORE_TOKEN",
-            "setToken",
-            "api.forum.placera.se",
-        ]
-        if asset == "api"
-        else [
-            "bankid",
-            "order_ref",
-            "collect",
-            "qr",
-            "token",
-            "/v1/auth/",
-        ]
-    )
-    found = _snippets(source, terms)
-    raise AssertionError(f"PLACERA_PROBE_{asset.upper()}={found!r}")
+def _b64(value: str) -> str:
+    return base64.b64encode(value.encode("utf-8")).decode("ascii")
+
+
+def test_public_placera_contract_probe():
+    api = _fetch(ASSETS["api"])
+    auth = _fetch(ASSETS["auth"])
+    rows = {
+        "set_token": _b64(_window(api, "setToken(e){", 100, 500)),
+        "posts": _b64(_window(api, "posts:{", 50, 3500)),
+        "bankid_sdk": _b64(_window(api, "bankid:{start", 100, 1000)),
+        "auth_start_call": _b64(_window(auth, ".bankid.start(", 900, 3000)),
+        "auth_collect_call": _b64(_window(auth, ".bankid.collect(", 900, 3500)),
+        "auth_qr": _b64(_window(auth, "order_ref", 900, 3000)),
+    }
+    raise AssertionError("PLACERA_PROBE_B64=" + repr(rows))
