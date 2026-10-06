@@ -33,10 +33,11 @@ async def test_gateway_allowlist_matches_single_authenticated_server_surface():
         server_tools = {tool.name for tool in await client.list_tools()}
 
     assert len(market_tools) == 37
-    assert len(auth_tools) == 18
-    assert len(allowed_tools) == 55
+    assert len(auth_tools) == 22
+    assert len(allowed_tools) == 59
     assert allowed_tools == server_tools
     assert "enrich_leveraged_snapshot" not in allowed_tools
     assert "get_orderbook_depth" not in allowed_tools
     assert {"get_credit_info", "get_current_offers"}.isdisjoint(allowed_tools)
     assert "get_forum_posts" in allowed_tools
+    assert {"connect_forum", "disconnect_forum", "get_forum_auth_status", "create_forum_post"} <= allowed_tools

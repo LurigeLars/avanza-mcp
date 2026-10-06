@@ -29,6 +29,8 @@ from ..client.exceptions import (
     AvanzaTimeoutError,
 )
 from .browser import AuthStatus, BrowserAuth
+from .forum import ForumBrowserAuth
+from ..client.forum import ForumAPIClient, ForumError
 from .store import AuthStoreError, create_session_store
 
 _INTERNAL_BROWSER_IDLE_SECONDS = 365 * 24 * 60 * 60
@@ -1056,6 +1058,119 @@ async def _run_daemon(mode: str, parent_pid: int) -> None:
             await auth.aclose()
 
 
+async def _forum_post_operation(
+    auth: ForumBrowserAuth, arguments: dict[str, Any]
+) -> dict[str, Any]:
+    _only_arguments(arguments, {"isin", "title", "content", "confirm"})
+    if arguments.get("confirm") is not True:
+        return {"ok": False, "code": "confirmation_required"}
+    isin = arguments.get("isin")
+    title = arguments.get("title", "")
+    content = arguments.get("content")
+    if (
+        not isinstance(isin, str)
+        or not 1 <= len(isin) <= 32
+        or not isinstance(title, str)
+        or len(title) > 300
+        or not isinstance(content, str)
+        or not 1 <= len(content) <= 20_000
+    ):
+        return {"ok": False, "code": "invalid_arguments"}
+    session = auth.session
+    token = session._security_token if session is not None else None
+    if not token:
+        return {"ok": False, "code": "auth_required"}
+
+    try:
+        async with ForumAPIClient(token) as forum:
+            receipt = await forum.create_post(isin=isin, title=title, content=content)
+    except ForumError as error:
+        if error.code == "auth_expired":
+            await auth.disconnect()
+            return {"ok": False, "code": "auth_expired"}
+        safe = {
+            "network",
+            "invalid_isin",
+            "instrument_not_unique",
+            "malformed_response",
+            "request_failed",
+        }
+        return {
+            "ok": False,
+            "code": error.code if error.code in safe else "forum_error",
+        }
+
+    return {
+        "ok": True,
+        "result": {
+            "post_id": receipt.post_id,
+            "instrument_name": receipt.instrument_name,
+            "instrument_slug": receipt.instrument_slug,
+            "company_name": receipt.company_name,
+            "company_slug": receipt.company_slug,
+        },
+    }
+
+
+async def _run_forum_daemon(parent_pid: int) -> None:
+    auth = ForumBrowserAuth()
+    queue: asyncio.Queue[str | None] = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+    _start_stdin_reader(loop, queue)
+
+    try:
+        while True:
+            if not _parent_alive(parent_pid):
+                if auth.session is not None:
+                    await auth.disconnect()
+                return
+
+            try:
+                line = await asyncio.wait_for(queue.get(), timeout=0.25)
+            except TimeoutError:
+                continue
+            if line is None:
+                if auth.session is not None:
+                    await auth.disconnect()
+                return
+
+            try:
+                command = json.loads(line)
+            except json.JSONDecodeError:
+                _emit({"ok": False, "code": "protocol_error"})
+                continue
+            if not isinstance(command, dict):
+                _emit({"ok": False, "code": "protocol_error"})
+                continue
+
+            action = command.get("action")
+            if action == "connect":
+                _emit(_safe_status(await auth.open_browser()))
+                continue
+            if action == "disconnect":
+                _emit(_safe_status(await auth.disconnect()))
+                continue
+            if action == "status":
+                _emit(_safe_status(auth.status()))
+                continue
+            if action == "forum_post":
+                arguments = command.get("arguments", {})
+                if not isinstance(arguments, dict):
+                    _emit({"ok": False, "code": "protocol_error"})
+                    continue
+                _emit(await _forum_post_operation(auth, arguments))
+                continue
+            if action == "shutdown":
+                if auth.session is not None:
+                    await auth.disconnect()
+                _emit({"ok": True})
+                return
+
+            _emit({"ok": False, "code": "operation_not_allowed"})
+    finally:
+        await auth.aclose()
+
+
 async def _read_first_command() -> dict[str, Any] | None:
     line = await asyncio.to_thread(sys.stdin.readline)
     if not line:
@@ -1077,6 +1192,13 @@ async def _async_main(args: argparse.Namespace) -> int:
             _emit({"ok": False, "code": "invalid_mode"})
             return 2
         await _run_persistent_market_daemon(args.parent_pid)
+        return 0
+
+    if args.kind == "forum-daemon":
+        if args.mode != "memory_only":
+            _emit({"ok": False, "code": "invalid_mode"})
+            return 2
+        await _run_forum_daemon(args.parent_pid)
         return 0
 
     command = await _read_first_command()
@@ -1107,7 +1229,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument(
         "--kind",
-        choices=("once", "ui", "daemon", "market-daemon"),
+        choices=("once", "ui", "daemon", "market-daemon", "forum-daemon"),
         required=True,
     )
     parser.add_argument(

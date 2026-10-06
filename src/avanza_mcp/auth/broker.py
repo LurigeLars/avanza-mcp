@@ -67,6 +67,10 @@ def _disconnected_status() -> AuthStatus:
     return AuthStatus(state="disconnected", message="Avanza is not connected.")
 
 
+def _forum_disconnected_status() -> AuthStatus:
+    return AuthStatus(state="disconnected", message="Placera Forum is not connected.")
+
+
 def _contains_forbidden_key(value: Any) -> bool:
     if isinstance(value, dict):
         for key, item in value.items():
@@ -89,6 +93,8 @@ class AuthProcessBroker:
         self._daemon_lock = asyncio.Lock()
         self._market_daemon: asyncio.subprocess.Process | None = None
         self._market_daemon_lock = asyncio.Lock()
+        self._forum_daemon: asyncio.subprocess.Process | None = None
+        self._forum_daemon_lock = asyncio.Lock()
         self._operation_lock = asyncio.Lock()
         self._ui_process: asyncio.subprocess.Process | None = None
         self._ui_status: AuthStatus | None = None
@@ -142,6 +148,57 @@ class AuthProcessBroker:
                 return _disconnected_status()
             response = await self._command(process, {"action": "status"})
             return self._status_from_response(response)
+
+    async def connect_forum(self) -> AuthStatus:
+        """Open the separate Placera Forum BankID flow in an isolated worker."""
+        self._ensure_open()
+        async with self._forum_daemon_lock:
+            process = self._live_forum_daemon()
+            if process is None:
+                process = await self._spawn("forum-daemon", "memory_only")
+                self._forum_daemon = process
+            response = await self._command(process, {"action": "connect"})
+            return self._status_from_response(response)
+
+    async def disconnect_forum(self) -> AuthStatus:
+        """Disconnect the isolated Placera Forum session."""
+        self._ensure_open()
+        async with self._forum_daemon_lock:
+            process = self._live_forum_daemon()
+            if process is None:
+                return _forum_disconnected_status()
+            response = await self._command(process, {"action": "disconnect"})
+            return self._status_from_response(response)
+
+    async def forum_status(self) -> AuthStatus:
+        """Return safe Placera Forum connection state without exposing its token."""
+        self._ensure_open()
+        async with self._forum_daemon_lock:
+            process = self._live_forum_daemon()
+            if process is None:
+                return _forum_disconnected_status()
+            response = await self._command(process, {"action": "status"})
+            return self._status_from_response(response)
+
+    async def forum_post(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Publish one explicitly confirmed forum post through the isolated worker."""
+        self._ensure_open()
+        async with self._forum_daemon_lock:
+            process = self._live_forum_daemon()
+            if process is None:
+                raise AuthWorkerRequired
+            status_response = await self._command(process, {"action": "status"})
+            status = self._status_from_response(status_response)
+            if status.state != "connected":
+                raise AuthWorkerRequired
+            response = await self._command(
+                process,
+                {"action": "forum_post", "arguments": arguments},
+            )
+            result = self._result_from_response(response)
+            if not isinstance(result, dict):
+                raise AuthWorkerOperationError("Invalid forum post result from worker")
+            return result
 
     async def account(self, operation: str, arguments: dict[str, Any]) -> Any:
         self._ensure_open()
@@ -375,6 +432,7 @@ class AuthProcessBroker:
         self._closed = True
 
         await self._stop_market_daemon()
+        await self._stop_forum_daemon()
 
         async with self._daemon_lock:
             process = self._live_daemon()
@@ -501,6 +559,27 @@ class AuthProcessBroker:
                 await self._command(process, {"action": "shutdown"}, timeout=5.0)
             except AuthWorkerError:
                 # Best-effort graceful shutdown; force-stop below is the fallback.
+                pass
+            await self._stop_process(process)
+
+    def _live_forum_daemon(self) -> asyncio.subprocess.Process | None:
+        process = self._forum_daemon
+        if process is None:
+            return None
+        if process.returncode is not None:
+            self._forum_daemon = None
+            return None
+        return process
+
+    async def _stop_forum_daemon(self) -> None:
+        async with self._forum_daemon_lock:
+            process = self._live_forum_daemon()
+            self._forum_daemon = None
+            if process is None:
+                return
+            try:
+                await self._command(process, {"action": "shutdown"}, timeout=5.0)
+            except AuthWorkerError:
                 pass
             await self._stop_process(process)
 

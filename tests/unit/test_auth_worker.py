@@ -643,3 +643,87 @@ async def test_forum_posts_account_operation_is_bounded_and_delegates(monkeypatc
     assert result["ok"] is True
     assert result["result"]["posts"][0]["title"] == "Synthetic title"
     assert seen["args"] == ("123", 7)
+
+
+async def test_forum_post_operation_requires_explicit_confirmation():
+    class FakeAuth:
+        session = SessionMaterial((), "forum-token")
+
+    result = await worker._forum_post_operation(
+        FakeAuth(),
+        {
+            "isin": "SE0000115446",
+            "title": "Title",
+            "content": "Exact body",
+            "confirm": False,
+        },
+    )
+
+    assert result == {"ok": False, "code": "confirmation_required"}
+
+
+async def test_forum_post_operation_keeps_token_inside_worker(monkeypatch):
+    seen = {}
+
+    class FakeAuth:
+        session = SessionMaterial((), "forum-token")
+
+        async def disconnect(self):
+            self.session = None
+
+    class FakeReceipt:
+        post_id = "post-1"
+        instrument_name = "Volvo B"
+        instrument_slug = "volvo-b"
+        company_name = "Volvo"
+        company_slug = "volvo"
+
+    class FakeForumClient:
+        def __init__(self, token):
+            seen["token"] = token
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def create_post(self, *, isin, title, content):
+            seen["request"] = {
+                "isin": isin,
+                "title": title,
+                "content": content,
+            }
+            return FakeReceipt()
+
+    monkeypatch.setattr(worker, "ForumAPIClient", FakeForumClient)
+
+    result = await worker._forum_post_operation(
+        FakeAuth(),
+        {
+            "isin": "SE0000115446",
+            "title": "Title",
+            "content": "Exact body",
+            "confirm": True,
+        },
+    )
+
+    assert seen == {
+        "token": "forum-token",
+        "request": {
+            "isin": "SE0000115446",
+            "title": "Title",
+            "content": "Exact body",
+        },
+    }
+    assert result == {
+        "ok": True,
+        "result": {
+            "post_id": "post-1",
+            "instrument_name": "Volvo B",
+            "instrument_slug": "volvo-b",
+            "company_name": "Volvo",
+            "company_slug": "volvo",
+        },
+    }
+    assert "forum-token" not in str(result)
