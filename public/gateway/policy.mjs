@@ -55,6 +55,7 @@ const AUTH_TOOLS = [
   'get_portfolio_snapshot',
   'get_instrument_news',
   'get_instrument_news_batch',
+  'get_forum_posts',
   'get_insider_transactions',
   'get_active_orders',
   'get_deals',
