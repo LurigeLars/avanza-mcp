@@ -133,5 +133,49 @@ async def test_forum_post_maps_isin_and_sends_exact_frontend_payload():
     assert receipt.company_slug == "volvo"
     assert seen_post == (
         '{"title":"Title","content":"Exact body","tags":[],"media":[],'
-        '"instrument":"instrument-1","company":"company-1"}'
+        '"company":"company-1"}'
+    )
+
+
+async def test_forum_post_uses_instrument_when_no_company_exists():
+    seen_post = None
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen_post
+
+        if request.method == "GET" and request.url.path == "/v1/instruments":
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {
+                            "id": "instrument-1",
+                            "isin": "SE0000000001",
+                            "name": "Synthetic",
+                            "slug": "synthetic",
+                            "company": None,
+                        }
+                    ]
+                },
+            )
+
+        if request.method == "POST" and request.url.path == "/posts":
+            seen_post = request.read().decode("utf-8")
+            return httpx.Response(201, json={"id": "post-1"})
+
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    async with ForumAPIClient(
+        "forum-token",
+        _transport=httpx.MockTransport(handler),
+    ) as client:
+        await client.create_post(
+            isin="SE0000000001",
+            title="",
+            content="Exact body",
+        )
+
+    assert seen_post == (
+        '{"title":"","content":"Exact body","tags":[],"media":[],'
+        '"instrument":"instrument-1"}'
     )
