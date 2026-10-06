@@ -1,141 +1,197 @@
-# Avanza MCP Server
+# Avanza MCP
 
-## Current deployment and security posture
+[![CI](https://github.com/LurigeLars/avanza-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/LurigeLars/avanza-mcp/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/LurigeLars/avanza-mcp/actions/workflows/codeql.yml/badge.svg)](https://github.com/LurigeLars/avanza-mcp/actions/workflows/codeql.yml)
+![Python](https://img.shields.io/badge/python-3.12%2B-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
 
-The maintained deployment is local-first and read-only. The canonical FastMCP runtime stays on loopback; remote clients reach it only through the reviewed gateway and Cloudflare Access.
+A local-first Model Context Protocol (MCP) server for Avanza market data and optional
+BankID-authenticated account context.
 
-- Market-data and authenticated account tools are read-only; no order placement, transfers, withdrawals, or credential-entry tools are exposed.
-- Avanza session material remains on the host and is handled by the isolated authentication worker; it is not forwarded through the public gateway.
-- Model-facing gateways use an explicit reviewed tool allowlist and compact schemas/results.
-- The Windows background runtime is designed to run without elevation; installation does not require a privileged service account.
-- Public gateway containers run non-root with a read-only filesystem, dropped Linux capabilities, and `no-new-privileges`.
-- Machine-specific paths, identities, Cloudflare values, account identifiers, and credentials belong only in local ignored configuration.
+It lets MCP clients such as ChatGPT, Claude Code, Codex, Cursor and VS Code inspect
+Swedish market data and, when you explicitly sign in, read selected Avanza account
+information without exposing order placement, transfers or withdrawals.
 
-## About this fork
+> **Unofficial project.** This project is not affiliated with Avanza Bank AB and uses
+> undocumented APIs that may change without notice.
 
-This is a maintained fork of [AnteWall/avanza-mcp](https://github.com/AnteWall/avanza-mcp). It keeps the upstream read-only market-data surface while adding a local-first deployment and agent layer.
+## What this project is for
 
-Fork-specific changes include:
+The goal is to make Avanza useful to an AI agent without turning the agent into a
+brokerage terminal.
 
-- Optional BankID-authenticated **read-only** account access with native OS credential storage; no order placement, order editing, transfers, or withdrawals.
-- Bounded leveraged-product and options screening, with pagination and concurrency improvements for large Avanza instrument families.
-- Compact model-facing MCP gateways for local agents and ChatGPT, with explicit tool allowlists, schema/result compaction, and duplicate structured-result suppression.
-- Cloudflare Access support with a shared-tunnel deployment model and sanitized public configuration templates.
-- Windows background-task installers and local service lifecycle helpers.
-- Additional security hardening, tests, Dependabot coverage, and fork-specific Advanced CodeQL scanning.
+The server provides:
 
-Upstream changes are periodically reconciled while the fork-specific behavior above remains explicit.
+- public market-data access without an Avanza login;
+- optional BankID-authenticated **read-only** account and portfolio context;
+- stock, fund, ETF, certificate, warrant, option and futures/forward data;
+- bounded leveraged-product and option screening;
+- transaction, holdings, order/deal and portfolio reads;
+- instrument news, insider transactions and Avanza forum reads;
+- a separate Placera Forum login for explicitly confirmed forum posts;
+- model-facing gateways for local agents and ChatGPT;
+- a security boundary that keeps Avanza session material on the local host.
 
-> **Want to use Avanza with Agents?** Consider the [Avanza CLI](https://antewall.github.io/avanza-ts/docs/cli/) with [agent skills](https://antewall.github.io/avanza-ts/docs/cli/skills/) instead. It may be a better fit for agent workflows.
+The Avanza banking/trading surface is intentionally read-only. There are no MCP tools
+for placing, editing or cancelling orders, moving money or withdrawing funds.
 
-![PyPI - Version](https://img.shields.io/pypi/v/avanza-mcp)
-[![CI](https://github.com/AnteWall/avanza-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/AnteWall/avanza-mcp/actions/workflows/ci.yml)
+## Why this fork exists
 
-Avanza's public market data is available read-only without an Avanza account. This fork also supports optional locally authenticated, read-only account access.
+This repository is a maintained fork of
+[AnteWall/avanza-mcp](https://github.com/AnteWall/avanza-mcp).
 
-## Disclaimer
+The upstream project provides the core MCP market-data implementation. This fork keeps
+that foundation while adding functionality needed for a local, authenticated agent
+setup:
 
-This is an unofficial API client/MCP Server. Not affiliated with Avanza Bank AB. The underlying API can be taken down or changed without warning at any point in time.
+- isolated BankID authentication and read-only Avanza account access;
+- memory-only session handling by default, with bounded idle and absolute lifetimes;
+- authenticated reuse of approved market-data endpoints for fresher entitled data;
+- model-optimized local and public gateways with explicit tool allowlists;
+- Cloudflare Access support for remote MCP clients such as ChatGPT;
+- Windows background-task installers and lifecycle tooling;
+- leveraged-product and option screening for larger Avanza instrument families;
+- a separate Placera Forum authentication/write path with explicit confirmation;
+- additional testing, security hardening, static analysis and CodeQL coverage.
 
-The author of this software is not responsible for any indirect damages (foreseeable or unforeseeable), such as, if necessary, loss or alteration of or fraudulent access to data, accidental transmission of viruses or of any other harmful element, loss of profits or opportunities, the cost of replacement goods and services or the attitude and behavior of a third party.
+Upstream changes are periodically reviewed and reconciled, but fork-specific behavior
+is kept explicit rather than hidden behind compatibility code.
 
-## Features
+## Safety model
 
-- Stocks, funds, ETFs, certificates, warrants and futures/forwards.
-- Quotes, charts, financial ratios, dividends, order books and ownership data.
-- Fund performance, fees, holdings, sustainability and research prompts.
+The most important design rule is that authentication does **not** turn the MCP into a
+general Avanza API proxy.
 
-## Setup
+| Capability | Exposed? | Notes |
+|---|---:|---|
+| Public market data | Yes | No Avanza login required |
+| Accounts / holdings / transactions | Yes | Read-only, BankID session required |
+| Active orders / deals / stop-loss orders | Yes | Read-only views only |
+| Order placement / edit / cancel | **No** | Intentionally absent |
+| Transfers / withdrawals | **No** | Intentionally absent |
+| Avanza credentials in chat | **No** | BankID flow stays local |
+| Placera Forum read | Yes | User-generated text is treated as untrusted data |
+| Placera Forum post | Yes | Separate login and explicit confirmation required |
 
-Requires [uv](https://docs.astral.sh/uv/) and Python 3.12+.
+Avanza cookies and security tokens are owned by an isolated local authentication worker.
+They are not returned as MCP results and are not forwarded through Cloudflare or the
+public gateway.
 
-### Which connection, and what it gives you
+## Architecture
 
-| Client | Connection | Account access |
-|---|---|---|
-| Claude Desktop, Cursor, VS Code | local stdio from a checkout | **yes**, through the single authenticated-capable runtime |
-| Claude Code, Codex | local loopback gateway `127.0.0.1:8769` | yes, when the background stack runs with auth |
-| ChatGPT and other cloud chats | Cloudflare Access -> gateway -> `127.0.0.1:8767` | **yes**, through the same authenticated-capable runtime |
-| Any client, no checkout | `uvx avanza-mcp` from PyPI | **no** |
+A source checkout runs one authenticated-capable FastMCP backend. Local and remote
+model clients can use compact gateways in front of it.
 
-A source checkout starts one authenticated-capable server. Its Avanza banking/trading surface remains read-only. The full surface contains
-59 tools: 37 market-data tools plus 22 reviewed authenticated/session/forum tools including
-`connect_avanza`, `disconnect_avanza`, `get_auth_status`, `get_execution_quote`,
-`get_accounts`, `get_holdings`, `get_transactions`, `get_watchlists`,
-`get_price_alerts`, `get_portfolio_insights`, `get_portfolio_snapshot`,
-`get_instrument_news`, `get_instrument_news_batch`, `get_forum_posts`,
-`connect_forum`, `disconnect_forum`, `get_forum_auth_status`, `create_forum_post`,
-`get_insider_transactions`, `get_active_orders`, `get_deals`, and `get_stop_loss_orders`.
-Authentication itself remains explicit: `connect_avanza` opens the local browser/BankID flow,
-nothing is requested at startup, and banking credentials never pass through chat. Market discovery
-may use Avanza's public endpoints internally, but that is an implementation detail rather than a
-separate MCP mode. The MCP surface exposes no order placement, editing, transfers, or withdrawals.
+```text
+                                local host
+                       ┌──────────────────────────┐
+Claude Code / Codex ──>│ 127.0.0.1:8769 gateway │
+                       │            │             │
+                       │            v             │
+                       │ 127.0.0.1:8767 FastMCP  │───> Avanza public API
+                       │            │             │
+                       │            v             │
+                       │ isolated auth worker     │───> Avanza authenticated API
+                       └──────────────────────────┘
+                                    ^
+                                    │
+ChatGPT -> Cloudflare Access -> public gateway
 
-`uvx avanza-mcp` installs the published PyPI package, which is **not this fork** and has no account
-access. Use it only when you have no checkout, and do not expect holdings from it.
+Placera Forum uses a separate BankID session and separate isolated worker.
+```
+
+The raw FastMCP backend remains bound to loopback in the maintained deployment.
+
+## Quick start
+
+### Requirements
+
+- Python 3.12+
+- [uv](https://docs.astral.sh/uv/)
+- a local checkout if you want this fork's authenticated/account functionality
+
+### Run this fork locally
+
+```bash
+git clone https://github.com/LurigeLars/avanza-mcp.git
+cd avanza-mcp
+uv sync
+uv run avanza-mcp
+```
+
+This starts the MCP server over stdio.
+
+> **Important:** `uvx avanza-mcp` installs the published PyPI package, not this fork.
+> Use a source checkout when you want the fork-specific account, gateway and forum
+> functionality documented here.
+
+### Connect Avanza
+
+Authentication is always explicit. Call:
+
+```text
+connect_avanza
+```
+
+A local browser window opens for consent and BankID. Nothing attempts to authenticate
+at server startup, and no Avanza username or password is entered into chat.
+
+After successful BankID authentication, approved read-only account tools become
+available for the lifetime of that session.
+
+## Connection options
+
+| Client | Recommended connection | Account access |
+|---|---|---:|
+| Claude Desktop / Cursor / VS Code | stdio from this checkout | Yes |
+| Claude Code / Codex | `http://127.0.0.1:8769/mcp` | Yes |
+| ChatGPT / remote MCP client | Cloudflare Access -> public gateway | Yes |
+| Generic public-only use | published PyPI package | No fork-specific account access |
 
 <details>
-<summary>Claude Desktop and Cursor</summary>
-
-Both launch the server over stdio from a checkout. Replace the path with your own:
+<summary><strong>Claude Desktop / Cursor</strong></summary>
 
 ```json
 {
   "mcpServers": {
     "avanza": {
       "command": "uv",
-      "args": ["run", "--directory", "/path/to/avanza-mcp", "--frozen", "avanza-mcp"]
+      "args": [
+        "run",
+        "--directory",
+        "/path/to/avanza-mcp",
+        "--frozen",
+        "avanza-mcp"
+      ]
     }
   }
 }
 ```
 
-- **Claude Desktop:** open Settings > Developer > Edit Config, merge the configuration, then fully
-  restart Claude Desktop. On Windows give `command` the absolute path to `uv.exe`, since Desktop
-  does not resolve it from `PATH`.
-- **Cursor:** add it to `.cursor/mcp.json` in your project, or `~/.cursor/mcp.json` globally. Enable
-  the server in Cursor's MCP settings.
-
-The source checkout always exposes the same authenticated-capable surface. Avanza account/trading operations remain read-only; `create_forum_post` is a separate explicit Placera Forum write.
+On Windows, some desktop clients require the absolute path to `uv.exe`.
 
 </details>
 
 <details>
-<summary>Claude Code and Codex</summary>
+<summary><strong>Claude Code / Codex</strong></summary>
 
-For a source checkout running the background HTTP stack, prefer the model-optimized
-loopback gateway:
+When the background HTTP stack is running, use the compact local gateway:
 
 ```bash
 claude mcp add --transport http avanza http://127.0.0.1:8769/mcp
 codex mcp add avanza --url http://127.0.0.1:8769/mcp
 ```
 
-This keeps the canonical FastMCP server on port 8767 while presenting the compact
-59-tool catalog on port 8769. Use `/mcp` in Claude Code or `codex mcp list` to
-verify the connection.
-
-The portable stdio form remains available when no background HTTP stack is installed. It is the
-PyPI package, so it serves public market data only:
-
-```bash
-claude mcp add avanza -- uvx avanza-mcp
-```
-
-For the account surface without the background stack, point the client at a checkout instead:
+For a direct source-checkout stdio connection:
 
 ```bash
 claude mcp add avanza -- uv run --directory /path/to/avanza-mcp --frozen avanza-mcp
 ```
 
-The stdio form talks directly to FastMCP and therefore exposes the full raw schemas.
-
 </details>
 
 <details>
-<summary>Visual Studio Code</summary>
-
-Add to `.vscode/mcp.json`, or open **MCP: Open User Configuration** for global setup:
+<summary><strong>Visual Studio Code</strong></summary>
 
 ```json
 {
@@ -143,28 +199,13 @@ Add to `.vscode/mcp.json`, or open **MCP: Open User Configuration** for global s
     "avanza": {
       "type": "stdio",
       "command": "uv",
-      "args": ["run", "--directory", "/path/to/avanza-mcp", "--frozen", "avanza-mcp"]
-    }
-  }
-}
-```
-
-Run **MCP: List Servers**, start `avanza`, and enable its tools in agent chat.
-
-</details>
-
-<details>
-<summary>OpenCode</summary>
-
-Add to your project's `opencode.json` or global `~/.config/opencode/opencode.json`:
-
-```json
-{
-  "mcp": {
-    "avanza": {
-      "type": "local",
-      "command": ["uvx", "avanza-mcp"],
-      "enabled": true
+      "args": [
+        "run",
+        "--directory",
+        "/path/to/avanza-mcp",
+        "--frozen",
+        "avanza-mcp"
+      ]
     }
   }
 }
@@ -172,252 +213,308 @@ Add to your project's `opencode.json` or global `~/.config/opencode/opencode.jso
 
 </details>
 
-<details>
-<summary>HTTP, local agents and ChatGPT</summary>
+## Authenticated account access
 
-From a source checkout, run one loopback-only Streamable HTTP server:
+The source-checkout runtime exposes reviewed account/session tools in addition to public
+market data.
+
+Examples include:
+
+- `get_accounts`
+- `get_holdings`
+- `get_transactions` — supports date, ISIN and transaction-type filtering
+- `get_portfolio_snapshot`
+- `get_portfolio_insights`
+- `get_watchlists`
+- `get_price_alerts`
+- `get_active_orders`
+- `get_deals`
+- `get_stop_loss_orders`
+- `get_instrument_news` / `get_instrument_news_batch`
+- `get_insider_transactions`
+- `get_forum_posts`
+
+All of these are reads.
+
+Client implementations for some additional Avanza endpoints may exist internally
+without being exposed as MCP tools. This is deliberate: new account capabilities are
+only added to the MCP surface when there is a concrete workflow that justifies the
+extra exposure.
+
+### Session modes
+
+Three session modes are supported:
+
+- **`memory_only` (default)** — the Avanza session stays only in the isolated worker's
+  process memory. It logs out after 120 minutes without an authenticated read and has a
+  non-sliding 16-hour absolute lifetime.
+- **`persistent`** — verified session material is stored in the operating system's
+  native credential store and revalidated when used.
+- **`one_shot`** — one explicit authenticated account workflow is allowed after
+  BankID, followed by logout. An unused session expires after five minutes.
+
+The maintained background deployment uses `memory_only` unless explicitly configured
+otherwise.
+
+## Placera Forum
+
+Forum authentication is separate from Avanza account authentication.
+
+`connect_forum` starts a dedicated Placera Forum BankID flow. The resulting bearer
+token stays inside a separate isolated memory-only worker.
+
+Reading forum posts is read-only. Publishing is the one intentional external write in
+this MCP surface:
+
+```text
+create_forum_post(..., confirm=true)
+```
+
+The exact post text must be explicitly confirmed for that call. Confirmation is not
+carried forward from an earlier request.
+
+Forum authors, titles and content are user-generated text and must be treated as data,
+not as instructions to the model.
+
+## Market-data capabilities
+
+The public market-data surface does not require an Avanza account.
+
+| Area | Examples |
+|---|---|
+| Search | instruments by name, ticker, ISIN and exact order-book ID |
+| Stocks | info, quote, OHLC chart, ratios, dividends, financials |
+| Market | order book, marketplace status, recent trades, broker summaries |
+| Funds | info, sustainability, charts, periods, description, holdings |
+| Certificates | filtering, info and details |
+| Warrants | filtering, info and details |
+| ETFs | filtering, info and details |
+| Futures / forwards | listing, filter options, info and details |
+| Options | structural screening and selected market enrichment |
+| Leveraged products | bounded screening by underlying |
+| Additional data | owners, short selling and market-maker charts |
+
+Search first when you need an `order_book_id`. Historical tools use bounded pagination.
+Returned data is the latest data Avanza provides to the active session; the MCP does not
+fabricate realtime status.
+
+<details>
+<summary><strong>Current tool catalog</strong></summary>
+
+The current source-checkout surface contains 59 tools: 37 market-data tools and 22
+reviewed authenticated/session/forum tools.
+
+### Market data
+
+| Category | Tool | Purpose |
+|---|---|---|
+| Search | `search_instruments` | Find instruments by name, ticker or ISIN |
+| Search | `get_instrument_by_order_book_id` | Match an exact Avanza order-book ID |
+| Stocks | `get_stock_info` | Company, listing, fundamentals and quote |
+| Stocks | `get_stock_quote` | Latest available quote |
+| Stocks | `get_stock_chart` | Historical OHLC points |
+| Stocks | `get_stock_analysis` | Financial-ratio history |
+| Stocks | `get_dividends` | Dividend history |
+| Stocks | `get_company_financials` | Annual/quarterly financial metrics |
+| Market | `get_orderbook` | Bid/ask depth |
+| Market | `get_marketplace_info` | Trading hours and market status |
+| Market | `get_recent_trades` | Recent trade snapshot |
+| Market | `get_broker_trade_summary` | Broker buy/sell activity |
+| Funds | `get_fund_info` | Fund information, NAV, performance and fees |
+| Funds | `get_fund_sustainability` | Sustainability metrics |
+| Funds | `get_fund_chart` | Historical fund data |
+| Funds | `get_fund_chart_periods` | Available chart periods |
+| Funds | `get_fund_description` | Strategy and category |
+| Funds | `get_fund_holdings` | Country, sector and top holdings |
+| Certificates | `filter_certificates` | Filter/list certificates |
+| Certificates | `get_certificate_info` | Certificate information |
+| Certificates | `get_certificate_details` | Extended certificate details |
+| Warrants | `filter_warrants` | Filter/list warrants |
+| Warrants | `get_warrant_info` | Warrant information |
+| Warrants | `get_warrant_details` | Extended warrant details |
+| ETFs | `filter_etfs` | Filter/list ETFs |
+| ETFs | `get_etf_info` | ETF information |
+| ETFs | `get_etf_details` | Extended ETF details |
+| Futures/forwards | `list_futures_forwards` | Filter/list contracts |
+| Futures/forwards | `get_future_forward_filter_options` | Available filters |
+| Futures/forwards | `get_future_forward_info` | Contract information |
+| Futures/forwards | `get_future_forward_details` | Extended contract details |
+| Derivatives | `screen_leveraged_instruments` | Screen leveraged instruments by underlying |
+| Derivatives | `screen_options` | Build a bounded structural option snapshot |
+| Derivatives | `enrich_option_snapshot` | Add selected market data to option candidates |
+| Additional | `get_number_of_owners` | Avanza ownership history |
+| Additional | `get_short_selling` | Short-selling history |
+| Additional | `get_marketmaker_chart` | Traded-product OHLC / market-maker chart |
+
+### Auth / account / forum
+
+The reviewed authenticated/session/forum surface contains:
+
+`connect_avanza`, `disconnect_avanza`, `get_auth_status`,
+`get_execution_quote`, `get_accounts`, `get_holdings`,
+`get_transactions`, `get_watchlists`, `get_price_alerts`,
+`get_portfolio_insights`, `get_portfolio_snapshot`,
+`get_instrument_news`, `get_instrument_news_batch`,
+`get_forum_posts`, `get_insider_transactions`, `get_active_orders`,
+`get_deals`, `get_stop_loss_orders`, `connect_forum`,
+`disconnect_forum`, `get_forum_auth_status` and `create_forum_post`.
+
+</details>
+
+## Background HTTP deployment
+
+For local HTTP use:
 
 ```bash
 uv sync
-uv run fastmcp run src/avanza_mcp/__init__.py:mcp --transport http --host 127.0.0.1 --port 8767
+uv run fastmcp run src/avanza_mcp/__init__.py:mcp \
+  --transport http \
+  --host 127.0.0.1 \
+  --port 8767
 ```
 
-The FastMCP server on `127.0.0.1:8767` is the canonical backend. Model-facing local
-clients should use the compact loopback gateway on `127.0.0.1:8769` instead. It
-applies the same allowlist and schema compaction used by the ChatGPT path and removes
-duplicate `structuredContent` only when FastMCP also returned the same tool result as
-text `content`.
+The canonical backend is `127.0.0.1:8767`. Model-facing local clients should normally
+use the compact gateway on `127.0.0.1:8769`.
 
-```text
-Claude Code / Codex -> 127.0.0.1:8769/mcp -> compact model gateway
-                                             -> 127.0.0.1:8767/mcp -> FastMCP
-ChatGPT -> Cloudflare Access -> public gateway -> 127.0.0.1:8767/mcp
-```
+### Windows background tasks
 
-Keep direct `8767` access for development, typed-contract tests, or clients that
-specifically require the full output schemas/structured results.
-
-On Windows, the HTTP server can run without a visible terminal window using the
-included Scheduled Task installer:
+Install the FastMCP background task:
 
 ```powershell
 pwsh -File .\scripts\windows\install-public-http-task.ps1
 ```
 
-The default session mode is `memory_only`. To choose another mode when installing
-or replacing the task:
-
-```powershell
-pwsh -File .\scripts\windows\install-public-http-task.ps1 -SessionMode memory_only
-pwsh -File .\scripts\windows\install-public-http-task.ps1 -SessionMode one_shot
-```
-
-The task uses the repository virtualenv's `pythonw.exe`, so no console window is created. It runs as the current Windows user with limited privileges, starts at logon, and also has a five-minute recovery trigger with `IgnoreNew` so an already-running server is never duplicated. No Windows password is stored. The FastMCP endpoint remains bound to `127.0.0.1:8767`. Logs are written to `%LOCALAPPDATA%\avanza-mcp\public-http.log` and rotated once at 5 MiB.
-
-If port 8767 is already occupied by a manually started FastMCP process, the installer
-registers the task but deliberately does not kill or replace that process. Stop the
-manual server with Ctrl+C, then start the hidden task:
-
-```powershell
-Start-ScheduledTask -TaskName "AvanzaMcpHttpServer"
-```
-
-Check it with:
-
-```powershell
-Get-ScheduledTask -TaskName "AvanzaMcpHttpServer"
-Get-NetTCPConnection -LocalPort 8767 -State Listen
-```
-
-Install the model-optimized local gateway as a second hidden Windows task:
+Install the compact local gateway:
 
 ```powershell
 pwsh -File .\scripts\windows\install-local-gateway-task.ps1
 ```
 
-Verify both loopback listeners:
+Verify the listeners:
 
 ```powershell
-Get-NetTCPConnection -LocalPort 8769,8767 -State Listen |
+Get-NetTCPConnection -LocalPort 8767,8769 -State Listen |
     Select-Object LocalAddress,LocalPort,OwningProcess
 ```
 
-Use `http://127.0.0.1:8769/mcp` for Claude Code and Codex. The local gateway binds
-only to loopback, accepts only loopback clients, forwards only to a loopback upstream,
-stores no credentials, and uses the same explicit read-only allowlist as the public
-gateway.
-
-For Codex CLI, an HTTP MCP server can be configured with:
-
-```bash
-codex mcp add avanza --url http://127.0.0.1:8769/mcp
-```
-
-For Claude Code:
-
-```bash
-claude mcp add --transport http avanza http://127.0.0.1:8769/mcp
-```
-
-If an `avanza` MCP entry already exists, update/remove that entry first rather than
-creating two servers with the same capability.
-
-Remove the background tasks with:
+Remove them with:
 
 ```powershell
 pwsh -File .\scripts\windows\uninstall-local-gateway-task.ps1
 pwsh -File .\scripts\windows\uninstall-public-http-task.ps1
 ```
 
-For ChatGPT web, keep the FastMCP endpoint on loopback and use the included public deployment layer:
+The background task runs as the current Windows user without a privileged service
+account. The FastMCP listener remains loopback-only.
+
+## ChatGPT / remote deployment
+
+This repository does not provide a hosted MCP endpoint.
+
+For ChatGPT, the maintained deployment pattern is:
 
 ```text
-ChatGPT -> Cloudflare Access Managed OAuth -> shared Cloudflare Tunnel
-        -> avanza-gateway:8080 -> 127.0.0.1:8767/mcp
+ChatGPT
+  -> Cloudflare Access Managed OAuth
+  -> Cloudflare Tunnel
+  -> avanza-gateway
+  -> loopback FastMCP backend
 ```
 
-Copy `public/gateway.env.example` to `public/gateway.env` and replace every placeholder with your own deployment values. Keep the real file gitignored.
-Configure the Cloudflare Access application and shared tunnel route for your own hostname, then start:
+Copy the example configuration:
+
+```bash
+cp public/gateway.env.example public/gateway.env
+```
+
+Replace the placeholders with your own deployment values and keep the real file
+gitignored. Then start the public layer:
 
 ```bash
 docker compose -f compose.public.yaml up -d
 ```
 
-The public gateway requires a valid Cloudflare Access JWT. Both model-facing gateway
-deployments use the same explicit reviewed 59-tool allowlist, strip client
-credentials before forwarding, compact tool schemas to reduce model-context overhead,
-and remove duplicate structured tool-result payloads when an equivalent text result is
-already present. New MCP tools are not exposed until the allowlist is reviewed.
+The gateway:
 
-This project does not provide a hosted endpoint. Avanza session credentials remain on
-the Windows host and are never forwarded through the gateway.
+- requires a valid Cloudflare Access JWT;
+- exposes only an explicit reviewed tool allowlist;
+- strips client credentials before forwarding;
+- compacts tool schemas/results for model use;
+- does not receive Avanza session credentials.
 
-Optional authenticated read-only access uses a loopback BankID flow and an isolated
-auth-worker architecture. The long-lived FastMCP/control-plane process does not receive
-Avanza cookies or the security token. When a valid Avanza session exists, the existing
-public market-data tools reuse it through an explicit read-only endpoint allowlist so
-Avanza can return the fresher/realtime data entitled to the logged-in session. This
-includes stocks, certificates, warrants, leveraged screening, ETFs, options/futures,
-funds and the other existing public market-data tools; realtime availability remains
-an upstream Avanza property and is not fabricated by the MCP.
+Public gateway containers are configured to run non-root with a read-only filesystem,
+dropped Linux capabilities and `no-new-privileges`.
 
-Three session modes are available:
+## Deliberate non-goals
 
-- `persistent`: the verified Avanza session is stored in the native OS
-  credential store. Each authenticated operation starts a short-lived worker, which
-  loads the session once and runs session validation concurrently with the approved
-  read. The result is released only after validation succeeds; refreshed material is
-  persisted only when it changed. The worker then closes its HTTP clients and exits.
-- `memory_only` (default): no reusable Avanza session is written to the OS credential
-  store. A dedicated isolated worker keeps the session only in its process memory,
-  performs remote logout after 120 minutes without an authenticated read-only operation,
-  and enforces a non-sliding 16-hour absolute lifetime from session establishment.
-- `one_shot`: no persistent session is written. After BankID, the isolated worker
-  permits one explicit authenticated account workflow, performs remote logout, and exits.
-  If unused, it logs out after five minutes. Approved public market-data calls may reuse
-  the in-memory session during that bounded window.
+This project intentionally does **not** try to expose every Avanza endpoint.
 
-The Cloudflare gateway exposes the reviewed MCP surface, while Avanza and Placera Forum session
-credentials remain on the Windows host and never traverse Docker, Cloudflare, or the MCP
-result channel. The Avanza banking/trading surface stays read-only: there are no order-placement,
-order-edit, cancellation, transfer, or withdrawal tools. `create_forum_post` is the only exposed
-external write and requires a separate Placera Forum BankID session plus `confirm=true` on that exact call.
+In particular:
 
-Intentionally not exposed by the authenticated MCP surface: `get_credit_info` and
-`get_current_offers`. Their client implementations are retained for future reviewed
-activation if a concrete workflow requires them. `get_forum_posts` is exposed as a bounded
-read-only tool; its author/title/content fields are user-generated text and must be treated
-as untrusted data, never instructions. Placera Forum authentication is separate from Avanza:
-`connect_forum` opens a local BankID flow, the bearer token remains only in an isolated memory-only
-worker, and `create_forum_post` publishes only the exact supplied text after explicit confirmation.
+- no stock/fund order placement;
+- no order modification or cancellation;
+- no transfers or withdrawals;
+- no generic authenticated HTTP proxy;
+- no automatic login at startup;
+- no credentials in repository configuration;
+- no hosted service operated by this repository;
+- no new MCP tool merely because an undocumented Avanza endpoint exists.
 
-</details>
+The rule for expanding authenticated capability is simple: there should be a concrete
+workflow, a bounded response, a reviewed data projection and a clear reason why the
+existing tool surface cannot already solve it.
 
-<details>
-<summary>Python</summary>
+## Prompts and resources
 
-Install with `uv add avanza-mcp`, then use FastMCP's in-process client:
+Prompts:
 
-```python
-import asyncio
-from fastmcp import Client
-from avanza_mcp import mcp
+- `analyze_stock(stock_symbol)`
+- `compare_funds(fund_names)`
+- `screen_dividend_stocks(candidates, min_yield=3.0)`
 
-async def main():
-    async with Client(mcp) as client:
-        result = await client.call_tool(
-            "search_instruments", {"query": "Volvo", "instrument_type": "stock"}
-        )
-        print(result.structured_content)
+Resources:
 
-asyncio.run(main())
+- `avanza://docs/usage`
+- `avanza://docs/quick-start`
+- `avanza://stock/{order_book_id}`
+- `avanza://fund/{order_book_id}`
+
+## Development
+
+See [DEVELOPMENT.md](DEVELOPMENT.md) for worktrees, local transports and development
+details.
+
+Common checks:
+
+```bash
+uv run pytest tests/unit -v
+node --test tests/gateway/*.test.mjs
+uv run pytest tests/integration -v
 ```
 
-</details>
+The repository also runs CI, static analysis and CodeQL. Integration tests that contact
+Avanza may fail when undocumented upstream APIs change or are temporarily unavailable.
 
-If a desktop client cannot find `uvx`, use its absolute executable path. See [DEVELOPMENT.md](DEVELOPMENT.md) for running from source and tests.
+## Privacy and local configuration
 
-## Tools
+Do not commit:
 
-The source-checkout server exposes one 59-tool surface: 37 market-data tools plus 22 authenticated/session/forum tools. Avanza account/trading operations remain read-only; Placera Forum posting is the sole external write. Search first to obtain an `order_book_id`; history tools expose pagination. Data is latest available, not guaranteed live.
+- Avanza or Placera session material;
+- account identifiers;
+- Cloudflare secrets or tunnel credentials;
+- machine-specific paths or identities;
+- local gateway environment files.
 
-| Category | Tool | Description |
-|----------|------|-------------|
-| Search | `search_instruments` | Find instruments by name, ticker or ISIN |
-| Search | `get_instrument_by_order_book_id` | Match an exact ID within search candidates |
-| Stocks | `get_stock_info` | Company, listing, fundamentals and quote |
-| Stocks | `get_stock_quote` | Latest price and trading volume |
-| Stocks | `get_stock_chart` | Historical OHLC price points |
-| Stocks | `get_stock_analysis` | A named financial-ratio history |
-| Stocks | `get_dividends` | A named dividend metric by financial year |
-| Stocks | `get_company_financials` | A named annual or quarterly financial metric |
-| Market | `get_orderbook` | Bid/ask depth |
-| Market | `get_marketplace_info` | Trading hours and market status |
-| Market | `get_recent_trades` | Recent trade snapshot |
-| Market | `get_broker_trade_summary` | Broker buy/sell activity |
-| Derivatives | `screen_leveraged_instruments` | Bounded certificate/warrant screen for one underlying |
-| Derivatives | `screen_options` | Bounded structural options screen for one underlying |
-| Derivatives | `enrich_option_snapshot` | Add selected market snapshot data to option candidates |
-| Funds | `get_fund_info` | NAV, performance, fees and fund information |
-| Funds | `get_fund_sustainability` | ESG and sustainability metrics |
-| Funds | `get_fund_chart` | Historical fund chart points |
-| Funds | `get_fund_chart_periods` | Available performance periods |
-| Funds | `get_fund_description` | Investment strategy and category |
-| Funds | `get_fund_holdings` | Country, sector and top-holding allocations |
-| Certificates | `filter_certificates` | Filter and list certificates |
-| Certificates | `get_certificate_info` | Certificate information |
-| Certificates | `get_certificate_details` | Extended certificate details |
-| Warrants | `filter_warrants` | Filter and list warrants |
-| Warrants | `get_warrant_info` | Warrant information |
-| Warrants | `get_warrant_details` | Extended warrant details |
-| ETFs | `filter_etfs` | Filter and list ETFs |
-| ETFs | `get_etf_info` | ETF information |
-| ETFs | `get_etf_details` | Extended ETF details |
-| Futures/Forwards | `list_futures_forwards` | Filter and list contracts |
-| Futures/Forwards | `get_future_forward_filter_options` | Available contract filters |
-| Futures/Forwards | `get_future_forward_info` | Contract information |
-| Futures/Forwards | `get_future_forward_details` | Extended contract details |
-| Additional | `get_number_of_owners` | Avanza ownership history |
-| Additional | `get_short_selling` | Short-selling history |
-| Additional | `get_marketmaker_chart` | Traded-product OHLC and market-maker data |
+Real deployment values belong in ignored local configuration. Public examples should
+remain sanitized.
 
-The 22 authenticated/session/forum tools include `get_portfolio_snapshot` for one bounded
-current-state portfolio read, `get_forum_posts` for bounded user-generated instrument
-discussion, and the separate `connect_forum` / `get_forum_auth_status` / `disconnect_forum` /
-`create_forum_post` flow. The same reviewed 59-tool surface is available behind Cloudflare Access.
+## Disclaimer
 
-## Prompts
+This is an unofficial project and is not affiliated with Avanza Bank AB or Placera.
+The underlying undocumented APIs may change or disappear at any time.
 
-- `analyze_stock(stock_symbol)` - Research a stock's fundamentals and price history.
-- `compare_funds(fund_names)` - Compare two or more supplied funds.
-- `screen_dividend_stocks(candidates, min_yield=3.0)` - Screen supplied stocks by dividend yield.
-
-## Resources
-
-- `avanza://docs/usage` - Tool usage guide.
-- `avanza://docs/quick-start` - Common workflows.
-- `avanza://stock/{order_book_id}` - Stock summary as Markdown.
-- `avanza://fund/{order_book_id}` - Fund summary as Markdown.
+Use the software at your own risk. Review the code and deployment model before exposing
+an MCP endpoint outside your local machine.
 
 ## License
 
