@@ -51,6 +51,7 @@ _ALLOWED_ACCOUNT_OPERATIONS = frozenset(
         "portfolio_snapshot",
         "instrument_news",
         "instrument_news_batch",
+        "forum_posts",
         "insider_transactions",
         "active_orders",
         "deals",
@@ -382,6 +383,14 @@ async def _account_operation(
                     failed_order_book_ids=[
                         failed for _, _, failed in rows if failed is not None
                     ],
+                )
+            elif operation == "forum_posts":
+                _only_arguments(arguments, {"order_book_id", "limit"})
+                result = await account.forum_posts(
+                    _numeric_order_book_id(arguments["order_book_id"]),
+                    _bounded_int(
+                        arguments.get("limit"), default=20, minimum=1, maximum=100
+                    ),
                 )
             elif operation == "insider_transactions":
                 _only_arguments(arguments, {"order_book_id", "limit"})
