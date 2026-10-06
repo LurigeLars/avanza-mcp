@@ -165,7 +165,8 @@ class ForumBankIDClient:
                 json={"order_ref": order_ref},
             )
         except BankIDError:
-            pass
+            # Cancellation is best-effort; the local attempt is already forgotten.
+            return
 
     async def logout(self, session: SessionMaterial | None = None) -> None:
         if session is None or not session._security_token:
