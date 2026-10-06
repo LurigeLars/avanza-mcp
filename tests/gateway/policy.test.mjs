@@ -11,15 +11,16 @@ import {
 
 test('default allowlist is the single authenticated read-only Avanza surface', () => {
   const allowed = parseAllowedTools();
-  assert.equal(allowed.size, 54);
+  assert.equal(allowed.size, 55);
   assert.equal(allowed.has('search_instruments'), true);
   assert.equal(allowed.has('screen_leveraged_instruments'), true);
   assert.equal(allowed.has('enrich_leveraged_snapshot'), false);
   assert.equal(allowed.has('connect_avanza'), true);
   assert.equal(allowed.has('get_accounts'), true);
   assert.equal(allowed.has('get_stop_loss_orders'), true);
+  assert.equal(allowed.has('get_forum_posts'), true);
   assert.equal(allowed.has('future_place_order'), false);
-  assert.equal(ALL_ALLOWED_TOOLS.split(',').length, 54);
+  assert.equal(ALL_ALLOWED_TOOLS.split(',').length, 55);
 });
 
 test('legacy authenticated profile token maps to the same single surface', () => {
