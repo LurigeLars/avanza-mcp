@@ -580,6 +580,7 @@ class AuthProcessBroker:
             try:
                 await self._command(process, {"action": "shutdown"}, timeout=5.0)
             except AuthWorkerError:
+                # Graceful forum shutdown is best-effort; process termination below is authoritative.
                 pass
             await self._stop_process(process)
 
