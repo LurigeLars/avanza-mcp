@@ -111,7 +111,11 @@ async def test_accounts_holdings_and_transactions_are_explicit_and_bounded():
         accounts = await account_client.accounts()
         holdings = await account_client.holdings()
         transactions = await account_client.transactions(
-            from_date=date(2026, 1, 1), to_date=date(2026, 1, 31), limit=1
+            from_date=date(2026, 1, 1),
+            to_date=date(2026, 1, 31),
+            limit=1,
+            isin="SE0000115446",
+            transaction_types=["DIVIDEND", "BUY"],
         )
 
     assert accounts.accounts[0].account_id == "1"
@@ -125,6 +129,8 @@ async def test_accounts_holdings_and_transactions_are_explicit_and_bounded():
         "maxElements": "1",
         "from": "2026-01-01",
         "to": "2026-01-31",
+        "isin": "SE0000115446",
+        "transactionTypes": "DIVIDEND,BUY",
     }
     output = accounts.model_dump_json() + transactions.model_dump_json()
     assert "secretField" not in output and "noteId" not in output
