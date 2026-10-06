@@ -288,9 +288,30 @@ class ForumAPIClient:
             item for item in rows
             if isinstance(item, dict) and item.get("isin") == isin
         ]
-        if len(exact) != 1:
+        if not exact:
             raise ForumError("instrument_not_unique")
-        item = exact[0]
+        if len(exact) == 1:
+            item = exact[0]
+        else:
+            primary_ids: set[str] = set()
+            for candidate in exact:
+                company = candidate.get("company")
+                if not isinstance(company, dict):
+                    continue
+                primary = company.get("primary_instrument")
+                if not isinstance(primary, dict):
+                    continue
+                primary_id = primary.get("id")
+                if isinstance(primary_id, str) and primary_id:
+                    primary_ids.add(primary_id)
+            primary_matches = [
+                candidate
+                for candidate in exact
+                if candidate.get("id") in primary_ids
+            ]
+            if len(primary_matches) != 1:
+                raise ForumError("instrument_not_unique")
+            item = primary_matches[0]
         instrument_id = _required_string(item, "id", max_length=128)
         instrument_name = _required_string(item, "name", max_length=512)
         company = item.get("company")

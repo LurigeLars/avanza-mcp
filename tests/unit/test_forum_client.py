@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import httpx
+import pytest
 
 from avanza_mcp.client.bankid import CollectStatus
-from avanza_mcp.client.forum import ForumAPIClient, ForumBankIDClient
+from avanza_mcp.client.forum import ForumAPIClient, ForumBankIDClient, ForumError
 
 
 async def test_forum_bankid_flow_uses_verified_paths_and_keeps_token_internal():
@@ -179,3 +180,95 @@ async def test_forum_post_uses_instrument_when_no_company_exists():
         '{"title":"","content":"Exact body","tags":[],"media":[],'
         '"instrument":"instrument-1"}'
     )
+
+
+async def test_forum_resolver_prefers_company_primary_instrument_for_duplicate_isin():
+    isin = "US91913Y1001"
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/v1/instruments"
+        assert request.url.params["isin"] == isin
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "id": "v1l-xetra",
+                        "isin": isin,
+                        "name": "Valero Energy",
+                        "slug": "valero-energy",
+                        "symbol": "V1L",
+                        "company": {
+                            "id": "valero-company",
+                            "name": "Valero Energy",
+                            "slug": "valero-energy",
+                            "primary_instrument": {
+                                "id": "vlo-primary",
+                                "isin": isin,
+                                "symbol": "VLO",
+                            },
+                        },
+                    },
+                    {
+                        "id": "vlo-primary",
+                        "isin": isin,
+                        "name": "Valero Energy",
+                        "slug": "valero-energy",
+                        "symbol": "VLO",
+                        "company": {
+                            "id": "valero-company",
+                            "name": "Valero Energy",
+                            "slug": "valero-energy",
+                            "primary_instrument": {
+                                "id": "vlo-primary",
+                                "isin": isin,
+                                "symbol": "VLO",
+                            },
+                        },
+                    },
+                ]
+            },
+        )
+
+    async with ForumAPIClient(
+        "forum-token",
+        _transport=httpx.MockTransport(handler),
+    ) as client:
+        target = await client.resolve_instrument(isin)
+
+    assert target.instrument_id == "vlo-primary"
+    assert target.instrument_name == "Valero Energy"
+    assert target.company_id == "valero-company"
+
+
+async def test_forum_resolver_still_fails_closed_when_duplicate_isin_has_no_unique_primary():
+    isin = "US0000000001"
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "id": "listing-a",
+                        "isin": isin,
+                        "name": "Synthetic",
+                        "company": {"id": "company-a", "name": "Synthetic"},
+                    },
+                    {
+                        "id": "listing-b",
+                        "isin": isin,
+                        "name": "Synthetic",
+                        "company": {"id": "company-b", "name": "Synthetic"},
+                    },
+                ]
+            },
+        )
+
+    async with ForumAPIClient(
+        "forum-token",
+        _transport=httpx.MockTransport(handler),
+    ) as client:
+        with pytest.raises(ForumError, match="instrument_not_unique"):
+            await client.resolve_instrument(isin)
