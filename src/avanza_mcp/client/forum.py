@@ -325,10 +325,14 @@ class ForumAPIClient:
             "content": content,
             "tags": [],
             "media": [],
-            "instrument": target.instrument_id,
         }
+        # Placera destinations are mutually exclusive. Company discussion pages
+        # create COMPANY posts with instrument=null; use the instrument only when
+        # the resolved security has no company destination.
         if target.company_id is not None:
             payload["company"] = target.company_id
+        else:
+            payload["instrument"] = target.instrument_id
 
         response = await self._request("POST", "/posts", json=payload)
         body = self._json_object(response)
