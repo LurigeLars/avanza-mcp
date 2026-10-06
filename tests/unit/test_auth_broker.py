@@ -276,7 +276,6 @@ def test_worker_account_allowlist_excludes_hidden_internal_operations():
     assert {
         "credit_info",
         "current_offers",
-        "forum_posts",
     }.isdisjoint(_ALLOWED_ACCOUNT_OPERATIONS)
     assert _ALLOWED_ACCOUNT_OPERATIONS == {
         "accounts",
@@ -288,6 +287,7 @@ def test_worker_account_allowlist_excludes_hidden_internal_operations():
         "portfolio_snapshot",
         "instrument_news",
         "instrument_news_batch",
+        "forum_posts",
         "insider_transactions",
         "active_orders",
         "deals",
