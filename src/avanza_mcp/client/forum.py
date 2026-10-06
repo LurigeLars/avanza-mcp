@@ -98,7 +98,10 @@ class ForumBankIDClient:
             "/v1/auth/bankid/start",
             json={"same_device": False, "scope": "read write beta"},
         )
-        self._order_ref = _required_string(body, "order_ref", max_length=256)
+        try:
+            self._order_ref = _required_string(body, "order_ref", max_length=256)
+        except ForumError:
+            raise BankIDError(BankIDErrorCode.MALFORMED_RESPONSE) from None
         return await self.restart()
 
     async def restart(self) -> str:
