@@ -596,3 +596,50 @@ async def test_memory_daemon_fail_safe_disconnects_on_unexpected_error(monkeypat
     assert len(instances) == 1
     assert instances[0].disconnect_calls == 1
     assert instances[0].close_calls == 1
+
+
+async def test_forum_posts_account_operation_is_bounded_and_delegates(monkeypatch):
+    from avanza_mcp.models.account import ForumPost, ForumPosts
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+    seen = {}
+
+    class FakeAccountClient:
+        def __init__(self, client):
+            assert isinstance(client, FakeClient)
+
+        async def forum_posts(self, order_book_id, limit):
+            seen["args"] = (order_book_id, limit)
+            return ForumPosts(
+                posts=[
+                    ForumPost(
+                        author="Synthetic user",
+                        title="Synthetic title",
+                        content="Synthetic discussion",
+                    )
+                ],
+                truncated=False,
+            )
+
+    monkeypatch.setattr(worker, "AvanzaClient", FakeClient)
+    monkeypatch.setattr(worker, "AccountClient", FakeAccountClient)
+    auth = worker._RequestAuth(SessionMaterial((), "token"))
+
+    result = await worker._account_operation(
+        auth,
+        "forum_posts",
+        {"order_book_id": "123", "limit": 7},
+    )
+
+    assert result["ok"] is True
+    assert result["result"]["posts"][0]["title"] == "Synthetic title"
+    assert seen["args"] == ("123", 7)
