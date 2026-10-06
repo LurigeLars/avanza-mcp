@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 from avanza_mcp.auth.broker import (
     AuthProcessBroker,
     AuthWorkerOperationError,
+    AuthWorkerRequired,
     _contains_forbidden_key,
     session_mode_from_environment,
 )
@@ -529,7 +530,7 @@ async def test_forum_post_requires_connected_forum_worker(monkeypatch):
     monkeypatch.setattr(broker, "_command", command)
 
     try:
-        with pytest.raises(Exception) as exc:
+        with pytest.raises(AuthWorkerRequired):
             await broker.forum_post(
                 {
                     "isin": "SE0000115446",
@@ -538,7 +539,6 @@ async def test_forum_post_requires_connected_forum_worker(monkeypatch):
                     "confirm": True,
                 }
             )
-        assert type(exc.value).__name__ == "AuthWorkerRequired"
     finally:
         broker._forum_daemon = None
         await broker.aclose()
