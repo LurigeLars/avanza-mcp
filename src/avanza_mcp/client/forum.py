@@ -293,14 +293,17 @@ class ForumAPIClient:
         if len(exact) == 1:
             item = exact[0]
         else:
-            primary_ids = {
-                primary.get("id")
-                for candidate in exact
-                if isinstance((company := candidate.get("company")), dict)
-                and isinstance((primary := company.get("primary_instrument")), dict)
-                and isinstance(primary.get("id"), str)
-                and primary.get("id")
-            }
+            primary_ids: set[str] = set()
+            for candidate in exact:
+                company = candidate.get("company")
+                if not isinstance(company, dict):
+                    continue
+                primary = company.get("primary_instrument")
+                if not isinstance(primary, dict):
+                    continue
+                primary_id = primary.get("id")
+                if isinstance(primary_id, str) and primary_id:
+                    primary_ids.add(primary_id)
             primary_matches = [
                 candidate
                 for candidate in exact
