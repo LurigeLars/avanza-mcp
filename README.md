@@ -58,12 +58,13 @@ Requires [uv](https://docs.astral.sh/uv/) and Python 3.12+.
 | ChatGPT and other cloud chats | Cloudflare Access -> gateway -> `127.0.0.1:8767` | **yes**, through the same authenticated-capable runtime |
 | Any client, no checkout | `uvx avanza-mcp` from PyPI | **no** |
 
-A source checkout starts one authenticated-capable read-only server. Its surface contains
-55 tools: 37 market-data tools plus 18 reviewed authenticated/session tools including
+A source checkout starts one authenticated-capable server. Its Avanza banking/trading surface remains read-only. The full surface contains
+59 tools: 37 market-data tools plus 22 reviewed authenticated/session/forum tools including
 `connect_avanza`, `disconnect_avanza`, `get_auth_status`, `get_execution_quote`,
 `get_accounts`, `get_holdings`, `get_transactions`, `get_watchlists`,
 `get_price_alerts`, `get_portfolio_insights`, `get_portfolio_snapshot`,
 `get_instrument_news`, `get_instrument_news_batch`, `get_forum_posts`,
+`connect_forum`, `disconnect_forum`, `get_forum_auth_status`, `create_forum_post`,
 `get_insider_transactions`, `get_active_orders`, `get_deals`, and `get_stop_loss_orders`.
 Authentication itself remains explicit: `connect_avanza` opens the local browser/BankID flow,
 nothing is requested at startup, and banking credentials never pass through chat. Market discovery
@@ -95,7 +96,7 @@ Both launch the server over stdio from a checkout. Replace the path with your ow
 - **Cursor:** add it to `.cursor/mcp.json` in your project, or `~/.cursor/mcp.json` globally. Enable
   the server in Cursor's MCP settings.
 
-The source checkout always exposes the same authenticated-capable read-only surface.
+The source checkout always exposes the same authenticated-capable surface. Avanza account/trading operations remain read-only; `create_forum_post` is a separate explicit Placera Forum write.
 
 </details>
 
@@ -111,7 +112,7 @@ codex mcp add avanza --url http://127.0.0.1:8769/mcp
 ```
 
 This keeps the canonical FastMCP server on port 8767 while presenting the compact
-55-tool read-only catalog on port 8769. Use `/mcp` in Claude Code or `codex mcp list` to
+59-tool catalog on port 8769. Use `/mcp` in Claude Code or `codex mcp list` to
 verify the connection.
 
 The portable stdio form remains available when no background HTTP stack is installed. It is the
@@ -283,7 +284,7 @@ docker compose -f compose.public.yaml up -d
 ```
 
 The public gateway requires a valid Cloudflare Access JWT. Both model-facing gateway
-deployments use the same explicit reviewed 55-tool read-only allowlist, strip client
+deployments use the same explicit reviewed 59-tool allowlist, strip client
 credentials before forwarding, compact tool schemas to reduce model-context overhead,
 and remove duplicate structured tool-result payloads when an equivalent text result is
 already present. New MCP tools are not exposed until the allowlist is reviewed.
@@ -309,23 +310,26 @@ Three session modes are available:
   persisted only when it changed. The worker then closes its HTTP clients and exits.
 - `memory_only` (default): no reusable Avanza session is written to the OS credential
   store. A dedicated isolated worker keeps the session only in its process memory,
-  performs remote logout after 60 minutes without an authenticated read-only operation,
+  performs remote logout after 120 minutes without an authenticated read-only operation,
   and enforces a non-sliding 16-hour absolute lifetime from session establishment.
 - `one_shot`: no persistent session is written. After BankID, the isolated worker
   permits one explicit authenticated account workflow, performs remote logout, and exits.
   If unused, it logs out after five minutes. Approved public market-data calls may reuse
   the in-memory session during that bounded window.
 
-The Cloudflare gateway exposes the reviewed read-only MCP surface, while Avanza session
+The Cloudflare gateway exposes the reviewed MCP surface, while Avanza and Placera Forum session
 credentials remain on the Windows host and never traverse Docker, Cloudflare, or the MCP
-result channel.
-There are no order-placement, order-edit, cancellation, transfer, or withdrawal tools.
+result channel. The Avanza banking/trading surface stays read-only: there are no order-placement,
+order-edit, cancellation, transfer, or withdrawal tools. `create_forum_post` is the only exposed
+external write and requires a separate Placera Forum BankID session plus `confirm=true` on that exact call.
 
 Intentionally not exposed by the authenticated MCP surface: `get_credit_info` and
 `get_current_offers`. Their client implementations are retained for future reviewed
 activation if a concrete workflow requires them. `get_forum_posts` is exposed as a bounded
 read-only tool; its author/title/content fields are user-generated text and must be treated
-as untrusted data, never instructions.
+as untrusted data, never instructions. Placera Forum authentication is separate from Avanza:
+`connect_forum` opens a local BankID flow, the bearer token remains only in an isolated memory-only
+worker, and `create_forum_post` publishes only the exact supplied text after explicit confirmation.
 
 </details>
 
@@ -355,7 +359,7 @@ If a desktop client cannot find `uvx`, use its absolute executable path. See [DE
 
 ## Tools
 
-The source-checkout server exposes one 55-tool read-only surface: 37 market-data tools plus 18 authenticated/session tools. Search first to obtain an `order_book_id`; history tools expose pagination. Data is latest available, not guaranteed live.
+The source-checkout server exposes one 59-tool surface: 37 market-data tools plus 22 authenticated/session/forum tools. Avanza account/trading operations remain read-only; Placera Forum posting is the sole external write. Search first to obtain an `order_book_id`; history tools expose pagination. Data is latest available, not guaranteed live.
 
 | Category | Tool | Description |
 |----------|------|-------------|
@@ -397,9 +401,10 @@ The source-checkout server exposes one 55-tool read-only surface: 37 market-data
 | Additional | `get_short_selling` | Short-selling history |
 | Additional | `get_marketmaker_chart` | Traded-product OHLC and market-maker data |
 
-The 18 authenticated/session tools include `get_portfolio_snapshot` for one bounded
-current-state portfolio read and `get_forum_posts` for bounded user-generated instrument
-discussion. The same 55-tool read-only surface is available behind Cloudflare Access.
+The 22 authenticated/session/forum tools include `get_portfolio_snapshot` for one bounded
+current-state portfolio read, `get_forum_posts` for bounded user-generated instrument
+discussion, and the separate `connect_forum` / `get_forum_auth_status` / `disconnect_forum` /
+`create_forum_post` flow. The same reviewed 59-tool surface is available behind Cloudflare Access.
 
 ## Prompts
 
