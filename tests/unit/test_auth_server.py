@@ -1,6 +1,7 @@
 """Authenticated server composition using credential-isolated workers."""
 
-from unittest.mock import Mock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
@@ -24,6 +25,14 @@ class FakeBroker:
         self.market_response = None
         self.market_batch_response = None
         self.account_results = {}
+        self.forum_calls = []
+        self.forum_result = {
+            "post_id": "post-1",
+            "instrument_name": "Synthetic",
+            "instrument_slug": "synthetic",
+            "company_name": "Synthetic AB",
+            "company_slug": "synthetic-ab",
+        }
 
     async def warm_market_worker(self):
         self.warmed += 1
@@ -40,6 +49,28 @@ class FakeBroker:
 
     async def status(self):
         return AuthStatus(state="disconnected", message="Avanza is not connected.")
+
+    async def connect_forum(self):
+        self.opened += 1
+        return AuthStatus(
+            state="awaiting_approval",
+            message="Approve Placera Forum sign-in in the local browser window.",
+        )
+
+    async def disconnect_forum(self):
+        self.opened += 1
+        return AuthStatus(
+            state="disconnected", message="Placera Forum is not connected."
+        )
+
+    async def forum_status(self):
+        return AuthStatus(
+            state="disconnected", message="Placera Forum is not connected."
+        )
+
+    async def forum_post(self, arguments):
+        self.forum_calls.append(arguments)
+        return self.forum_result
 
     async def account(self, operation, arguments):
         self.account_calls.append((operation, arguments))
@@ -64,7 +95,7 @@ async def test_auth_server_mounts_public_contract_and_adds_auth_tools():
     server = create_auth_server(broker)  # type: ignore[arg-type]
     async with Client(server) as client:
         tools = {tool.name for tool in await client.list_tools()}
-        assert len(tools) == 55
+        assert len(tools) == 59
         assert {
             "connect_avanza",
             "disconnect_avanza",
@@ -80,6 +111,10 @@ async def test_auth_server_mounts_public_contract_and_adds_auth_tools():
             "get_instrument_news",
             "get_instrument_news_batch",
             "get_forum_posts",
+            "connect_forum",
+            "disconnect_forum",
+            "get_forum_auth_status",
+            "create_forum_post",
             "get_insider_transactions",
             "get_active_orders",
             "get_deals",
@@ -358,4 +393,79 @@ async def test_forum_posts_tool_delegates_bounded_read_once():
     assert result.structured_content == broker.account_results["forum_posts"]
     assert broker.account_calls == [
         ("forum_posts", {"order_book_id": "123", "limit": 7})
+    ]
+
+
+async def test_forum_connection_tools_are_separate_from_avanza_auth():
+    broker = FakeBroker()
+
+    async with Client(create_auth_server(broker)) as client:  # type: ignore[arg-type]
+        connected = await client.call_tool("connect_forum", {})
+        assert connected.structured_content["state"] == "awaiting_approval"
+        status = await client.call_tool("get_forum_auth_status", {})
+        assert status.structured_content == {
+            "state": "disconnected",
+            "message": "Placera Forum is not connected.",
+            "error_code": None,
+        }
+        disconnected = await client.call_tool("disconnect_forum", {})
+        assert disconnected.structured_content["state"] == "disconnected"
+
+    assert broker.opened == 2
+
+
+async def test_create_forum_post_requires_confirmation_before_any_write(monkeypatch):
+    broker = FakeBroker()
+    stock = SimpleNamespace(isin="SE0000115446")
+    get_stock = AsyncMock(return_value=stock)
+    monkeypatch.setattr(
+        "avanza_mcp.auth.server.MarketDataService.get_stock_info",
+        get_stock,
+    )
+
+    async with Client(create_auth_server(broker)) as client:  # type: ignore[arg-type]
+        with pytest.raises(ToolError, match="CONFIRMATION_REQUIRED"):
+            await client.call_tool(
+                "create_forum_post",
+                {
+                    "order_book_id": "5269",
+                    "title": "Title",
+                    "content": "Exact body",
+                    "confirm": False,
+                },
+            )
+
+    get_stock.assert_not_awaited()
+    assert broker.forum_calls == []
+
+
+async def test_create_forum_post_maps_order_book_id_to_isin_and_delegates_once(monkeypatch):
+    broker = FakeBroker()
+    stock = SimpleNamespace(isin="SE0000115446")
+    get_stock = AsyncMock(return_value=stock)
+    monkeypatch.setattr(
+        "avanza_mcp.auth.server.MarketDataService.get_stock_info",
+        get_stock,
+    )
+
+    async with Client(create_auth_server(broker)) as client:  # type: ignore[arg-type]
+        result = await client.call_tool(
+            "create_forum_post",
+            {
+                "order_book_id": "5269",
+                "title": "Title",
+                "content": "Exact body",
+                "confirm": True,
+            },
+        )
+
+    assert result.structured_content == broker.forum_result
+    get_stock.assert_awaited_once_with("5269")
+    assert broker.forum_calls == [
+        {
+            "isin": "SE0000115446",
+            "title": "Title",
+            "content": "Exact body",
+            "confirm": True,
+        }
     ]
