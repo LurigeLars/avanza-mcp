@@ -676,7 +676,7 @@ async def test_transactions_account_operation_rejects_unknown_type(monkeypatch):
         {"transaction_types": ["BUY", "NOT_A_TYPE"]},
     )
 
-    assert result == {"ok": False, "code": "invalid_arguments"}
+    assert result == {"ok": False, "code": "read_error_response_shape"}
 
 
 async def test_forum_posts_account_operation_is_bounded_and_delegates(monkeypatch):
