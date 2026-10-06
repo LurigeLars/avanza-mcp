@@ -64,7 +64,7 @@ async def test_auth_server_mounts_public_contract_and_adds_auth_tools():
     server = create_auth_server(broker)  # type: ignore[arg-type]
     async with Client(server) as client:
         tools = {tool.name for tool in await client.list_tools()}
-        assert len(tools) == 54
+        assert len(tools) == 55
         assert {
             "connect_avanza",
             "disconnect_avanza",
@@ -79,12 +79,13 @@ async def test_auth_server_mounts_public_contract_and_adds_auth_tools():
             "get_portfolio_snapshot",
             "get_instrument_news",
             "get_instrument_news_batch",
+            "get_forum_posts",
             "get_insider_transactions",
             "get_active_orders",
             "get_deals",
             "get_stop_loss_orders",
         } <= tools
-        assert {"get_credit_info", "get_current_offers", "get_forum_posts", "enrich_leveraged_snapshot", "get_orderbook_depth"}.isdisjoint(tools)
+        assert {"get_credit_info", "get_current_offers", "enrich_leveraged_snapshot", "get_orderbook_depth"}.isdisjoint(tools)
         assert len(await client.list_prompts()) == 3
 
         connected = await client.call_tool("connect_avanza", {})
@@ -330,3 +331,31 @@ async def test_portfolio_snapshot_tool_is_bounded_and_delegates_once():
 
     assert result.structured_content == broker.account_results["portfolio_snapshot"]
     assert broker.account_calls == [("portfolio_snapshot", {"limit": 25})]
+
+
+async def test_forum_posts_tool_delegates_bounded_read_once():
+    broker = FakeBroker()
+    broker.account_results["forum_posts"] = {
+        "posts": [
+            {
+                "author": "Synthetic user",
+                "title": "Synthetic title",
+                "content": "Synthetic discussion",
+                "likes": 1,
+                "replies": 2,
+                "timestamp": 3,
+                "url": "/forum/post",
+            }
+        ],
+        "truncated": False,
+    }
+
+    async with Client(create_auth_server(broker)) as client:  # type: ignore[arg-type]
+        result = await client.call_tool(
+            "get_forum_posts", {"order_book_id": "123", "limit": 7}
+        )
+
+    assert result.structured_content == broker.account_results["forum_posts"]
+    assert broker.account_calls == [
+        ("forum_posts", {"order_book_id": "123", "limit": 7})
+    ]
