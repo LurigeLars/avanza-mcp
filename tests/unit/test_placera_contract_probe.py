@@ -1,43 +1,69 @@
-"""Temporary public Placera frontend contract probe. Remove before merge."""
+"""Temporary public Placera auth probe. Remove before merge."""
 
 from __future__ import annotations
 
-import base64
+import json
+import urllib.parse
 import urllib.request
 
 
-ASSETS = {
-    "api": "https://forum.placera.se/assets/isObject-DvdnBDox.js",
-    "auth": "https://forum.placera.se/assets/index.esm-C4jxjVQ6.js",
-}
+BASE = "https://api.forum.placera.se"
 
 
-def _fetch(url: str) -> str:
-    request = urllib.request.Request(url, headers={"User-Agent": "avanza-mcp-contract-probe/1.0"})
-    with urllib.request.urlopen(request, timeout=20) as response:
-        return response.read().decode("utf-8")
+def _request(path: str, *, method: str = "GET", payload=None):
+    data = None if payload is None else json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        BASE + path,
+        data=data,
+        method=method,
+        headers={
+            "User-Agent": "avanza-mcp-contract-probe/1.0",
+            "X-APP-PLATFORM": "web",
+            **({"Content-Type": "application/json"} if data is not None else {}),
+        },
+    )
+    return urllib.request.urlopen(request, timeout=20)
 
 
-def _window(source: str, marker: str, before: int = 250, after: int = 1200) -> str:
-    index = source.find(marker)
-    if index < 0:
-        return "MISSING"
-    return source[max(0, index-before):index+len(marker)+after]
+def test_public_placera_bankid_probe():
+    with _request(
+        "/v1/auth/bankid/start",
+        method="POST",
+        payload={"same_device": False, "scope": "read write beta"},
+    ) as response:
+        start = json.loads(response.read().decode("utf-8"))
+    order_ref = start["order_ref"]
 
+    try:
+        query = urllib.parse.urlencode({"order_ref": order_ref, "t": 1})
+        with _request("/v1/auth/bankid/qr?" + query) as response:
+            qr_type = response.headers.get("Content-Type")
+            qr = response.read(64)
 
-def _b64(value: str) -> str:
-    return base64.b64encode(value.encode("utf-8")).decode("ascii")
+        with _request(
+            "/v1/auth/bankid/collect",
+            method="POST",
+            payload={"order_ref": order_ref},
+        ) as response:
+            collect = json.loads(response.read().decode("utf-8"))
 
-
-def test_public_placera_contract_probe():
-    api = _fetch(ASSETS["api"])
-    auth = _fetch(ASSETS["auth"])
-    rows = {
-        "set_token": _b64(_window(api, "setToken(e){", 100, 500)),
-        "posts": _b64(_window(api, "posts:{", 50, 3500)),
-        "bankid_sdk": _b64(_window(api, "bankid:{start", 100, 1000)),
-        "auth_start_call": _b64(_window(auth, ".bankid.start(", 900, 3000)),
-        "auth_collect_call": _b64(_window(auth, ".bankid.collect(", 900, 3500)),
-        "auth_qr": _b64(_window(auth, "order_ref", 900, 3000)),
-    }
-    raise AssertionError("PLACERA_PROBE_B64=" + repr(rows))
+        safe = {
+            "start_keys": sorted(start),
+            "qr_content_type": qr_type,
+            "qr_prefix_hex": qr[:32].hex(),
+            "collect_keys": sorted(collect),
+            "collect_status": collect.get("status"),
+            "collect_hint_code": collect.get("hintCode"),
+            "collect_has_token": isinstance(collect.get("token"), str),
+        }
+        raise AssertionError("PLACERA_RUNTIME_PROBE=" + repr(safe))
+    finally:
+        try:
+            with _request(
+                "/v1/auth/bankid/cancel",
+                method="POST",
+                payload={"order_ref": order_ref},
+            ):
+                pass
+        except Exception:
+            pass
