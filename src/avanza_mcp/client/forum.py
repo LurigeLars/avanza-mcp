@@ -111,6 +111,8 @@ class ForumBankIDClient:
             "GET",
             "/v1/auth/bankid/qr",
             params={"order_ref": self._order_ref, "t": int(time.time() * 1000)},
+            # The QR endpoint returns an image and rejects JSON-only content negotiation.
+            headers={"Accept": "*/*"},
         )
         content = response.content
         content_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
