@@ -19,11 +19,13 @@ async def test_forum_bankid_flow_uses_verified_paths_and_keeps_token_internal():
 
         if request.url.path == "/v1/auth/bankid/start":
             assert request.method == "POST"
+            assert request.headers["accept"] == "application/json"
             assert request.content == b'{"same_device":false,"scope":"read write beta"}'
             return httpx.Response(200, json={"order_ref": "order-1"})
 
         if request.url.path == "/v1/auth/bankid/qr":
             assert request.method == "GET"
+            assert request.headers["accept"] == "*/*"
             assert request.url.params["order_ref"] == "order-1"
             return httpx.Response(
                 200,
@@ -32,6 +34,7 @@ async def test_forum_bankid_flow_uses_verified_paths_and_keeps_token_internal():
             )
 
         if request.url.path == "/v1/auth/bankid/collect":
+            assert request.headers["accept"] == "application/json"
             collect_count += 1
             if collect_count == 1:
                 return httpx.Response(
