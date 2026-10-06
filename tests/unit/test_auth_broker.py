@@ -471,3 +471,120 @@ async def test_auth_expiry_is_never_added_to_market_family_backoff(monkeypatch):
         assert broker._market_auth_backoff_until == {}
     finally:
         await broker.aclose()
+
+
+async def test_forum_broker_uses_dedicated_memory_only_worker(monkeypatch):
+    broker = AuthProcessBroker(mode="persistent")
+    process = _LiveProcess()
+    spawn = AsyncMock(return_value=process)
+    command = AsyncMock(
+        side_effect=[
+            {
+                "ok": True,
+                "status": {
+                    "state": "awaiting_approval",
+                    "message": "Approve Placera Forum sign-in in the local browser window.",
+                    "error_code": None,
+                },
+            },
+            {
+                "ok": True,
+                "status": {
+                    "state": "connected",
+                    "message": "Placera Forum is connected for this MCP process.",
+                    "error_code": None,
+                },
+            },
+        ]
+    )
+    monkeypatch.setattr(broker, "_spawn", spawn)
+    monkeypatch.setattr(broker, "_command", command)
+
+    try:
+        connected = await broker.connect_forum()
+        status = await broker.forum_status()
+        assert connected.state == "awaiting_approval"
+        assert status.state == "connected"
+        spawn.assert_awaited_once_with("forum-daemon", "memory_only")
+        assert broker._forum_daemon is process
+    finally:
+        broker._forum_daemon = None
+        await broker.aclose()
+
+
+async def test_forum_post_requires_connected_forum_worker(monkeypatch):
+    broker = AuthProcessBroker(mode="memory_only")
+    process = _LiveProcess()
+    broker._forum_daemon = process  # type: ignore[assignment]
+    command = AsyncMock(
+        return_value={
+            "ok": True,
+            "status": {
+                "state": "disconnected",
+                "message": "Placera Forum is not connected.",
+                "error_code": None,
+            },
+        }
+    )
+    monkeypatch.setattr(broker, "_command", command)
+
+    try:
+        with pytest.raises(Exception) as exc:
+            await broker.forum_post(
+                {
+                    "isin": "SE0000115446",
+                    "title": "",
+                    "content": "test",
+                    "confirm": True,
+                }
+            )
+        assert type(exc.value).__name__ == "AuthWorkerRequired"
+    finally:
+        broker._forum_daemon = None
+        await broker.aclose()
+
+
+async def test_forum_post_delegates_exact_confirmed_payload(monkeypatch):
+    broker = AuthProcessBroker(mode="memory_only")
+    process = _LiveProcess()
+    broker._forum_daemon = process  # type: ignore[assignment]
+    payload = {
+        "isin": "SE0000115446",
+        "title": "Title",
+        "content": "Exact body",
+        "confirm": True,
+    }
+    command = AsyncMock(
+        side_effect=[
+            {
+                "ok": True,
+                "status": {
+                    "state": "connected",
+                    "message": "Placera Forum is connected for this MCP process.",
+                    "error_code": None,
+                },
+            },
+            {
+                "ok": True,
+                "result": {
+                    "post_id": "post-1",
+                    "instrument_name": "Volvo B",
+                    "instrument_slug": "volvo-b",
+                    "company_name": "Volvo",
+                    "company_slug": "volvo",
+                },
+            },
+        ]
+    )
+    monkeypatch.setattr(broker, "_command", command)
+
+    try:
+        result = await broker.forum_post(payload)
+        assert result["post_id"] == "post-1"
+        assert command.await_args_list[1].args[1] == {
+            "action": "forum_post",
+            "arguments": payload,
+        }
+    finally:
+        broker._forum_daemon = None
+        await broker.aclose()
