@@ -37,7 +37,7 @@ def _latest_release(token: str) -> str:
 
 def _locked_version() -> str:
     lock = tomllib.loads(Path("uv.lock").read_text(encoding="utf-8"))
-    versions = {item["name"]: item["version"] for item in lock["package"]}
+    versions = {item["name"]: item["version"] for item in lock["package"] if "version" in item}
     try:
         return str(versions[PACKAGE])
     except KeyError as exc:
