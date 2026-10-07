@@ -21,6 +21,16 @@ def upstream(monkeypatch):
     return client
 
 
+async def test_server_icon_metadata():
+    async with Client(mcp) as client:
+        assert client.server_info is not None
+        assert client.server_info.icons
+        icon = client.server_info.icons[0]
+    assert icon.mime_type == "image/png"
+    assert icon.sizes == ["48x48"]
+    assert icon.src.startswith("data:image/png;base64,")
+
+
 async def test_registered_schemas_and_annotations():
     async with Client(mcp) as client:
         tools = {tool.name: tool for tool in await client.list_tools()}
