@@ -214,6 +214,53 @@ async def test_disconnect_requires_browser_confirmation_and_deletes_local_sessio
         await auth.aclose()
 
 
+async def test_reconnect_after_confirmed_disconnect_reuses_live_listener_safely():
+    session = SessionMaterial((), "synthetic-token")
+    store = FakeStore(session)
+    attempt = FakeAttempt()
+    opened: list[str] = []
+    auth = BrowserAuth(
+        client_factory=lambda: attempt,
+        browser_opener=lambda url: opened.append(url) is None,
+        store=store,
+    )
+
+    try:
+        assert (await auth.restore()).state == "connected"
+        assert (await auth.open_disconnect_browser()).state == "awaiting_disconnect"
+        target = urlsplit(opened[-1])
+        origin = f"{target.scheme}://{target.netloc}"
+
+        async with httpx.AsyncClient(base_url=origin) as client:
+            page = await client.get(target.path)
+            csrf = json.loads(re.search(r"const csrf=(\"[^\"]+\")", page.text)[1])
+            response = await client.post(
+                f"{target.path}/disconnect",
+                headers={"Origin": origin, "X-CSRF-Token": csrf},
+            )
+            assert response.json()["state"] == "disconnected"
+
+        # disconnect() schedules the listener to stop after a short success-page
+        # grace period. Reconnecting inside that window must cancel the stop,
+        # reuse the listener, and reset the state so the approval page can start
+        # a new BankID attempt.
+        reconnect = await auth.open_browser()
+        assert reconnect.state == "awaiting_approval"
+        assert len(opened) == 2
+
+        async with httpx.AsyncClient(base_url=origin) as client:
+            page = await client.get(target.path)
+            assert "Connect your account" in page.text
+            csrf = json.loads(re.search(r"const csrf=(\"[^\"]+\")", page.text)[1])
+            started = await client.post(
+                f"{target.path}/start",
+                headers={"Origin": origin, "X-CSRF-Token": csrf},
+            )
+            assert started.json()["state"] == "scanning"
+    finally:
+        await auth.aclose()
+
+
 async def test_restore_is_serialized_with_disconnect_and_disconnect_wins():
     session = SessionMaterial((), "synthetic-token")
     store = FakeStore(session)
