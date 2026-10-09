@@ -31,6 +31,22 @@ Authenticated account results return through the worker IPC channel. Session coo
 
 Worker commands are operation names plus bounded tool arguments. No generic arbitrary authenticated URL/method tool is exposed.
 
+## Authenticated health-check semantics
+
+`get_auth_status` performs an explicit deep probe through the isolated auth
+worker. It validates session availability **and** performs one approved read-only
+account read using the same `/_api/position-data/positions` path as `get_accounts`.
+It reports `connected` only if that account read succeeds. An unreadable
+account returns `error` and a bounded, credential-free diagnostic even when the
+session cookie itself still appears valid. Expired or absent access is reported
+as `disconnected`.
+
+Only an `AuthStatus` object crosses the worker boundary: account numbers,
+positions, balances, cookies and tokens are never returned by the health
+probe. Internal broker `status` calls remain lightweight to avoid doubling
+account reads for every ordinary market request. Health probes do not consume
+a `one_shot` account workflow or extend the memory-only idle timer.
+
 ## Session modes
 
 ### persistent
