@@ -251,8 +251,8 @@ def create_auth_server(broker: AuthProcessBroker | None = None) -> FastMCP:
         }
     )
     async def get_auth_status() -> AuthStatus:
-        """Return safe Avanza connection state without credentials or identity."""
-        return await broker.status()
+        """Verify an authenticated account read; return status without account data."""
+        return await broker.health_status()
 
     @server.tool(
         annotations={

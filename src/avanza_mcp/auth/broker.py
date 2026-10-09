@@ -149,6 +149,36 @@ class AuthProcessBroker:
             response = await self._command(process, {"action": "status"})
             return self._status_from_response(response)
 
+    async def health_status(self) -> AuthStatus:
+        """Verify a real account read, returning only credential-free health status.
+
+        Unlike internal status checks, this is an explicit deep probe. It does not
+        consume one_shot account access or expose account payloads outside the worker.
+        """
+        self._ensure_open()
+        if self.mode == "persistent":
+            if self._ui_process is not None and self._ui_process.returncode is None:
+                status = self._ui_status or AuthStatus(
+                    state="starting", message="BankID authentication is in progress."
+                )
+                if status.state == "connected":
+                    return AuthStatus(
+                        state="idle",
+                        message="BankID completed; account access is not yet verified.",
+                        error_code="account_read_unverified",
+                    )
+                return status
+            async with self._operation_lock:
+                await self._stop_market_daemon()
+                response = await self._run_once({"action": "health"})
+        else:
+            async with self._daemon_lock:
+                process = self._live_daemon()
+                if process is None:
+                    return _disconnected_status()
+                response = await self._command(process, {"action": "health"})
+        return self._status_from_response(response)
+
     async def connect_forum(self) -> AuthStatus:
         """Open the separate Placera Forum BankID flow in an isolated worker."""
         self._ensure_open()

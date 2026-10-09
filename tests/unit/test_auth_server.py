@@ -50,6 +50,9 @@ class FakeBroker:
     async def status(self):
         return AuthStatus(state="disconnected", message="Avanza is not connected.")
 
+    async def health_status(self):
+        return await self.status()
+
     async def connect_forum(self):
         self.opened += 1
         return AuthStatus(
