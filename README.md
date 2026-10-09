@@ -22,14 +22,14 @@ brokerage terminal.
 
 The server provides:
 
-- public market-data access without an Avanza login;
-- optional BankID-authenticated **read-only** account and portfolio context;
-- stock, fund, ETF, certificate, warrant, option and futures/forward data;
-- bounded leveraged-product and option screening;
-- transaction, holdings, order/deal and portfolio reads;
-- instrument news, insider transactions and Avanza forum reads;
-- a separate Placera Forum login for explicitly confirmed forum posts;
-- model-facing gateways for local agents and ChatGPT;
+- public market-data access without an Avanza login.
+- optional BankID-authenticated **read-only** account and portfolio context.
+- stock, fund, ETF, certificate, warrant, option and futures/forward data.
+- bounded leveraged-product and option screening.
+- transaction, holdings, order/deal and portfolio reads.
+- instrument news, insider transactions and Avanza forum reads.
+- a separate Placera Forum login for explicitly confirmed forum posts.
+- model-facing gateways for local agents and ChatGPT.
 - a security boundary that keeps Avanza session material on the local host.
 
 The Avanza banking/trading surface is intentionally read-only. There are no MCP tools
@@ -44,14 +44,14 @@ The upstream project provides the core MCP market-data implementation. This fork
 that foundation while adding functionality needed for a local, authenticated agent
 setup:
 
-- isolated BankID authentication and read-only Avanza account access;
-- memory-only session handling by default, with bounded idle and absolute lifetimes;
-- authenticated reuse of approved market-data endpoints for fresher entitled data;
-- model-optimized local and public gateways with explicit tool allowlists;
-- Cloudflare Access support for remote MCP clients such as ChatGPT;
-- Windows background-task installers and lifecycle tooling;
-- leveraged-product and option screening for larger Avanza instrument families;
-- a separate Placera Forum authentication/write path with explicit confirmation;
+- isolated BankID authentication and read-only Avanza account access.
+- memory-only session handling by default, with bounded idle and absolute lifetimes.
+- authenticated reuse of approved market-data endpoints for fresher entitled data.
+- model-optimized local and public gateways with explicit tool allowlists.
+- Cloudflare Access support for remote MCP clients such as ChatGPT.
+- Windows background-task installers and lifecycle tooling.
+- leveraged-product and option screening for larger Avanza instrument families.
+- a separate Placera Forum authentication/write path with explicit confirmation.
 - additional testing, security hardening, static analysis and CodeQL coverage.
 
 Upstream changes are periodically reviewed and reconciled, but fork-specific behavior
@@ -436,10 +436,10 @@ docker compose -f compose.public.yaml up -d
 
 The gateway:
 
-- requires a valid Cloudflare Access JWT;
-- exposes only an explicit reviewed tool allowlist;
-- strips client credentials before forwarding;
-- compacts tool schemas/results for model use;
+- requires a valid Cloudflare Access JWT.
+- exposes only an explicit reviewed tool allowlist.
+- strips client credentials before forwarding.
+- compacts tool schemas/results for model use.
 - does not receive Avanza session credentials.
 
 Public gateway containers are configured to run non-root with a read-only filesystem,
@@ -451,13 +451,13 @@ This project intentionally does **not** try to expose every Avanza endpoint.
 
 In particular:
 
-- no stock/fund order placement;
-- no order modification or cancellation;
-- no transfers or withdrawals;
-- no generic authenticated HTTP proxy;
-- no automatic login at startup;
-- no credentials in repository configuration;
-- no hosted service operated by this repository;
+- no stock/fund order placement.
+- no order modification or cancellation.
+- no transfers or withdrawals.
+- no generic authenticated HTTP proxy.
+- no automatic login at startup.
+- no credentials in repository configuration.
+- no hosted service operated by this repository.
 - no new MCP tool merely because an undocumented Avanza endpoint exists.
 
 The rule for expanding authenticated capability is simple: there should be a concrete
@@ -499,10 +499,10 @@ Avanza may fail when undocumented upstream APIs change or are temporarily unavai
 
 Do not commit:
 
-- Avanza or Placera session material;
-- account identifiers;
-- Cloudflare secrets or tunnel credentials;
-- machine-specific paths or identities;
+- Avanza or Placera session material.
+- account identifiers.
+- Cloudflare secrets or tunnel credentials.
+- machine-specific paths or identities.
 - local gateway environment files.
 
 Real deployment values belong in ignored local configuration. Public examples should
