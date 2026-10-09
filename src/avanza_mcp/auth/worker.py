@@ -275,6 +275,38 @@ def _safe_account_read_failure_code(error: AccountReadError) -> str:
     return "read_error_response_shape"
 
 
+def _account_read_health_status(result: dict[str, Any]) -> AuthStatus:
+    """Collapse an account read to a safe status, never an account payload."""
+    if result.get("ok") is True:
+        return AuthStatus(
+            state="connected",
+            message="Avanza account access verified with a read-only request.",
+        )
+
+    code = result.get("code")
+    if code in {"auth_required", "auth_expired", "no_session"}:
+        return AuthStatus(
+            state="disconnected",
+            message="Avanza account access requires reconnection.",
+            error_code="auth_expired" if code == "auth_expired" else "auth_required",
+        )
+
+    diagnostic = "account_read_failed"
+    if (
+        isinstance(code, str)
+        and code.startswith(("read_error_", "worker_error_"))
+        and len(code) <= 80
+        and code.replace("_", "").isalnum()
+    ):
+        diagnostic = f"account_{code}"
+
+    return AuthStatus(
+        state="error",
+        message="Avanza session exists, but authenticated account reads are failing.",
+        error_code=diagnostic,
+    )
+
+
 async def _account_operation(
     auth: BrowserAuth | _RequestAuth, operation: str, arguments: dict[str, Any]
 ) -> dict[str, Any]:
@@ -675,7 +707,7 @@ async def _run_once(command: dict[str, Any]) -> None:
         if not isinstance(operation, str) or not isinstance(arguments, dict):
             _emit({"ok": False, "code": "protocol_error"})
             return
-    elif action not in {"market", "market_batch", "order_depth"}:
+    elif action not in {"health", "market", "market_batch", "order_depth"}:
         _emit({"ok": False, "code": "operation_not_allowed"})
         return
 
@@ -685,7 +717,10 @@ async def _run_once(command: dict[str, Any]) -> None:
         _emit({"ok": False, "code": "credential_store"})
         return
     if saved is None:
-        _emit({"ok": False, "code": "no_session"})
+        if action == "health":
+            _emit(_safe_status(AuthStatus(state="disconnected", message="Avanza is not connected.")))
+        else:
+            _emit({"ok": False, "code": "no_session"})
         return
 
     request_auth = _RequestAuth(saved)
@@ -693,6 +728,10 @@ async def _run_once(command: dict[str, Any]) -> None:
     if action == "account":
         operation_task = asyncio.create_task(
             _account_operation(request_auth, operation, arguments)
+        )
+    elif action == "health":
+        operation_task = asyncio.create_task(
+            _account_operation(request_auth, "accounts", {})
         )
     elif action == "market_batch":
         operation_task = asyncio.create_task(
@@ -709,10 +748,15 @@ async def _run_once(command: dict[str, Any]) -> None:
     refreshed, validation_error = validated
 
     if validation_error is not None:
-        # Preserve the existing fail-closed behavior when session validation
-        # itself cannot be completed. Never return an operation result whose
-        # concurrent validation was inconclusive.
-        _emit({"ok": False, "code": validation_error})
+        # Never report connected when independent session validation fails.
+        if action == "health":
+            _emit(_safe_status(AuthStatus(
+                state="error",
+                message="Avanza session validation failed; account access is unverified.",
+                error_code="session_validation_failed",
+            )))
+        else:
+            _emit({"ok": False, "code": validation_error})
         return
 
     if refreshed is None:
@@ -721,7 +765,14 @@ async def _run_once(command: dict[str, Any]) -> None:
         except AuthStoreError:
             _emit({"ok": False, "code": "credential_store"})
             return
-        _emit({"ok": False, "code": "auth_expired"})
+        if action == "health":
+            _emit(_safe_status(AuthStatus(
+                state="disconnected",
+                message="Avanza session expired. Reconnect with BankID.",
+                error_code="auth_expired",
+            )))
+        else:
+            _emit({"ok": False, "code": "auth_expired"})
         return
 
     if not _same_session_material(saved, refreshed):
@@ -738,6 +789,8 @@ async def _run_once(command: dict[str, Any]) -> None:
         retry_auth = _RequestAuth(refreshed)
         if action == "account":
             result = await _account_operation(retry_auth, operation, arguments)
+        elif action == "health":
+            result = await _account_operation(retry_auth, "accounts", {})
         elif action == "market_batch":
             result = await _market_batch_operation(retry_auth, command)
         elif action == "order_depth":
@@ -752,7 +805,10 @@ async def _run_once(command: dict[str, Any]) -> None:
                 _emit({"ok": False, "code": "credential_store"})
                 return
 
-    _emit(result)
+    if action == "health":
+        _emit(_safe_status(_account_read_health_status(result)))
+    else:
+        _emit(result)
 
 async def _run_ui(command: dict[str, Any], parent_pid: int) -> None:
     store = create_session_store()
@@ -1040,6 +1096,13 @@ async def _run_daemon(mode: str, parent_pid: int) -> None:
                 continue
             if action == "status":
                 _emit(_safe_status(auth.status()))
+                continue
+            if action == "health":
+                status = auth.status()
+                if status.state == "connected":
+                    read_result = await _account_operation(auth, "accounts", {})
+                    status = _account_read_health_status(read_result)
+                _emit(_safe_status(status))
                 continue
             if action == "shutdown":
                 if auth.session is not None:
