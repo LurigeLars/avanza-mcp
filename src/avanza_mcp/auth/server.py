@@ -373,6 +373,57 @@ def create_auth_server(broker: AuthProcessBroker | None = None) -> FastMCP:
                 "Placera Forum returned an invalid post receipt."
             ) from None
 
+    @server.tool(
+        annotations={
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": False,
+            "openWorldHint": True,
+        }
+    )
+    async def reply_to_forum_post(
+        parent_post_id: Annotated[str, Field(min_length=36, max_length=36)],
+        content: Annotated[str, Field(min_length=1, max_length=20_000)],
+        confirm: bool = False,
+    ) -> dict[str, str]:
+        """Reply to one existing Placera Forum post by UUID.
+
+        External public write. Requires separate Forum BankID login and explicit
+        confirm=true for the exact text and parent on this invocation.
+        """
+        if confirm is not True:
+            raise ToolError(
+                "CONFIRMATION_REQUIRED: Obtain explicit approval for this exact reply "
+                "and parent before calling with confirm=true."
+            )
+        try:
+            raw = await broker.forum_reply({
+                "parent_post_id": parent_post_id,
+                "content": content,
+                "confirm": True,
+            })
+        except AuthWorkerRequired:
+            raise ToolError("FORUM_AUTH_REQUIRED: Connect Placera Forum with BankID.") from None
+        except AuthWorkerExpired:
+            raise ToolError("FORUM_AUTH_EXPIRED: Reconnect Placera Forum.") from None
+        except AuthWorkerOperationError as exc:
+            code = str(exc)
+            allowed = {
+                "confirmation_required", "invalid_arguments", "invalid_parent_id",
+                "invalid_content", "parent_unavailable", "network",
+                "malformed_response", "request_failed", "reply_not_verified",
+            }
+            raise ToolError(
+                f"Placera Forum reply failed: {code if code in allowed else 'forum_write_failed'}."
+            ) from None
+        if (
+            not isinstance(raw, dict)
+            or not isinstance(raw.get("post_id"), str)
+            or raw.get("parent_post_id") != parent_post_id
+        ):
+            raise ToolError("Placera Forum returned an invalid reply receipt.")
+        return {"post_id": raw["post_id"], "parent_post_id": parent_post_id}
+
     @server.tool(annotations=_READ_TOOL)
     async def get_execution_quote(
         ctx: Context,
