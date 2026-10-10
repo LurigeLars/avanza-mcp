@@ -272,3 +272,50 @@ async def test_forum_resolver_still_fails_closed_when_duplicate_isin_has_no_uniq
     ) as client:
         with pytest.raises(ForumError, match="instrument_not_unique"):
             await client.resolve_instrument(isin)
+
+
+async def test_forum_reply_verifies_parent_and_returns_reply_receipt():
+    parent_id = "faee7859-9457-4038-bdac-7e78e78aabd3"
+    reply_id = "387d00ca-ef4e-4158-b53e-a2bc80b25c0a"
+    seen = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path))
+        if request.method == "GET":
+            assert request.url.path == f"/posts/{parent_id}"
+            return httpx.Response(
+                200, json={"id": parent_id, "kind": "COMPANY", "status": "ACTIVE"}
+            )
+        assert request.method == "POST" and request.url.path == "/posts"
+        assert request.read().decode("utf-8") == (
+            '{"title":"","content":"bra inlägg","tags":[],"media":[],'
+            f'"parent":"{parent_id}"' + '}'
+        )
+        return httpx.Response(
+            201, json={"id": reply_id, "kind": "REPLY", "parent": parent_id}
+        )
+
+    async with ForumAPIClient("forum-token", _transport=httpx.MockTransport(handler)) as client:
+        result = await client.reply_to_post(parent_post_id=parent_id, content="bra inlägg")
+    assert result == reply_id
+    assert seen == [("GET", f"/posts/{parent_id}"), ("POST", "/posts")]
+
+
+async def test_forum_reply_fails_closed_on_mismatched_parent():
+    parent_id = "faee7859-9457-4038-bdac-7e78e78aabd3"
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(
+                200, json={"id": parent_id, "kind": "COMPANY", "status": "ACTIVE"}
+            )
+        return httpx.Response(
+            201, json={
+                "id": "387d00ca-ef4e-4158-b53e-a2bc80b25c0a",
+                "kind": "COMPANY", "parent": None,
+            }
+        )
+
+    async with ForumAPIClient("forum-token", _transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ForumError, match="reply_not_verified"):
+            await client.reply_to_post(parent_post_id=parent_id, content="bra inlägg")
