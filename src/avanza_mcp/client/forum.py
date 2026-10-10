@@ -366,6 +366,42 @@ class ForumAPIClient:
             company_slug=target.company_slug,
         )
 
+    async def reply_to_post(self, *, parent_post_id: str, content: str) -> str:
+        """Reply to an existing post, never create an unrelated top-level post."""
+        import uuid
+
+        try:
+            uuid.UUID(parent_post_id)
+        except (ValueError, AttributeError, TypeError):
+            raise ForumError("invalid_parent_id") from None
+        if not isinstance(content, str) or not 1 <= len(content) <= 20_000:
+            raise ForumError("invalid_content")
+
+        # Validate the parent before any external write. The public read API
+        # exposes REPLY posts with parent=<original post UUID>.
+        parent = self._json_object(await self._request("GET", f"/posts/{parent_post_id}"))
+        if parent.get("id") != parent_post_id or parent.get("status") != "ACTIVE":
+            raise ForumError("parent_unavailable")
+        if parent.get("kind") not in {"COMPANY", "INSTRUMENT", "REPLY", "GROUP", "TRANSACTION"}:
+            raise ForumError("parent_unavailable")
+
+        response = await self._request(
+            "POST",
+            "/posts",
+            json={
+                "title": "",
+                "content": content,
+                "tags": [],
+                "media": [],
+                "parent": parent_post_id,
+            },
+        )
+        body = self._json_object(response)
+        post_id = _required_string(body, "id", max_length=128)
+        if body.get("parent") != parent_post_id or body.get("kind") != "REPLY":
+            raise ForumError("reply_not_verified")
+        return post_id
+
     async def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         try:
             response = await self._client.request(method, path, **kwargs)
