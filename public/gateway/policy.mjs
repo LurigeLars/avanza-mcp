@@ -60,6 +60,7 @@ const AUTH_TOOLS = [
   'disconnect_forum',
   'get_forum_auth_status',
   'create_forum_post',
+  'reply_to_forum_post',
   'get_insider_transactions',
   'get_active_orders',
   'get_deals',
