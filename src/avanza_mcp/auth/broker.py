@@ -230,6 +230,24 @@ class AuthProcessBroker:
                 raise AuthWorkerOperationError("Invalid forum post result from worker")
             return result
 
+    async def forum_reply(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Publish a confirmed reply via the separate Placera Forum worker."""
+        self._ensure_open()
+        async with self._forum_daemon_lock:
+            process = self._live_forum_daemon()
+            if process is None:
+                raise AuthWorkerRequired
+            status_response = await self._command(process, {"action": "status"})
+            if self._status_from_response(status_response).state != "connected":
+                raise AuthWorkerRequired
+            response = await self._command(
+                process, {"action": "forum_reply", "arguments": arguments}
+            )
+            result = self._result_from_response(response)
+            if not isinstance(result, dict):
+                raise AuthWorkerOperationError("Invalid forum reply result from worker")
+            return result
+
     async def account(self, operation: str, arguments: dict[str, Any]) -> Any:
         self._ensure_open()
         command = {
