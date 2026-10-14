@@ -5,6 +5,7 @@ import json
 
 import pytest
 from unittest.mock import AsyncMock
+from types import SimpleNamespace
 
 from avanza_mcp.auth.broker import (
     AuthProcessBroker,
@@ -42,6 +43,70 @@ def test_worker_result_secret_keys_are_rejected():
         AuthProcessBroker._decode_response(
             json.dumps({"ok": True, "result": {"security_token": "sentinel"}}).encode()
         )
+
+
+
+@pytest.mark.asyncio
+async def test_cancelled_ipc_read_retires_memory_only_daemon(monkeypatch):
+    broker = AuthProcessBroker(mode="memory_only")
+    pending = asyncio.Event()
+    started = asyncio.Event()
+    async def stuck_read():
+        started.set()
+        await pending.wait()
+    process = SimpleNamespace(
+        returncode=None,
+        stdin=SimpleNamespace(write=lambda _: None, drain=AsyncMock()),
+        stdout=SimpleNamespace(readline=stuck_read),
+    )
+    broker._daemon = process
+    stop = AsyncMock()
+    monkeypatch.setattr(broker, "_stop_process", stop)
+    task = asyncio.create_task(broker._command(process, {"action": "status"}))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert broker._daemon is None
+    stop.assert_awaited_once_with(process)
+    disconnected = await broker.status()
+    assert disconnected.state == "disconnected"
+
+
+@pytest.mark.asyncio
+async def test_mismatched_ipc_frame_is_never_reused(monkeypatch):
+    broker = AuthProcessBroker(mode="memory_only")
+    process = SimpleNamespace(
+        returncode=None,
+        stdin=SimpleNamespace(write=lambda _: None, drain=AsyncMock()),
+        stdout=SimpleNamespace(readline=AsyncMock(
+            return_value=b'{"ok":true,"result":{}}\\n')),
+    )
+    broker._daemon = process
+    stop = AsyncMock()
+    monkeypatch.setattr(broker, "_stop_process", stop)
+    with pytest.raises(AuthWorkerOperationError, match="Invalid auth status"):
+        await broker._command(process, {"action": "status"})
+    assert broker._daemon is None
+    stop.assert_awaited_once_with(process)
+
+
+@pytest.mark.asyncio
+async def test_valid_ipc_status_does_not_retire_session(monkeypatch):
+    broker = AuthProcessBroker(mode="memory_only")
+    process = SimpleNamespace(
+        returncode=None,
+        stdin=SimpleNamespace(write=lambda _: None, drain=AsyncMock()),
+        stdout=SimpleNamespace(readline=AsyncMock(
+            return_value=b'{"ok":true,"status":{"state":"connected","message":"connected"}}\\n')),
+    )
+    broker._daemon = process
+    stop = AsyncMock()
+    monkeypatch.setattr(broker, "_stop_process", stop)
+    response = await broker._command(process, {"action": "status"})
+    assert response["status"]["state"] == "connected"
+    assert broker._daemon is process
+    stop.assert_not_awaited()
 
 
 async def test_one_shot_mode_reuses_live_session_for_approved_market_calls(monkeypatch):
