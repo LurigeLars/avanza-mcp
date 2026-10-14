@@ -80,7 +80,7 @@ async def test_mismatched_ipc_frame_is_never_reused(monkeypatch):
         returncode=None,
         stdin=SimpleNamespace(write=lambda _: None, drain=AsyncMock()),
         stdout=SimpleNamespace(readline=AsyncMock(
-            return_value=b'{"ok":true,"result":{}}\\n')),
+            return_value=b'{"ok":true,"result":{}}\n')),
     )
     broker._daemon = process
     stop = AsyncMock()
@@ -98,7 +98,7 @@ async def test_valid_ipc_status_does_not_retire_session(monkeypatch):
         returncode=None,
         stdin=SimpleNamespace(write=lambda _: None, drain=AsyncMock()),
         stdout=SimpleNamespace(readline=AsyncMock(
-            return_value=b'{"ok":true,"status":{"state":"connected","message":"connected"}}\\n')),
+            return_value=b'{"ok":true,"status":{"state":"connected","message":"connected"}}\n')),
     )
     broker._daemon = process
     stop = AsyncMock()
