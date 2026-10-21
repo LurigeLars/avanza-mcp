@@ -7,7 +7,7 @@ name: avanza-mcp-public # retained for existing tunnel/network compatibility
 
 services:
   gateway:
-    image: node:26.10.0-alpine
+    image: node:26.12.0-alpine
     container_name: avanza-mcp-gateway
     command: ["node", "/app/gateway.mjs"]
     user: node
