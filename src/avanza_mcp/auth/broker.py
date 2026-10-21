@@ -670,6 +670,24 @@ class AuthProcessBroker:
         except (OSError, ValueError) as error:
             raise AuthWorkerOperationError("Could not start isolated auth worker") from error
 
+    async def _retire_uncertain_worker(
+        self, process: asyncio.subprocess.Process
+    ) -> None:
+        """Never reuse an IPC worker after a cancelled/mismatched response.
+
+        An unread late response would otherwise be consumed by the next
+        status/account command (broker_invalid_status / worker_error_generic).
+        Retirement also invalidates memory-only authentication explicitly.
+        """
+        for attribute in ("_daemon", "_market_daemon", "_forum_daemon"):
+            if getattr(self, attribute) is process:
+                setattr(self, attribute, None)
+        try:
+            await self._stop_process(process)
+        except (OSError, ProcessLookupError):
+            # The child has already exited; its stdout will not be reused.
+            pass
+
     async def _command(
         self,
         process: asyncio.subprocess.Process,
@@ -684,11 +702,27 @@ class AuthProcessBroker:
             process.stdin.write(data)
             await process.stdin.drain()
             line = await asyncio.wait_for(process.stdout.readline(), timeout=timeout)
+            if not line:
+                raise AuthWorkerOperationError("Auth worker closed unexpectedly")
+            response = self._decode_response(line)
+            action = payload.get("action")
+            if response.get("ok") is True:
+                if action in {"status", "health", "connect", "disconnect", "shutdown"}:
+                    if "status" not in response:
+                        raise AuthWorkerOperationError("Invalid auth status from worker")
+                elif action in {"account", "market", "market_batch", "order_depth", "forum_post"}:
+                    if "result" not in response:
+                        raise AuthWorkerOperationError("Invalid result from worker")
+            return response
+        except asyncio.CancelledError:
+            await self._retire_uncertain_worker(process)
+            raise
         except (BrokenPipeError, ConnectionError, TimeoutError) as error:
+            await self._retire_uncertain_worker(process)
             raise AuthWorkerOperationError("Auth worker did not respond") from error
-        if not line:
-            raise AuthWorkerOperationError("Auth worker closed unexpectedly")
-        return self._decode_response(line)
+        except AuthWorkerOperationError:
+            await self._retire_uncertain_worker(process)
+            raise
 
     @staticmethod
     def _decode_response(line: bytes) -> dict[str, Any]:
