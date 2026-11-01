@@ -1210,6 +1210,39 @@ async def _forum_post_operation(
     }
 
 
+async def _forum_reply_operation(
+    auth: ForumBrowserAuth, arguments: dict[str, Any]
+) -> dict[str, Any]:
+    _only_arguments(arguments, {"parent_post_id", "content", "confirm"})
+    if arguments.get("confirm") is not True:
+        return {"ok": False, "code": "confirmation_required"}
+    parent_id = arguments.get("parent_post_id")
+    content = arguments.get("content")
+    if (
+        not isinstance(parent_id, str)
+        or len(parent_id) != 36
+        or not isinstance(content, str)
+        or not 1 <= len(content) <= 20_000
+    ):
+        return {"ok": False, "code": "invalid_arguments"}
+    session = auth.session
+    token = session._security_token if session is not None else None
+    if not token:
+        return {"ok": False, "code": "auth_required"}
+    try:
+        async with ForumAPIClient(token) as forum:
+            reply_id = await forum.reply_to_post(parent_post_id=parent_id, content=content)
+    except ForumError as error:
+        if error.code == "auth_expired":
+            await auth.disconnect()
+            return {"ok": False, "code": "auth_expired"}
+        safe = {"network", "invalid_parent_id", "invalid_content",
+                "parent_unavailable", "malformed_response", "request_failed",
+                "reply_not_verified"}
+        return {"ok": False, "code": error.code if error.code in safe else "forum_error"}
+    return {"ok": True, "result": {"post_id": reply_id, "parent_post_id": parent_id}}
+
+
 async def _run_forum_daemon(parent_pid: int) -> None:
     auth = ForumBrowserAuth()
     queue: asyncio.Queue[str | None] = asyncio.Queue()
@@ -1250,6 +1283,13 @@ async def _run_forum_daemon(parent_pid: int) -> None:
                 continue
             if action == "status":
                 _emit(_safe_status(auth.status()))
+                continue
+            if action == "forum_reply":
+                arguments = command.get("arguments", {})
+                if not isinstance(arguments, dict):
+                    _emit({"ok": False, "code": "protocol_error"})
+                    continue
+                _emit(await _forum_reply_operation(auth, arguments))
                 continue
             if action == "forum_post":
                 arguments = command.get("arguments", {})

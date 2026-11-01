@@ -9,9 +9,9 @@ import {
   rewriteResponse,
 } from '../../public/gateway/policy.mjs';
 
-test('default allowlist is the single authenticated read-only Avanza surface', () => {
+test('default allowlist is the authenticated Avanza and explicitly confirmed forum surface', () => {
   const allowed = parseAllowedTools();
-  assert.equal(allowed.size, 59);
+  assert.equal(allowed.size, 60);
   assert.equal(allowed.has('search_instruments'), true);
   assert.equal(allowed.has('screen_leveraged_instruments'), true);
   assert.equal(allowed.has('enrich_leveraged_snapshot'), false);
@@ -22,8 +22,9 @@ test('default allowlist is the single authenticated read-only Avanza surface', (
   assert.equal(allowed.has('connect_forum'), true);
   assert.equal(allowed.has('get_forum_auth_status'), true);
   assert.equal(allowed.has('create_forum_post'), true);
+  assert.equal(allowed.has('reply_to_forum_post'), true);
   assert.equal(allowed.has('future_place_order'), false);
-  assert.equal(ALL_ALLOWED_TOOLS.split(',').length, 59);
+  assert.equal(ALL_ALLOWED_TOOLS.split(',').length, 60);
 });
 
 test('legacy authenticated profile token maps to the same single surface', () => {
