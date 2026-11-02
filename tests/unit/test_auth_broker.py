@@ -66,7 +66,7 @@ async def test_cancelled_ipc_read_retires_memory_only_daemon(monkeypatch):
     await started.wait()
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await task
+        await asyncio.gather(task)
     assert broker._daemon is None
     stop.assert_awaited_once_with(process)
     disconnected = await broker.status()
