@@ -9,6 +9,10 @@ updates:
       timezone: "Europe/Stockholm"
     open-pull-requests-limit: 2
     groups:
+      security-minor-patch:
+        applies-to: "security-updates"
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
       uv-minor-patch:
         applies-to: "version-updates"
         patterns:
@@ -28,6 +32,10 @@ updates:
       timezone: "Europe/Stockholm"
     open-pull-requests-limit: 2
     groups:
+      security-minor-patch:
+        applies-to: "security-updates"
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
       compose-minor-patch:
         applies-to: "version-updates"
         patterns:
@@ -47,6 +55,10 @@ updates:
       timezone: "Europe/Stockholm"
     open-pull-requests-limit: 2
     groups:
+      security-minor-patch:
+        applies-to: "security-updates"
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
       codeql-actions:
         applies-to: "version-updates"
         patterns:
