@@ -22,6 +22,7 @@ jobs:
       - name: Compare history and reconcile review issue
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         shell: bash
         run: |
           set -euo pipefail
