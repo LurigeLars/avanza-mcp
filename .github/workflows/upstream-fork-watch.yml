@@ -1,0 +1,53 @@
+name: Upstream fork drift watch
+
+on:
+  schedule:
+    - cron: "13 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      UPSTREAM_REPO: "AnteWall/avanza-mcp"
+      UPSTREAM_BRANCH: "main"
+      LOCAL_BRANCH: "main"
+      ISSUE_TITLE: "Upstream watch: fork drift"
+    steps:
+      - name: Compare history and reconcile review issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner="${UPSTREAM_REPO%%/*}"
+          data="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${owner}:${UPSTREAM_BRANCH}...${LOCAL_BRANCH}")"
+          behind="$(jq -er '.behind_by' <<< "$data")"
+          ahead="$(jq -er '.ahead_by' <<< "$data")"
+          sha="$(gh api "repos/${UPSTREAM_REPO}/commits/${UPSTREAM_BRANCH}" --jq .sha)"
+          printf '%s\n' "Upstream: ${UPSTREAM_REPO}" "Behind: $behind; ahead: $ahead" >> "$GITHUB_STEP_SUMMARY"
+          title="$ISSUE_TITLE"
+          number="$(gh issue list --state all --limit 500 --json number,title |
+            jq -r --arg title "$title" '.[] | select(.title == $title) | .number' | head -n1)"
+          body="$(printf '%s\n'             "Upstream: ${UPSTREAM_REPO} (${UPSTREAM_BRANCH})"             "Fork: ${GITHUB_REPOSITORY} (${LOCAL_BRANCH})"             "Upstream-only commits: $behind"             "Fork-only commits: $ahead"             "Upstream SHA: $sha"             "Diff: https://github.com/${GITHUB_REPOSITORY}/compare/${owner}:${UPSTREAM_BRANCH}...${LOCAL_BRANCH}"             ""             "Review changes and compatibility before any manual promotion. Never sync or deploy automatically.")"
+          if (( behind > 0 )); then
+            echo "::warning title=Upstream drift::$behind upstream-only commits need review"
+            if [[ -z "$number" ]]; then
+              gh issue create --title "$title" --body "$body"
+            else
+              if [[ "$(gh issue view "$number" --json body --jq .body)" != "$body" ]]; then
+                gh issue edit "$number" --body "$body"
+              fi
+              if [[ "$(gh issue view "$number" --json state --jq .state)" == CLOSED ]]; then
+                gh issue reopen "$number"
+              fi
+            fi
+          elif [[ -n "$number" ]] && [[ "$(gh issue view "$number" --json state --jq .state)" == OPEN ]]; then
+            gh issue close "$number" --comment "Fork now contains all upstream commits."
+          fi
