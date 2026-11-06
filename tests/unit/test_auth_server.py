@@ -456,6 +456,16 @@ async def test_forum_connection_tools_are_separate_from_avanza_auth():
     assert broker.opened == 2
 
 
+async def test_public_forum_writes_are_marked_destructive_so_the_client_confirms():
+    # ChatGPT picks its user-confirmation behaviour from tool annotations; confirm=true is
+    # filled in by the model, so the annotation is what puts a human in front of the post.
+    async with Client(create_auth_server(FakeBroker())) as client:  # type: ignore[arg-type]
+        tools = {tool.name: tool for tool in await client.list_tools()}
+    for name in ("create_forum_post", "reply_to_forum_post"):
+        assert tools[name].annotations.readOnlyHint is False
+        assert tools[name].annotations.destructiveHint is True
+
+
 async def test_create_forum_post_requires_confirmation_before_any_write(monkeypatch):
     broker = FakeBroker()
     stock = SimpleNamespace(isin="SE0000115446")
