@@ -294,7 +294,7 @@ def create_auth_server(broker: AuthProcessBroker | None = None) -> FastMCP:
         """Return safe Placera Forum connection state without credentials or identity."""
         return await broker.forum_status()
 
-    # destructiveHint: a public post in Jakob's name cannot be taken back. ChatGPT chooses its
+    # destructiveHint: a public post in the owner's name cannot be taken back. ChatGPT chooses its
     # user-confirmation behaviour from this hint; confirm=true alone is set by the model itself.
     @server.tool(
         annotations={
