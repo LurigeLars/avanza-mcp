@@ -387,8 +387,10 @@ is not a guarantee that the displayed volume can be filled.
   order URL, with ten seconds between fallback reads.
 - **Freshness:** a previously verified amount remains visible during a temporary
   refresh gap for at most fifteen seconds from the original book timestamp.
-  Old or unverifiable data, missing MM/currency, hard failures and order-page
-  mismatches withhold the amount and show a status instead.
+  Old or unverifiable data, missing currency, hard failures and order-page
+  mismatches withhold the amount and show a status instead. Missing-MM results,
+  paused rows without a usable ask, and an order book displaying no ask prices
+  leave the amount field blank.
 - **Isolation:** the opt-in bridge listens only on `127.0.0.1:18762`, requires
   one-time pairing, validates the extension origin and accepts only bounded
   numeric book IDs. Avanza session credentials stay in the existing isolated

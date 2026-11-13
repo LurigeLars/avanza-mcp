@@ -5,8 +5,10 @@ visible volume at that MM ask level**. It requires no investment amount, order
 field changes or per-trade clicks. It is not account buying power, total depth
 at all prices, an execution guarantee, or a commission-inclusive amount.
 
-Version **0.1.5** waits ten seconds between completed list passes and order-page
-bridge fallback reads. Passive page-stream/DOM updates remain immediate. The
+Version **0.1.6** leaves the amount field blank for missing MM quotes and an
+order book displaying no ask prices. Other unverifiable depth still shows a
+status. The extension waits ten seconds between completed list passes and
+order-page bridge fallback reads. Passive page-stream/DOM updates remain immediate. The
 source-age limit is fifteen seconds. Reload the extension and Avanza tabs when
 updating. Pairing survives at the same extension path/ID. Backend changes take
 effect after a normal MCP restart; memory-only mode may require reconnecting.
@@ -98,9 +100,8 @@ does not imply a fresh book, and delayed books display `STALE`.
   brings other rows into scope. Hidden/offscreen rows cause no new fetches.
 - Version **0.1.4** pauses a row for **30 seconds** after `MM_MISSING`, or when
   the list has no usable ask and a probe returns stale/unavailable depth. The
-  cell explicitly says `MM SAKNAS (PAUS)` or `SÄLJKURS SAKNAS (PAUS)`. A changed
-  list ask resumes reads at the next scheduled pass; the timer also triggers a
-  new probe.
+  amount cell is blank during this pause. A changed list ask resumes reads at
+  the next scheduled pass; the timer also triggers a new probe.
   Fresh verified broker depth takes priority over a missing list price and is
   refreshed normally. `STALE` alone never means the market maker is absent.
   Pauses clear on navigation/visibility changes and are bounded to 200 IDs.

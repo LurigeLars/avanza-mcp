@@ -121,7 +121,9 @@ def main():
                 assert "360" in page.locator("tbody .avz-capacity-cell").first.inner_text()
                 assert reader.calls >= 1
                 page.wait_for_function("document.querySelectorAll('tbody .avz-capacity-cell')[5].textContent.includes('263')")
-                page.wait_for_function("document.querySelectorAll('tbody .avz-capacity-cell')[8].textContent.includes('PAUS')")
+                expect(page.locator("tbody .avz-capacity-cell").nth(6)).to_have_text("")
+                expect(page.locator("tbody .avz-capacity-cell").nth(8)).to_have_text("")
+                expect(page.locator("tbody .avz-capacity-cell").nth(2)).to_contain_text("TIMEOUT")
                 assert reader.requested == {"123", "456", "124", "125", "126", "127", "128", "129", "130"}
                 page.wait_for_timeout(9000)
                 assert reader.requested_counts["128"] == reader.requested_counts["130"] == 1
@@ -180,6 +182,18 @@ def main():
 
                 assert reader.calls == fallback_calls, "A verified page stream must take priority over bridge reads"
 
+                saved_asks = page.locator(".price.sell").all_text_contents()
+                for placeholder in ["—", "–", "-"]:
+                    page.locator(".price.sell").evaluate_all("(cells, value) => cells.forEach(e => e.textContent=value)", placeholder)
+                    expect(page.locator(".avz-capacity strong")).to_have_text("")
+                    assert page.locator(".avz-capacity strong").get_attribute("title") is None
+                page.locator(".price.sell").evaluate_all("(cells, values) => cells.forEach((e,i) => e.textContent=values[i])", saved_asks)
+                page.wait_for_function("document.querySelector('.avz-capacity strong').textContent.includes('kr')")
+                page.locator(".volume.sell").nth(1).evaluate("e => e.textContent = 'unreadable'")
+                expect(page.locator(".avz-capacity strong")).to_contain_text("MM-DJUP EJ LÄSBART")
+                page.locator(".volume.sell").nth(1).evaluate("e => e.textContent = '1 020'")
+                page.wait_for_function("document.querySelector('.avz-capacity strong').textContent.includes('kr')")
+
                 page.locator(".price.sell").nth(1).evaluate("e => e.textContent = '263,36'")
                 page.wait_for_function("document.querySelector('.avz-capacity strong').textContent.startsWith('—')")
                 page.locator(".price.sell").nth(1).evaluate("e => e.textContent = '263,36 *'")
@@ -199,7 +213,7 @@ def main():
                 page.wait_for_function("document.querySelector('tbody .avz-capacity-cell')?.textContent.includes('OFFLINE')", timeout=15000)
                 print(json.dumps({"browser": context.browser.version, "pairing": "PASS",
                                   "list_bridge": "PASS", "unquoted_pause_and_resume": "PASS", "ten_second_polling": "PASS", "dom_mm_level_1": "PASS", "order_bridge_fallback": "PASS",
-                                  "missing_mm_stale_offline": "PASS", "order_fields_unchanged": "PASS",
+                                  "missing_mm_stale_offline": "PASS", "blank_absent_ask_and_missing_mm": "PASS", "order_fields_unchanged": "PASS",
                                   "dom_update_ms": {"n": len(timings), "p50": statistics.median(timings),
                                                     "p95": sorted(timings)[18], "max": max(timings)}}))
             finally:

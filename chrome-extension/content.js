@@ -14,6 +14,10 @@
   };
   function text(node, value) { if (node.textContent !== value) node.textContent = value; }
   function display(node, q, failure = "SAKNAR VERIFIERAT DJUP") {
+    if (failure === "" || q?.status === "MM_MISSING" || failure === "MM_MISSING") {
+      text(node, ""); node.classList.remove("avz-capacity-stale"); node.removeAttribute("title");
+      return;
+    }
     const ok = C.validQuote(q);
     text(node, ok ? `${format.format(Number(q.amount))} kr` : `— ${q?.status === "OK" ? "STALE" : q?.status ?? failure}`);
     node.classList.toggle("avz-capacity-stale", !ok);
@@ -23,6 +27,8 @@
     if (!orderRoot?.isConnected || !orderPanel?.isConnected) return;
     const id = C.bookId(location.href);
     const dom = C.readDom(orderRoot);
+    const asks = [...orderRoot.querySelectorAll(".price.sell")];
+    const noAsk = asks.length > 0 && asks.every(e => /^[—–-]$/.test(e.textContent.trim()));
     const sek = [...document.querySelectorAll("aza-order-market-info-summary .last-price")]
       .some(e => visible(e) && /\bSEK\b/.test(e.textContent));
     let q = null;
@@ -30,7 +36,7 @@
         && snapshot.price === dom.price && snapshot.volume === dom.volume && snapshot.mm_level === dom.mm_level) {
       q = {...dom, source_time: snapshot.source_time, status: "OK"};
     }
-    const failure = !dom ? "MM-DJUP EJ LÄSBART" : !sek ? "VALUTA EJ VERIFIERAD"
+    const failure = noAsk ? "" : !dom ? "MM-DJUP EJ LÄSBART" : !sek ? "VALUTA EJ VERIFIERAD"
       : snapshot && !C.fresh(snapshot.source_time) ? "STALE"
       : snapshot && dom ? "SIDANS DJUP AVVIKER" : orderFailure;
     display(orderPanel.querySelector("strong"), q, failure);
@@ -106,8 +112,7 @@
       const value = values.get(id);
       display(cell, value, "HÄMTAR");
       if (paused.has(id)) {
-        text(cell, paused.get(id).label);
-        cell.title = "Hämtningen är pausad för denna rad. Ny kontroll inom 30 sekunder, eller vid nästa hämtning om listans säljkurs ändras.";
+        display(cell, null, "");
       }
       if (visible(row)) {
         if (rows.length < 20) rows.push({id, row, cell, ask});
@@ -136,8 +141,7 @@
           values.set(id, C.validQuote(q) ? q : {status: q?.status === "OK" ? "STALE" : q?.status ?? result?.status ?? "OFFLINE"});
           const ask = rows.find(r => r.id === id)?.ask;
           if (q?.status === "MM_MISSING" || (ask === null && ["STALE", "DEPTH_UNKNOWN", "DEPTH_UNAVAILABLE"].includes(q?.status))) {
-            paused.set(id, {ask, until: performance.now() + 30000,
-              label: q.status === "MM_MISSING" ? "— MM SAKNAS (PAUS)" : "— SÄLJKURS SAKNAS (PAUS)"});
+            paused.set(id, {ask, until: performance.now() + 30000});
           }
         }
         listRows();
