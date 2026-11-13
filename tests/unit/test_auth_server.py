@@ -1,6 +1,7 @@
 """Authenticated server composition using credential-isolated workers."""
 
 from types import SimpleNamespace
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, Mock
 
 import httpx
@@ -91,6 +92,24 @@ class FakeBroker:
 
     async def aclose(self):
         self.closed = True
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_capacity_bridge_is_opt_in_and_borrows_existing_client(monkeypatch, enabled):
+    import avanza_mcp.capacity_bridge as bridge
+    observed = []
+    @asynccontextmanager
+    async def listener(client):
+        observed.append(client)
+        yield
+    monkeypatch.setattr(bridge, "serve_bridge", listener)
+    monkeypatch.setenv("AVANZA_CAPACITY_BRIDGE", "1" if enabled else "0")
+    broker = FakeBroker()
+    async with Client(create_auth_server(broker)):
+        assert len(observed) == int(enabled)
+        if enabled:
+            assert observed[0]._authenticated_request_delegate == broker.market_request
+    assert broker.closed
 
 
 async def test_auth_server_mounts_public_contract_and_adds_auth_tools():

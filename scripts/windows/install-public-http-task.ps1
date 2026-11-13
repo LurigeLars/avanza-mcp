@@ -1,7 +1,8 @@
 param(
     [string]$TaskName = "AvanzaMcpHttpServer",
     [ValidateSet("persistent", "memory_only", "one_shot")]
-    [string]$SessionMode = "memory_only"
+    [string]$SessionMode = "memory_only",
+    [switch]$CapacityBridge
 )
 
 $ErrorActionPreference = "Stop"
@@ -14,7 +15,11 @@ if (-not (Test-Path $pythonw)) {
 }
 
 $userId = "$env:USERDOMAIN\$env:USERNAME"
-$action = New-ScheduledTaskAction -Execute $pythonw -Argument "`"$launcher`" --session-mode $SessionMode" -WorkingDirectory $repoRoot
+$launcherArguments = "`"$launcher`" --session-mode $SessionMode"
+if ($CapacityBridge) {
+    $launcherArguments += " --capacity-bridge"
+}
+$action = New-ScheduledTaskAction -Execute $pythonw -Argument $launcherArguments -WorkingDirectory $repoRoot
 $logonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $userId
 $watchdogTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650)
 $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited

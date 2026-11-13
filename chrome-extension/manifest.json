@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Avanza MM köpbar SEK",
+  "version": "0.1.0",
+  "minimum_chrome_version": "120",
+  "description": "Visar synlig köpkapacitet vid market makerns säljkurs.",
+  "permissions": ["storage"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "background": {"service_worker": "background.js"},
+  "action": {"default_popup": "popup.html"},
+  "content_scripts": [
+    {
+      "matches": ["https://www.avanza.se/*", "https://avanza.se/*"],
+      "js": ["stream-observer.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://www.avanza.se/*", "https://avanza.se/*"],
+      "js": ["core.js", "content.js"],
+      "css": ["content.css"],
+      "run_at": "document_start"
+    }
+  ]
+}
