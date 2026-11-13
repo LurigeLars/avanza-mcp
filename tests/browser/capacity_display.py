@@ -94,6 +94,8 @@ def main():
                 assert "360" in page.locator("tbody .avz-capacity-cell").first.inner_text()
                 assert reader.calls >= 1
                 assert reader.requested == {"123", "456"}, "Only visible certificate identities may be fetched"
+                page.locator("tbody tr").first.locator("a").evaluate("a => a.href='/handla/order.html/kop/invalid'")
+                page.wait_for_function("document.querySelector('tbody .avz-capacity-cell').textContent.includes('IDENTITET OKÄND')")
                 context.unroute("https://www.avanza.se/**")
 
                 source = {"price": 263.36, "volume": 1000}

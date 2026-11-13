@@ -40,6 +40,11 @@ most twenty visible rows per pass.
    caches, body/ID limits, a request semaphore and deadlines bound the work.
    No provider concurrency or cooldown protection was weakened.
 
+5. **Recycled/partial list rows.** If Avanza replaces a row's links before its
+   content is complete, the previous injected cell must not retain an amount.
+   Missing or conflicting identity now clears the cell, with a browser regression
+   check. The extension cache is pruned on failed as well as successful passes.
+
 No unresolved correctness/security findings were identified in the reviewed
 implementation. Missing/negative/wrong-type MM indexes, missing currency,
 stale/future source timestamps, malformed price/volume, upstream errors,

@@ -65,7 +65,12 @@
     const rows = [];
     for (const row of table.querySelectorAll("tbody tr")) {
       const ids = new Set([...row.querySelectorAll("a[href]")].map(a => C.certificateId(a.href)).filter(Boolean));
-      if (ids.size !== 1) continue;
+      if (ids.size !== 1) {
+        const oldCell = row.querySelector(".avz-capacity-cell");
+        if (oldCell) display(oldCell, null, "IDENTITET OKÄND");
+        seen.delete(row);
+        continue;
+      }
       const id = [...ids][0];
       let cell = row.querySelector(".avz-capacity-cell");
       if (!cell) { cell = document.createElement("td"); cell.className = "avz-capacity-cell"; row.append(cell); }
@@ -113,8 +118,11 @@
     } catch {
       for (const id of ids) values.set(id, {status: "OFFLINE"});
       nextPoll = performance.now() + 10000;
-    } finally { listBusy = false; listRows(); }
-    while (values.size > 200) values.delete(values.keys().next().value);
+    } finally {
+      listBusy = false;
+      while (values.size > 200) values.delete(values.keys().next().value);
+      listRows();
+    }
   }
   function tick() {
     if (location.href !== lastRoute) {
