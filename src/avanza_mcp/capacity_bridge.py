@@ -29,7 +29,7 @@ from .client.endpoints import PublicEndpoint
 from .client.exceptions import AvanzaAuthError, AvanzaRateLimitError, AvanzaTimeoutError
 
 PORT = 18762
-MAX_AGE_MS = 5000
+MAX_AGE_MS = 8000
 MAX_IDS = 5
 ID = re.compile(r"[0-9]{1,12}\Z")
 ORIGIN = re.compile(r"chrome-extension://[a-p]{32}\Z")

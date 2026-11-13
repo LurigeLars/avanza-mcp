@@ -64,7 +64,7 @@
     try {
       const result = await chrome.runtime.sendMessage({type: "CAPACITY", ids: [id]});
       if (document.hidden || C.bookId(location.href) !== id) return;
-      const q = result?.items?.[id];
+      const q = C.keepFresh(snapshot, result?.items?.[id] ?? {status: result?.status ?? "OFFLINE"});
       if (!(snapshot?.via === "stream" && C.fresh(snapshot.source_time))) {
         if (C.validQuote(q)) snapshot = {...q, id, via: "bridge"};
         else { snapshot = null; orderFailure = q?.status === "OK" ? "STALE" : q?.status ?? result?.status ?? "OFFLINE"; }
@@ -122,7 +122,7 @@
         const result = await chrome.runtime.sendMessage({type: "CAPACITY", ids: group});
         if (location.href !== route || document.hidden) return;
         for (const id of group) {
-          const q = result?.items?.[id];
+          const q = C.keepFresh(values.get(id), result?.items?.[id] ?? {status: result?.status ?? "OFFLINE"});
           values.set(id, C.validQuote(q) ? q : {status: q?.status === "OK" ? "STALE" : q?.status ?? result?.status ?? "OFFLINE"});
         }
         listRows();

@@ -1,6 +1,6 @@
 /* Shared pure validation; page and bridge data are always untrusted. */
 (() => {
-  const MAX_AGE = 5000;
+  const MAX_AGE = 8000;
   function number(text) {
     const value = String(text).trim().replace(/[\u00a0\u202f]/g, " ");
     if (!/^(?:\d+|\d{1,3}(?: \d{3})+)(?:,\d+)?$/.test(value)) return null;
@@ -32,6 +32,12 @@
       && Number(q.amount) <= 90071992547409
       && Math.abs(Number(q.amount) - q.price * q.volume) <= 0.001;
   }
+  function keepFresh(previous, next, now = Date.now()) {
+    if (!validQuote(next, now) && validQuote(previous, now)
+        && ["STALE", "TIMEOUT", "BUSY", "DEPTH_UNAVAILABLE"].includes(next?.status)
+        && (!Number.isSafeInteger(next.source_time) || next.source_time <= previous.source_time)) return previous;
+    return next;
+  }
   function readDom(root) {
     const rows = [...root.querySelectorAll('.level[role="row"]')];
     const matches = rows.map((row, i) => ({row, i, price: row.querySelector(".price.sell")?.textContent ?? ""}))
@@ -43,6 +49,6 @@
     if (!price || !Number.isSafeInteger(volume)) return null;
     return {price, volume, mm_level: i, amount: String(price * volume), currency: "SEK"};
   }
-  globalThis.AvzCapacity = {MAX_AGE, number, bookId, certificateId, fresh, validQuote, readDom};
+  globalThis.AvzCapacity = {MAX_AGE, number, bookId, certificateId, fresh, validQuote, keepFresh, readDom};
   if (typeof module !== "undefined") module.exports = globalThis.AvzCapacity;
 })();

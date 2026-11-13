@@ -111,3 +111,16 @@ first-batch timeout/later-row progress, fallback/mismatch, passive priority,
 stale/offline behavior and untouched order fields. The browser fixture now uses
 an ephemeral port and a temporary extension copy to avoid a live-bridge conflict.
 Normal-profile acceptance after extension reload/BankID reconnect remains open.
+
+## 0.1.3 follow-up: eight-second display window
+
+At the user's request, source age now expires at eight seconds instead of five.
+The previous verified amount survives temporary refresh gaps only while its
+original timestamp is still valid. Newer conflicting source evidence, missing
+MM/currency or hard connection/authentication failures still invalidate it.
+Both quote stores use the same small helper; it never changes a timestamp.
+Boundary tests cover six/eight seconds and immediate expiry beyond eight,
+transient versus hard failures, and rejection of newer conflicting stale data.
+Browser acceptance checks that the amount remains after 6.5 seconds and expires
+after nine. The frontend also works with an already-running five-second bridge,
+so this display update does not require discarding the live BankID session.

@@ -164,6 +164,8 @@ def main():
                 page.wait_for_function("!document.querySelector('.avz-capacity strong').textContent.startsWith('—')")
                 reader.forced_status = "STALE"
                 page.wait_for_timeout(6500)
+                assert not page.locator(".avz-capacity strong").inner_text().startswith("—")
+                page.wait_for_timeout(2500)
                 assert "STALE" in page.locator(".avz-capacity strong").inner_text()
                 assert page.locator("#quantity").input_value() == ""
                 assert not errors, errors

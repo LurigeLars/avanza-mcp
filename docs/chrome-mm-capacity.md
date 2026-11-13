@@ -73,7 +73,7 @@ does not imply a fresh book, and delayed books display `STALE`.
 - Currency comes from identity-checked certificate metadata (cached five
   minutes). Only verified SEK is displayed; no implicit FX conversion.
 - A positive finite price, positive integral volume and source `receivedTime`
-  no more than **5 seconds old** are required. Future or missing source times
+  no more than **8 seconds old** are required. Future or missing source times
   fail closed. HTTP receive time, DOM mutation time and heartbeats cannot make
   an old book fresh. Both bridge and extension check the source clock.
 - The bridge processes at most **5 unique numeric IDs per request**, 1 KiB
@@ -109,6 +109,13 @@ does not imply a fresh book, and delayed books display `STALE`.
   `CURRENCY_UNKNOWN` and unverified DOM all withhold the amount. Hidden tabs
   pause fetching and clear their observations. Failed reads do not extend a
   previous quote's lifetime.
+- Version **0.1.3** keeps the previous verified amount through temporary refresh
+  gaps (`STALE`, `TIMEOUT`, `BUSY`, `DEPTH_UNAVAILABLE`) while its original book
+  timestamp is still within eight seconds. A newer conflicting source or hard
+  validation/authentication failure invalidates it immediately. The timestamp
+  is never reset to retrieval time. An older five-second bridge can remain
+  running during the extension update; the bridge's eight-second limit takes
+  effect at its next normal restart, without needing an immediate BankID reset.
 
 ## Security and independence
 
