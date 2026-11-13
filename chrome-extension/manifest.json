@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Avanza Ordertillägg",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "minimum_chrome_version": "120",
   "description": "Visar automatiskt maximalt synligt köpbelopp på certifikatlistan och ordersidan, utifrån market makerns säljkurs och orderdjup.",
   "permissions": ["storage"],
