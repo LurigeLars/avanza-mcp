@@ -148,7 +148,7 @@ loopback HTTP listener with synthetic pages/data. It covers pairing, list
 identity (including product links), MM level 1 rather than best ask, source-time
 gating, DOM updates, missing MM, stale expiry, actual bridge shutdown/network
 refusal and unchanged order fields. The required `fork-ci` job runs these checks
-with Playwright's pinned Chromium installation. Python tests cover mapping,
+on Ubuntu 24.04 with Playwright's pinned Chromium installation. Python tests cover mapping,
 malformed money fields, currency, cache, source age, partial failures, pairing,
 rotation, origin/Host/body/ID bounds and listener lifecycle.
 
