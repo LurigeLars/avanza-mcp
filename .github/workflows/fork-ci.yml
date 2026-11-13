@@ -17,7 +17,8 @@ concurrency:
 jobs:
   fork-ci:
     name: fork-ci
-    runs-on: ubuntu-latest
+    # Playwright 1.58's browser dependencies support Ubuntu 24.04.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     steps:
@@ -39,6 +40,15 @@ jobs:
 
       - name: Unit tests
         run: timeout 90s uv run --locked pytest tests/unit -vv
+
+      - name: Chrome extension unit tests
+        run: node --test tests/extension/*.test.cjs
+
+      - name: Install isolated browser test runtime
+        run: uv run --with playwright==1.58.0 playwright install --with-deps chromium
+
+      - name: Chrome extension acceptance and latency checks
+        run: uv run --with playwright==1.58.0 python tests/browser/capacity_display.py
 
       - name: Verify import
         run: uv run --locked python -c "from avanza_mcp import mcp; print('import ok')"

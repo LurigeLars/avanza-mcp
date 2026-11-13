@@ -1,0 +1,4 @@
+.avz-capacity { padding: .65rem; border: 1px solid currentColor; border-radius: .4rem; font: inherit; }
+.avz-capacity strong { display: block; font-size: 1.35rem; }
+.avz-capacity-cell { white-space: nowrap; text-align: right; padding: 0 .5rem; }
+.avz-capacity-stale { opacity: .75; }
