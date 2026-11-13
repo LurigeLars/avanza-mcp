@@ -140,3 +140,15 @@ list ask continues refreshing, and that a changed ask resumes a paused row.
 The local request limit is explicitly documented as distinct from a verified
 provider quota. There is no claim of rate-limit immunity or measured total
 production traffic reduction.
+
+## 0.1.5 follow-up: ten-second refresh interval
+
+Successful list passes and order-page bridge fallback now wait ten seconds
+before another read. The existing passive stream and DOM observer still update
+the order panel immediately without additional network reads. The source-age
+limit is fifteen seconds, leaving five seconds for ordinary scheduling/response
+latency; the original timestamp is never renewed. Slow or failed updates still
+expire, and hard errors or DOM mismatches still hide the amount immediately.
+The browser acceptance check proves no second healthy-row request in the first
+nine seconds, a new pass after ten seconds, pause/resume, and eventual expiry
+beyond fifteen seconds. This does not establish an Avanza-approved quota.

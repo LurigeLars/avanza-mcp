@@ -73,7 +73,7 @@ does not imply a fresh book, and delayed books display `STALE`.
 - Currency comes from identity-checked certificate metadata (cached five
   minutes). Only verified SEK is displayed; no implicit FX conversion.
 - A positive finite price, positive integral volume and source `receivedTime`
-  no more than **8 seconds old** are required. Future or missing source times
+  no more than **15 seconds old** are required. Future or missing source times
   fail closed. HTTP receive time, DOM mutation time and heartbeats cannot make
   an old book fresh. Both bridge and extension check the source clock.
 - The bridge processes at most **5 unique numeric IDs per request**, 1 KiB
@@ -98,30 +98,32 @@ does not imply a fresh book, and delayed books display `STALE`.
 - Version **0.1.4** pauses a row for **30 seconds** after `MM_MISSING`, or when
   the list has no usable ask and a probe returns stale/unavailable depth. The
   cell explicitly says `MM SAKNAS (PAUS)` or `SÄLJKURS SAKNAS (PAUS)`. A changed
-  list ask resumes reads immediately; the timer also triggers a new probe.
+  list ask resumes reads at the next scheduled pass; the timer also triggers a new probe.
   Fresh verified broker depth takes priority over a missing list price and is
   refreshed normally. `STALE` alone never means the market maker is absent.
   Pauses clear on navigation/visibility changes and are bounded to 200 IDs.
 - Quote cache: **750 ms**, at most 200 entries, shared across tabs. Cached
   results are checked again against source age before returning. Duplicate
   concurrent reads coalesce. Metadata cache is also bounded to 200 entries.
-- Refresh is one second after a completed visible-row pass. Per-instrument
-  failures do not abort later rows or pause healthy books for ten seconds.
+- Refresh is **ten seconds after a completed visible-row pass** (version
+  **0.1.5**). Per-instrument failures do not abort later rows. Order-page bridge
+  fallback also waits ten seconds between reads; passive DOM/stream updates
+  remain immediate.
   Whole-bridge failures, missing authentication/pairing or rate limits pause
   requests for ten seconds; provider `Retry-After` cooldown is also respected by
   the broker. Rendering/freshness checks run every 250 ms and DOM
   changes update the order panel through a MutationObserver. Browser scheduling
-  and multi-batch upstream latency still apply; this is not a one-second SLA.
+  and multi-batch upstream latency still apply; this is not an exact ten-second per-instrument SLA.
 - `STALE`, `OFFLINE`, `TIMEOUT`, `BUSY`, `DEPTH_UNAVAILABLE`, `AUTH_REQUIRED`, `RATE_LIMITED`, `PAIR_REQUIRED`, `MM_MISSING`,
   `CURRENCY_UNKNOWN` and unverified DOM all withhold the amount. Hidden tabs
   pause fetching and clear their observations. Failed reads do not extend a
   previous quote's lifetime.
 - Version **0.1.3** keeps the previous verified amount through temporary refresh
   gaps (`STALE`, `TIMEOUT`, `BUSY`, `DEPTH_UNAVAILABLE`) while its original book
-  timestamp is still within eight seconds. A newer conflicting source or hard
+  timestamp is still within fifteen seconds. A newer conflicting source or hard
   validation/authentication failure invalidates it immediately. The timestamp
-  is never reset to retrieval time. An older five-second bridge can remain
-  running during the extension update; the bridge's eight-second limit takes
+  is never reset to retrieval time. An older five/eight-second bridge can remain
+  running during the extension update; the bridge's fifteen-second limit takes
   effect at its next normal restart, without needing an immediate BankID reset.
 
 ## Security and independence

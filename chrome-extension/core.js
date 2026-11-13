@@ -1,6 +1,6 @@
 /* Shared pure validation; page and bridge data are always untrusted. */
 (() => {
-  const MAX_AGE = 8000;
+  const MAX_AGE = 15000;
   function number(text) {
     const value = String(text).trim().replace(/[\u00a0\u202f]/g, " ");
     if (!/^(?:\d+|\d{1,3}(?: \d{3})+)(?:,\d+)?$/.test(value)) return null;

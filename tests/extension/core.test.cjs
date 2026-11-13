@@ -17,8 +17,8 @@ test("identity and source age are strict", () => {
   assert.equal(C.certificateId("/aktier/om-aktien.html/123/underlying"), null);
   for (const url of ["https://evil.example/handla/order.html/kop/123", "http://avanza.se/handla/order.html/kop/123", "/handla/order.html/kop/１２３"]) assert.equal(C.bookId(url), null);
   assert.equal(C.fresh(10000, 16000), true);
-  assert.equal(C.fresh(10000, 18000), true);
-  assert.equal(C.fresh(10000, 18001), false);
+  assert.equal(C.fresh(10000, 25000), true);
+  assert.equal(C.fresh(10000, 25001), false);
   assert.equal(C.fresh(10001, 10000), false);
 });
 
@@ -27,8 +27,8 @@ test("keep the previous verified quote across refresh gaps without renewing sour
   for (const status of ["STALE", "TIMEOUT", "BUSY", "DEPTH_UNAVAILABLE"]) {
     const next = {status, amount: null, source_time: 10000};
     assert.equal(C.keepFresh(previous, next, 16000), previous);
-    assert.equal(C.keepFresh(previous, next, 18000), previous);
-    assert.equal(C.keepFresh(previous, next, 18001), next);
+    assert.equal(C.keepFresh(previous, next, 25000), previous);
+    assert.equal(C.keepFresh(previous, next, 25001), next);
   }
   for (const next of [{status: "MM_MISSING"}, {status: "CURRENCY_UNKNOWN"}, {status: "AUTH_REQUIRED"},
     {status: "OFFLINE"}, {status: "STALE", source_time: 11000}]) assert.equal(C.keepFresh(previous, next, 16000), next);

@@ -70,7 +70,7 @@
         if (C.validQuote(q)) snapshot = {...q, id, via: "bridge"};
         else { snapshot = null; orderFailure = q?.status === "OK" ? "STALE" : q?.status ?? result?.status ?? "OFFLINE"; }
       }
-      nextOrderPoll = performance.now() + (result?.items ? 1000 : 10000);
+      nextOrderPoll = performance.now() + 10000;
     } catch {
       orderFailure = "OFFLINE"; nextOrderPoll = performance.now() + 10000;
     } finally { orderBusy = false; updateOrder(); }
@@ -106,7 +106,7 @@
       display(cell, value, "HÄMTAR");
       if (paused.has(id)) {
         text(cell, paused.get(id).label);
-        cell.title = "Hämtningen är pausad för denna rad. Ny kontroll inom 30 sekunder, eller direkt om listans säljkurs ändras.";
+        cell.title = "Hämtningen är pausad för denna rad. Ny kontroll inom 30 sekunder, eller vid nästa hämtning om listans säljkurs ändras.";
       }
       if (visible(row)) {
         if (rows.length < 20) rows.push({id, row, cell, ask});
@@ -152,7 +152,7 @@
           return;
         }
       }
-      nextPoll = performance.now() + 1000;
+      nextPoll = performance.now() + 10000;
     } catch {
       for (const id of ids) values.set(id, {status: "OFFLINE"});
       nextPoll = performance.now() + 10000;
