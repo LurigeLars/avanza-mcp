@@ -50,7 +50,8 @@
     orderObserver?.disconnect(); orderPanel?.remove(); orderRoot = root; orderPanel = null;
     if (!root) return;
     orderPanel = document.createElement("aside"); orderPanel.className = "avz-capacity";
-    const label = document.createElement("span"); label.textContent = "Max köpbelopp vid MM:s säljkurs (synligt djup)";
+    const label = document.createElement("span"); label.textContent = "Max köpbelopp i synligt orderdjup";
+    label.title = "Market makerns säljkurs × synligt antal på den nivån. Avser orderdjup, inte kontots köpkraft eller garanterad avslutsvolym.";
     const amount = document.createElement("strong"); amount.setAttribute("role", "status");
     orderPanel.append(label, amount); root.after(orderPanel);
     orderObserver = new MutationObserver(updateOrder);
@@ -70,7 +71,7 @@
         if (C.validQuote(q)) snapshot = {...q, id, via: "bridge"};
         else { snapshot = null; orderFailure = q?.status === "OK" ? "STALE" : q?.status ?? result?.status ?? "OFFLINE"; }
       }
-      nextOrderPoll = performance.now() + (result?.items ? 1000 : 10000);
+      nextOrderPoll = performance.now() + 10000;
     } catch {
       orderFailure = "OFFLINE"; nextOrderPoll = performance.now() + 10000;
     } finally { orderBusy = false; updateOrder(); }
@@ -82,8 +83,8 @@
     const askColumn = [...(header?.cells ?? [])].findIndex(cell => cell.textContent.trim() === "Sälj");
     if (header && !header.querySelector(".avz-capacity-cell")) {
       const th = document.createElement("th"); th.className = "avz-capacity-cell";
-      th.scope = "col"; th.textContent = "MM köpbar SEK";
-      th.title = "Synlig volym på MM:s säljkurs. Befintlig spreadsortering behålls.";
+      th.scope = "col"; th.textContent = "Max köpbelopp";
+      th.title = "Market makerns säljkurs × synligt antal på den nivån, i SEK. Avser orderdjup, inte kontots köpkraft eller garanterad avslutsvolym.";
       header.append(th);
     }
     const rows = [];
@@ -106,7 +107,7 @@
       display(cell, value, "HÄMTAR");
       if (paused.has(id)) {
         text(cell, paused.get(id).label);
-        cell.title = "Hämtningen är pausad för denna rad. Ny kontroll inom 30 sekunder, eller direkt om listans säljkurs ändras.";
+        cell.title = "Hämtningen är pausad för denna rad. Ny kontroll inom 30 sekunder, eller vid nästa hämtning om listans säljkurs ändras.";
       }
       if (visible(row)) {
         if (rows.length < 20) rows.push({id, row, cell, ask});
@@ -152,7 +153,7 @@
           return;
         }
       }
-      nextPoll = performance.now() + 1000;
+      nextPoll = performance.now() + 10000;
     } catch {
       for (const id of ids) values.set(id, {status: "OFFLINE"});
       nextPoll = performance.now() + 10000;
