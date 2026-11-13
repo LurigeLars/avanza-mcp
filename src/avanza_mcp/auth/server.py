@@ -143,7 +143,7 @@ def create_auth_server(broker: AuthProcessBroker | None = None) -> FastMCP:
             ) as client:
                 from ..capacity_bridge import serve_bridge
 
-                bridge = (serve_bridge(client)
+                bridge = (serve_bridge(client, depth_batch=client.get_authenticated_order_depth_batch)
                           if os.environ.get("AVANZA_CAPACITY_BRIDGE") == "1"
                           else nullcontext())
                 async with bridge:

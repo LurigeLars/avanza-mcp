@@ -13,12 +13,13 @@ async function request(path, data, token) {
 }
 chrome.runtime.onMessage.addListener((message, sender, reply) => {
   const popup = sender.url === chrome.runtime.getURL("popup.html");
-  let page = false;
+  let page = false, orderId = null;
   try {
     const url = new URL(sender.url);
+    orderId = url.pathname.match(/^\/handla\/order\.html\/(?:kop|salj)\/([0-9]{1,12})\/?$/)?.[1] ?? null;
     page = sender.tab && sender.frameId === 0 && url.protocol === "https:"
       && ["www.avanza.se", "avanza.se"].includes(url.hostname)
-      && url.pathname === "/borshandlade-produkter/certifikat-torg/lista.html";
+      && (url.pathname === "/borshandlade-produkter/certifikat-torg/lista.html" || orderId);
   } catch { /* Unknown sender is denied. */ }
   if (!(popup || page) || inFlight >= 4) { reply({status: "DENIED"}); return false; }
   (async () => {
@@ -36,6 +37,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     const ids = message?.ids;
     if (!page || message?.type !== "CAPACITY" || !Array.isArray(ids) || ids.length < 1 || ids.length > 5
         || ids.some(i => typeof i !== "string" || !/^[0-9]{1,12}$/.test(i)) || new Set(ids).size !== ids.length) return {status: "INVALID"};
+    if (orderId && (ids.length !== 1 || ids[0] !== orderId)) return {status: "INVALID"};
     if (!token) return {status: "PAIR_REQUIRED"};
     return request("/capacity", {ids}, token);
   })().then(reply).catch(() => reply({status: "OFFLINE"})).finally(() => { inFlight--; });

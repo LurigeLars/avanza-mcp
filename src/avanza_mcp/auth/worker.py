@@ -625,9 +625,12 @@ async def _market_batch_operation(
     paths = command.get("paths")
     if not isinstance(paths, list) or any(not isinstance(path, str) for path in paths):
         return {"ok": False, "code": "protocol_error"}
+    kinds = {_authenticated_market_kind("GET", path) for path in paths}
+    if (len(kinds) != 1 or not kinds <= {"marketdata", "orderdepth"}
+            or ("orderdepth" in kinds and len(paths) > 5)):
+        return {"ok": False, "code": "operation_not_allowed"}
     if any(
         authenticated_public_request_allowed("GET", path) is False
-        or _authenticated_market_kind("GET", path) != "marketdata"
         for path in paths
     ):
         return {"ok": False, "code": "operation_not_allowed"}
@@ -639,6 +642,7 @@ async def _market_batch_operation(
             responses = await active_client.request_authenticated_batch(
                 paths,
                 max_concurrency=_MARKET_BATCH_CONCURRENCY,
+                **({"item_timeout": 1.5} if "orderdepth" in kinds else {}),
             )
         except AvanzaAuthError:
             await auth.invalidate_session()
@@ -647,19 +651,24 @@ async def _market_batch_operation(
             return {"ok": False, "code": "read_error"}
 
         results: list[dict[str, Any] | None] = []
-        for response in responses:
+        for path, response in zip(paths, responses):
             if response is None:
                 results.append(None)
                 continue
             if response.status_code == 401:
                 await auth.invalidate_session()
                 return {"ok": False, "code": "auth_expired"}
+            if response.status_code == 429 and "orderdepth" in kinds:
+                try:
+                    active_client._handle_error(response, path, "depth-batch", authenticated=True)
+                except AvanzaRateLimitError as error:
+                    return {"ok": False, "code": "read_rate_limited", "retry_after": error.retry_after}
             if response.status_code != 200:
                 results.append(None)
                 continue
             try:
                 payload = response.json()
-                projected = _project_authenticated_market_payload("marketdata", payload)
+                projected = _project_authenticated_market_payload(_authenticated_market_kind("GET", path), payload)
             except (ValueError, TypeError):
                 results.append(None)
                 continue

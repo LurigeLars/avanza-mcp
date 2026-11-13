@@ -3,6 +3,7 @@
   const format = new Intl.NumberFormat("sv-SE", {maximumFractionDigits: 2});
   let snapshot = null, orderRoot = null, orderObserver = null, orderPanel = null;
   let listBusy = false, nextPoll = 0, lastRoute = location.href;
+  let orderBusy = false, nextOrderPoll = 0, orderFailure = "DJUP EJ VERIFIERAT";
   const values = new Map();
   const seen = new WeakMap();
   const visible = element => {
@@ -28,7 +29,10 @@
         && snapshot.price === dom.price && snapshot.volume === dom.volume && snapshot.mm_level === dom.mm_level) {
       q = {...dom, source_time: snapshot.source_time, status: "OK"};
     }
-    display(orderPanel.querySelector("strong"), q, snapshot && !C.fresh(snapshot.source_time) ? "STALE" : "DJUP EJ VERIFIERAT");
+    const failure = !dom ? "MM-DJUP EJ LÄSBART" : !sek ? "VALUTA EJ VERIFIERAD"
+      : snapshot && !C.fresh(snapshot.source_time) ? "STALE"
+      : snapshot && dom ? "SIDANS DJUP AVVIKER" : orderFailure;
+    display(orderPanel.querySelector("strong"), q, failure);
   }
   window.addEventListener("message", event => {
     if (event.source !== window || event.origin !== location.origin || event.data?.type !== "AVZ_CAPACITY_DEPTH") return;
@@ -36,7 +40,7 @@
     if (d.id !== C.bookId(location.href) || !C.fresh(d.source_time) || !Number.isInteger(d.mm_level)
         || d.mm_level < 0 || d.mm_level > 49 || !Number.isFinite(d.price) || !Number.isSafeInteger(d.volume)) return;
     if (snapshot && snapshot.id === d.id && snapshot.source_time > d.source_time) return;
-    snapshot = {id: d.id, source_time: d.source_time, mm_level: d.mm_level, price: d.price, volume: d.volume};
+    snapshot = {id: d.id, source_time: d.source_time, mm_level: d.mm_level, price: d.price, volume: d.volume, via: "stream"};
     updateOrder();
   });
   function discoverOrder() {
@@ -51,6 +55,24 @@
     orderObserver = new MutationObserver(updateOrder);
     orderObserver.observe(root, {subtree: true, childList: true, characterData: true});
     updateOrder();
+  }
+  async function pollOrder() {
+    const id = C.bookId(location.href);
+    if (!id || !orderRoot || !C.readDom(orderRoot) || orderBusy || performance.now() < nextOrderPoll
+        || (snapshot?.via === "stream" && C.fresh(snapshot.source_time))) return;
+    orderBusy = true;
+    try {
+      const result = await chrome.runtime.sendMessage({type: "CAPACITY", ids: [id]});
+      if (document.hidden || C.bookId(location.href) !== id) return;
+      const q = result?.items?.[id];
+      if (!(snapshot?.via === "stream" && C.fresh(snapshot.source_time))) {
+        if (C.validQuote(q)) snapshot = {...q, id, via: "bridge"};
+        else { snapshot = null; orderFailure = q?.status === "OK" ? "STALE" : q?.status ?? result?.status ?? "OFFLINE"; }
+      }
+      nextOrderPoll = performance.now() + (result?.items ? 1000 : 10000);
+    } catch {
+      orderFailure = "OFFLINE"; nextOrderPoll = performance.now() + 10000;
+    } finally { orderBusy = false; updateOrder(); }
   }
   function listRows() {
     const table = document.querySelector("aza-certificate-list table");
@@ -109,7 +131,9 @@
           nextPoll = performance.now() + 10000;
           return;
         }
-        if (group.some(id => ["RATE_LIMITED", "OFFLINE", "TIMEOUT", "BUSY"].includes(values.get(id)?.status))) {
+        if (group.some(id => ["RATE_LIMITED", "AUTH_REQUIRED"].includes(values.get(id)?.status))) {
+          const status = group.map(id => values.get(id)?.status).find(s => ["RATE_LIMITED", "AUTH_REQUIRED"].includes(s));
+          for (const id of ids) if (!values.has(id)) values.set(id, {status});
           nextPoll = performance.now() + 10000;
           return;
         }
@@ -126,14 +150,14 @@
   }
   function tick() {
     if (location.href !== lastRoute) {
-      snapshot = null; values.clear(); nextPoll = 0; lastRoute = location.href;
+      snapshot = null; values.clear(); nextPoll = 0; nextOrderPoll = 0; orderFailure = "DJUP EJ VERIFIERAT"; lastRoute = location.href;
     }
     if (document.hidden) {
       snapshot = null; values.clear();
       if (orderPanel) display(orderPanel.querySelector("strong"), null, "PAUSAD");
       return;
     }
-    discoverOrder(); pollList();
+    discoverOrder(); pollOrder(); pollList();
   }
   document.addEventListener("visibilitychange", tick);
   window.addEventListener("pageshow", () => { snapshot = null; values.clear(); nextPoll = 0; tick(); });

@@ -99,7 +99,8 @@ async def test_capacity_bridge_is_opt_in_and_borrows_existing_client(monkeypatch
     import avanza_mcp.capacity_bridge as bridge
     observed = []
     @asynccontextmanager
-    async def listener(client):
+    async def listener(client, *, depth_batch):
+        assert depth_batch == client.get_authenticated_order_depth_batch
         observed.append(client)
         yield
     monkeypatch.setattr(bridge, "serve_bridge", listener)

@@ -45,6 +45,10 @@ test("background pins requests and never gives content scripts the token", async
   assert.equal((await send({type: "CAPACITY", ids: ["../account"]})).status, "INVALID");
   assert.equal((await send({type: "PAIR", code: "A".repeat(20)})).status, "INVALID");
   assert.equal((await send({type: "STATUS"}, {...sender, url: "https://evil.example"})).status, "DENIED");
+  const orderSender = {...sender, url: "https://www.avanza.se/handla/order.html/kop/123"};
+  assert.equal((await send({type: "CAPACITY", ids: ["123"]}, orderSender)).items[123].status, "STALE");
+  assert.equal((await send({type: "CAPACITY", ids: ["456"]}, orderSender)).status, "INVALID");
+  assert.equal((await send({type: "CAPACITY", ids: ["123", "456"]}, orderSender)).status, "INVALID");
 });
 
 test("passive SSE observer handles split CRLF without requests or credential leakage", async () => {

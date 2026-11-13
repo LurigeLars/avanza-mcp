@@ -8,6 +8,8 @@ import json
 import os
 from pathlib import Path
 import statistics
+import shutil
+import socket
 import tempfile
 import threading
 import time
@@ -29,11 +31,12 @@ class MemoryStore:
 class SyntheticReader:
     calls = 0
     requested = set()
+    forced_status = None
     async def batch(self, ids):
         self.calls += 1
         self.requested.update(ids)
         now = int(time.time() * 1000)
-        return {"items": {i: {"status": "OK", "amount": "263360.00", "price": 263.36,
+        return {"items": {i: {"status": self.forced_status or ("TIMEOUT" if i == "124" else "OK"), "amount": "263360.00", "price": 263.36,
                               "volume": 1000, "mm_level": 1, "currency": "SEK",
                               "source_time": now} for i in ids}, "server_time": now}
 
@@ -50,15 +53,22 @@ LIST = """<!doctype html><meta charset=utf-8><aza-certificate-list>
 <table><thead><tr><th>Namn</th><th>Spread</th></tr></thead><tbody>
 <tr><td><a href=/handla/order.html/kop/123>Test A</a></td><td>1,1%</td></tr>
 <tr><td><a href=/borshandlade-produkter/certifikat-torg/om-certifikatet.html/456/test-b>Test B</a><a href=/aktier/om-aktien.html/789/underlying>Underliggande</a></td><td>1,2%</td></tr>
+<tr><td><a href=/handla/order.html/kop/124>Timeout</a></td><td>1,3%</td></tr>
+<tr><td><a href=/handla/order.html/kop/125>Test D</a></td><td>1,4%</td></tr>
+<tr><td><a href=/handla/order.html/kop/126>Test E</a></td><td>1,5%</td></tr>
+<tr><td><a href=/handla/order.html/kop/127>Test F</a></td><td>1,6%</td></tr>
 <tr style="transform:translateY(2000px)"><td><a href=/handla/order.html/kop/999>Utanför vyn</a></td><td>2%</td></tr>
 </tbody></table></aza-certificate-list>"""
 
 
 def main():
     store, reader = Pairing(MemoryStore()), SyntheticReader()
-    server = uvicorn.Server(uvicorn.Config(create_app(reader, store), host="127.0.0.1",
-                                           port=18762, log_level="error", access_log=False))
-    thread = threading.Thread(target=lambda: asyncio.run(server.serve()), daemon=True)
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0)); listener.listen()
+    port = listener.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(create_app(reader, store, port=port), host="127.0.0.1",
+                                           port=port, log_level="error", access_log=False))
+    thread = threading.Thread(target=lambda: asyncio.run(server.serve(sockets=[listener])), daemon=True)
     thread.start()
     deadline = time.monotonic() + 10
     while not server.started:
@@ -66,9 +76,14 @@ def main():
         time.sleep(0.01)
     try:
         with sync_playwright() as p, tempfile.TemporaryDirectory() as profile:
-            extension = ROOT / "chrome-extension"
+            extension = Path(profile) / "extension"
+            shutil.copytree(ROOT / "chrome-extension", extension)
+            background = extension / "background.js"
+            code = background.read_text(encoding="utf-8")
+            assert code.count("http://127.0.0.1:18762") == 1
+            background.write_text(code.replace("http://127.0.0.1:18762", f"http://127.0.0.1:{port}"), encoding="utf-8")
             context = p.chromium.launch_persistent_context(
-                profile, headless=True, channel="chromium",
+                str(Path(profile) / "profile"), headless=True, channel="chromium",
                 executable_path=os.environ.get("CAPACITY_TEST_CHROMIUM"),
                 args=[f"--disable-extensions-except={extension}", f"--load-extension={extension}"],
                 viewport={"width": 1280, "height": 900})
@@ -90,10 +105,11 @@ def main():
                     content_type="text/html", body=LIST if "lista.html" in route.request.url else ORDER))
                 page.goto("https://www.avanza.se/borshandlade-produkter/certifikat-torg/lista.html?s=spread.asc")
                 page.wait_for_function("document.querySelector('tbody .avz-capacity-cell')?.textContent.includes('263')")
-                assert page.locator("tbody .avz-capacity-cell").count() == 3
+                assert page.locator("tbody .avz-capacity-cell").count() == 7
                 assert "360" in page.locator("tbody .avz-capacity-cell").first.inner_text()
                 assert reader.calls >= 1
-                assert reader.requested == {"123", "456"}, "Only visible certificate identities may be fetched"
+                page.wait_for_function("document.querySelectorAll('tbody .avz-capacity-cell')[5].textContent.includes('263')")
+                assert reader.requested == {"123", "456", "124", "125", "126", "127"}, "Timeout in first batch must not starve later visible rows"
                 page.locator("tbody tr").first.locator("a").evaluate("a => a.href='/handla/order.html/kop/invalid'")
                 page.wait_for_function("document.querySelector('tbody .avz-capacity-cell').textContent.includes('IDENTITET OKÄND')")
                 context.unroute("https://www.avanza.se/**")
@@ -111,7 +127,12 @@ def main():
                 context.route("https://www.avanza.se/**", website)
                 page.goto("https://www.avanza.se/handla/order.html/kop/123")
                 page.wait_for_selector(".avz-capacity strong")
-                assert "263" not in page.locator(".avz-capacity strong").inner_text(), "DOM without source time must fail closed"
+                page.wait_for_function("document.querySelector('.avz-capacity strong').textContent.includes('263')")
+                page.locator(".price.sell").nth(1).evaluate("e => e.textContent = '200,00 *'")
+                page.wait_for_function("document.querySelector('.avz-capacity strong').textContent.includes('SIDANS DJUP AVVIKER')")
+                page.locator(".price.sell").nth(1).evaluate("e => e.textContent = '263,36 *'")
+                page.wait_for_function("document.querySelector('.avz-capacity strong').textContent.includes('263')")
+                fallback_calls = reader.calls
                 page.evaluate("fetch('/_push/order-depth-web-push/123')")
                 page.wait_for_function("document.querySelector('.avz-capacity strong').textContent.includes('263')")
                 assert reader.calls >= 1
@@ -135,11 +156,14 @@ def main():
                     assert elapsed < 1000, "DOM update did not refresh capacity"
                     timings.append(elapsed)
 
+                assert reader.calls == fallback_calls, "A verified page stream must take priority over bridge reads"
+
                 page.locator(".price.sell").nth(1).evaluate("e => e.textContent = '263,36'")
                 page.wait_for_function("document.querySelector('.avz-capacity strong').textContent.startsWith('—')")
                 page.locator(".price.sell").nth(1).evaluate("e => e.textContent = '263,36 *'")
                 page.wait_for_function("!document.querySelector('.avz-capacity strong').textContent.startsWith('—')")
-                page.wait_for_timeout(5300)
+                reader.forced_status = "STALE"
+                page.wait_for_timeout(6500)
                 assert "STALE" in page.locator(".avz-capacity strong").inner_text()
                 assert page.locator("#quantity").input_value() == ""
                 assert not errors, errors
@@ -150,7 +174,7 @@ def main():
                 page.set_content(LIST)
                 page.wait_for_function("document.querySelector('tbody .avz-capacity-cell')?.textContent.includes('OFFLINE')", timeout=15000)
                 print(json.dumps({"browser": context.browser.version, "pairing": "PASS",
-                                  "list_bridge": "PASS", "dom_mm_level_1": "PASS",
+                                  "list_bridge": "PASS", "dom_mm_level_1": "PASS", "order_bridge_fallback": "PASS",
                                   "missing_mm_stale_offline": "PASS", "order_fields_unchanged": "PASS",
                                   "dom_update_ms": {"n": len(timings), "p50": statistics.median(timings),
                                                     "p95": sorted(timings)[18], "max": max(timings)}}))
@@ -159,6 +183,7 @@ def main():
     finally:
         server.should_exit = True
         thread.join(timeout=5)
+        listener.close()
 
 
 if __name__ == "__main__":

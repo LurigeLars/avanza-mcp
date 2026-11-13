@@ -603,6 +603,7 @@ class AvanzaClient:
         paths: list[str],
         *,
         max_concurrency: int = 8,
+        item_timeout: float | None = None,
     ) -> list[httpx.Response | None]:
         """Send a bounded GET batch through one stable authenticated client lease.
 
@@ -619,6 +620,8 @@ class AvanzaClient:
             raise ValueError("max_concurrency must be a positive integer")
         if not paths:
             return []
+        if item_timeout is not None and (not math.isfinite(item_timeout) or not 0 < item_timeout <= 10):
+            raise ValueError("Invalid batch item timeout")
         for path in paths:
             self._require_same_origin_authenticated_path(path)
 
@@ -641,8 +644,9 @@ class AvanzaClient:
                     async with self._request_semaphore:
                         await self._pace_request_start()
                         try:
-                            return await auth_client.get(path)
-                        except httpx.HTTPError:
+                            async with asyncio.timeout(item_timeout):
+                                return await auth_client.get(path)
+                        except (httpx.HTTPError, TimeoutError):
                             return None
 
             return list(await asyncio.gather(*(fetch_one(path) for path in paths)))
@@ -926,13 +930,28 @@ class AvanzaClient:
         self, paths: list[str]
     ) -> list[dict[str, Any] | None]:
         """GET reviewed trading-critical market-data paths in one auth-worker batch."""
+        return await self._get_authenticated_market_batch(paths, "trading_critical_market_data")
+
+    async def get_authenticated_order_depth_batch(
+        self, ids: list[str]
+    ) -> list[dict[str, Any] | None]:
+        """Read up to five order books in one isolated-worker request."""
+        if (not 1 <= len(ids) <= 5 or any(not isinstance(i, str) or not i.isascii()
+                or not i.isdecimal() or len(i) > 12 for i in ids) or len(set(ids)) != len(ids)):
+            raise ValueError("Expected one to five unique order-book IDs")
+        paths = [f"/_api/market-guide/stock/{i}/orderdepth" for i in ids]
+        return await self._get_authenticated_market_batch(paths, "stock_orderdepth")
+
+    async def _get_authenticated_market_batch(
+        self, paths: list[str], family: str
+    ) -> list[dict[str, Any] | None]:
         if not paths:
             return []
         for path in paths:
             self._require_same_origin_authenticated_path(path)
             if (
                 authenticated_public_request_family("GET", path)
-                != "trading_critical_market_data"
+                != family
             ):
                 raise AvanzaAuthError(
                     "Authenticated batch path is not approved trading-critical market data"

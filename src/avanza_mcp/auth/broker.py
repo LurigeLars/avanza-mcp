@@ -13,6 +13,7 @@ from typing import Any, Literal
 import httpx
 
 from ..client.endpoints import authenticated_public_request_family
+from ..client.exceptions import AvanzaRateLimitError
 from .browser import AuthStatus
 
 SessionMode = Literal["persistent", "memory_only", "one_shot"]
@@ -101,6 +102,7 @@ class AuthProcessBroker:
         self._ui_action: str | None = None
         self._ui_reaper: asyncio.Task[None] | None = None
         self._market_auth_backoff_until: dict[str, float] = {}
+        self._depth_rate_limit_until = 0.0
         self._closed = False
 
     async def connect(self) -> AuthStatus:
@@ -362,14 +364,14 @@ class AuthProcessBroker:
         self._ensure_open()
         if not paths:
             return []
-        if any(
-            authenticated_public_request_family("GET", path)
-            != "trading_critical_market_data"
-            for path in paths
-        ):
+        families = {authenticated_public_request_family("GET", path) for path in paths}
+        if (len(families) != 1 or not families <= {"trading_critical_market_data", "stock_orderdepth"}
+                or ("stock_orderdepth" in families and len(paths) > 5)):
             return None
 
-        family = "trading_critical_market_data"
+        family = next(iter(families))
+        if family == "stock_orderdepth" and self._depth_rate_limit_until > monotonic():
+            raise AvanzaRateLimitError(int(self._depth_rate_limit_until - monotonic()) + 1)
         retry_after = self._market_auth_backoff_until.get(family)
         now = monotonic()
         if retry_after is not None:
@@ -414,6 +416,11 @@ class AuthProcessBroker:
             self._market_auth_backoff_until.pop(family, None)
             return raw
         code = response.get("code")
+        if family == "stock_orderdepth" and code == "read_rate_limited":
+            seconds = response.get("retry_after")
+            seconds = max(5, seconds) if type(seconds) is int and seconds >= 0 else 60
+            self._depth_rate_limit_until = monotonic() + seconds
+            raise AvanzaRateLimitError(seconds)
         if code in {"no_session", "auth_required", "auth_expired"}:
             return None
         self._market_auth_backoff_until[family] = (

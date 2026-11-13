@@ -5,6 +5,11 @@ visible volume at that MM ask level**. It requires no investment amount, order
 field changes or per-trade clicks. It is not account buying power, total depth
 at all prices, an execution guarantee, or a commission-inclusive amount.
 
+Version **0.1.2** fixes list starvation after per-instrument timeouts and uses a
+real authenticated depth batch. When updating, reload the extension and Avanza
+tabs. Pairing survives at the same extension path/ID. Updating the backend needs
+one MCP restart; a memory-only BankID session then needs reconnecting.
+
 ## Install
 
 1. Update the normal runtime checkout to the merged `main` version and run
@@ -48,8 +53,12 @@ at all prices, an execution guarantee, or a commission-inclusive amount.
 7. On `/handla/order.html/kop/<id>` or `/salj/<id>`, an information panel appears
    immediately below the visible order depth. The amount appears only when the
    MM ask marker, SEK currency, price, volume, instrument ID and a fresh snapshot
-   from the page's own depth stream agree. This path needs neither pairing nor
-   the local bridge. No extension requests are sent to Avanza from this page.
+   agree. The page's own depth stream is preferred and needs no pairing. If its
+   source time is unavailable or no longer fresh, the paired local bridge can
+   verify **only this URL's instrument**. That fallback adds a bounded read of
+   the same book through the existing authenticated client. Price, volume and MM
+   index must match the visible DOM; a mismatch withholds the amount and displays
+   `SIDANS DJUP AVVIKER`. Last trade is never a substitute for current ask depth.
 
 For an explicitly **public-only** independent process, use
 `uv run --locked python -m avanza_mcp.capacity_bridge serve-public`. Do not run it
@@ -69,7 +78,7 @@ does not imply a fresh book, and delayed books display `STALE`.
   an old book fresh. Both bridge and extension check the source clock.
 - The bridge processes at most **5 unique numeric IDs per request**, 1 KiB
   request bodies, four application requests and eight HTTP connections at a
-  time. Display responses have a two-second per-instrument deadline and
+  time. Display responses have a 2.5-second deadline and
   three-second batch deadline. At most five shielded reads may remain pending;
   repeated IDs reuse that task and further work returns `BUSY`. The existing
   client's provider concurrency, pacing, request deadlines and cooldown remain
@@ -77,17 +86,26 @@ does not imply a fresh book, and delayed books display `STALE`.
   otherwise retire a memory-only session. A slow shared upstream operation can
   still delay other MCP reads until its existing deadline; the extension stays
   fail-closed meanwhile. Pending tasks are cancelled only on owner shutdown.
+- The integrated bridge uses **one authenticated worker batch** per group of
+  up to five books, with concurrent HTTP reads through the existing 50 ms-paced
+  client. Each depth HTTP read has a 1.5-second deadline **inside** the isolated
+  worker. A slow instrument yields a per-item unavailable result rather than
+  blocking the other books indefinitely. No delayed anonymous fallback is used
+  in the integrated bridge; missing authentication displays `AUTH_REQUIRED`.
 - Up to **20 currently visible rows**, top first, are fetched progressively in
   batches of five. Extra visible rows explicitly show the limit. Scrolling
   brings other rows into scope. Hidden/offscreen rows cause no new fetches.
 - Quote cache: **750 ms**, at most 200 entries, shared across tabs. Cached
   results are checked again against source age before returning. Duplicate
   concurrent reads coalesce. Metadata cache is also bounded to 200 entries.
-- Refresh is one second after a completed visible-row pass; failure pauses
-  requests for ten seconds. Rendering/freshness checks run every 250 ms and DOM
+- Refresh is one second after a completed visible-row pass. Per-instrument
+  failures do not abort later rows or pause healthy books for ten seconds.
+  Whole-bridge failures, missing authentication/pairing or rate limits pause
+  requests for ten seconds; provider `Retry-After` cooldown is also respected by
+  the broker. Rendering/freshness checks run every 250 ms and DOM
   changes update the order panel through a MutationObserver. Browser scheduling
   and multi-batch upstream latency still apply; this is not a one-second SLA.
-- `STALE`, `OFFLINE`, `TIMEOUT`, `BUSY`, `RATE_LIMITED`, `PAIR_REQUIRED`, `MM_MISSING`,
+- `STALE`, `OFFLINE`, `TIMEOUT`, `BUSY`, `DEPTH_UNAVAILABLE`, `AUTH_REQUIRED`, `RATE_LIMITED`, `PAIR_REQUIRED`, `MM_MISSING`,
   `CURRENCY_UNKNOWN` and unverified DOM all withhold the amount. Hidden tabs
   pause fetching and clear their observations. Failed reads do not extend a
   previous quote's lifetime.
@@ -149,15 +167,21 @@ cannot attach to another process's memory-only session. It never logs accounts,
 cookies or tokens. Run only a small, known instrument set.
 
 The isolated browser test loads the real MV3 extension and reaches a real
-loopback HTTP listener with synthetic pages/data. It covers pairing, list
-identity (including product links), MM level 1 rather than best ask, source-time
-gating, DOM updates, missing MM, stale expiry, actual bridge shutdown/network
-refusal and unchanged order fields. The required `fork-ci` job runs these checks
+loopback HTTP listener on an ephemeral test port with synthetic pages/data; it
+does not stop or replace a live bridge. It covers pairing, list
+identity (including product links), later-batch progress after a row timeout,
+MM level 1 rather than best ask, source-time gating, DOM updates, missing MM,
+stale expiry, order-page bridge fallback, exact DOM/bridge match, passive-stream
+priority, actual bridge shutdown/network refusal and unchanged order fields.
+The required `fork-ci` job runs these checks
 on Ubuntu 24.04 with Playwright's pinned Chromium installation. Python tests cover mapping,
 malformed money fields, currency, cache, source age, partial failures, pairing,
 rotation, origin/Host/body/ID bounds and listener lifecycle.
 
 ### Measurements on 2026-11-13
+
+The initial real-provider timings below predate the 0.1.2 worker-batch repair;
+they do not establish the repaired path's latency or authenticated freshness.
 
 - Isolated Chromium 151, 20 synthetic DOM updates: median **0.45 ms**, p95
   **0.80 ms**, max **1.10 ms**, measured from DOM change to panel update. This

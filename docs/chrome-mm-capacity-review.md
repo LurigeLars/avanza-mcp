@@ -83,3 +83,31 @@ Chrome session and fresh source snapshots match there.
 Not checked: sustained trading-session load, actual fills, a long-run latency
 SLA, or future Avanza UI/API compatibility. No separate sorting/filtering system,
 new runtime dependency, scheduler, account export or order feature was built.
+
+## 0.1.2 follow-up: list timeouts and unverified order panel
+
+The first implementation aborted a visible-row pass when **one** item timed out,
+then slept ten seconds. Later rows were starved and healthy five-second quotes
+expired. A five-ID bridge request also made five separate serialized broker
+commands. The repaired path sends one homogeneous, five-book worker batch with
+the existing 50 ms pacing and a 1.5-second HTTP deadline per item inside the
+worker. Individual failures no longer abort later visible rows. The original
+quote-batch allowlist stays unchanged; new depth batches have their own narrow
+path/count guard at client, broker and worker. Retry-After is carried without
+upstream text and prevents further depth worker calls during cooldown.
+
+On the order page, passive source time may be unavailable (for example a missed
+existing stream or a snapshot without receivedTime). A paired fallback now
+verifies only the instrument from the page URL and requires the same visible MM
+index, price, volume and SEK currency. A mismatched book remains hidden; source
+age is still capped at five seconds. Fresh passive observations take priority
+and stop fallback reads. The exact reason for the reported normal-profile
+passive-observer failure remains unverified; this is an explicit bounded
+verification fallback, not a claim that an unknown source timestamp is fresh.
+
+Validation includes existing connected-code unit tests, seven added batch,
+deadline, rate-limit and privacy tests, and real-MV3/real-loopback acceptance for
+first-batch timeout/later-row progress, fallback/mismatch, passive priority,
+stale/offline behavior and untouched order fields. The browser fixture now uses
+an ephemeral port and a temporary extension copy to avoid a live-bridge conflict.
+Normal-profile acceptance after extension reload/BankID reconnect remains open.
