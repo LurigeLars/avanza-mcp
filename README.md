@@ -35,7 +35,7 @@ The server provides:
 The Avanza banking/trading surface is intentionally read-only. There are no MCP tools
 for placing, editing or cancelling orders, moving money or withdrawing funds.
 
-An optional, separate [Chrome MV3 extension](docs/chrome-mm-capacity.md) displays
+An optional, separate Chrome MV3 extension, [Avanza Ordertillägg](docs/chrome-mm-capacity.md), displays
 **MM köpbar SEK** on the certificate list and order page without amount entry.
 It reads the visible MM ask depth, withholds stale/unverified amounts and uses a
 paired loopback-only read bridge for list rows. It is disabled by default and
