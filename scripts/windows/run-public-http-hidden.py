@@ -26,8 +26,11 @@ def main() -> int:
         choices=("persistent", "memory_only", "one_shot"),
         default=os.environ.get("AVANZA_SESSION_MODE", "memory_only"),
     )
+    parser.add_argument("--capacity-bridge", action="store_true")
     args = parser.parse_args()
     os.environ["AVANZA_SESSION_MODE"] = args.session_mode
+    if args.capacity_bridge:
+        os.environ["AVANZA_CAPACITY_BRIDGE"] = "1"
 
     rotate_log()
     with LOG_FILE.open("a", encoding="utf-8") as log:

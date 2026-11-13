@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
+import os
 from datetime import date
 from typing import Annotated, Any, Literal, TypeVar
 
@@ -140,7 +141,13 @@ def create_auth_server(broker: AuthProcessBroker | None = None) -> FastMCP:
                 authenticated_request_delegate=broker.market_request,
                 authenticated_market_data_batch_delegate=broker.market_data_batch,
             ) as client:
-                yield {"client": client}
+                from ..capacity_bridge import serve_bridge
+
+                bridge = (serve_bridge(client)
+                          if os.environ.get("AVANZA_CAPACITY_BRIDGE") == "1"
+                          else nullcontext())
+                async with bridge:
+                    yield {"client": client}
         finally:
             if not warm_task.done():
                 warm_task.cancel()
