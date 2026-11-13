@@ -50,7 +50,8 @@
     orderObserver?.disconnect(); orderPanel?.remove(); orderRoot = root; orderPanel = null;
     if (!root) return;
     orderPanel = document.createElement("aside"); orderPanel.className = "avz-capacity";
-    const label = document.createElement("span"); label.textContent = "Max köpbelopp vid MM:s säljkurs (synligt djup)";
+    const label = document.createElement("span"); label.textContent = "Max köpbelopp i synligt orderdjup";
+    label.title = "Market makerns säljkurs × synligt antal på den nivån. Avser orderdjup, inte kontots köpkraft eller garanterad avslutsvolym.";
     const amount = document.createElement("strong"); amount.setAttribute("role", "status");
     orderPanel.append(label, amount); root.after(orderPanel);
     orderObserver = new MutationObserver(updateOrder);
@@ -82,8 +83,8 @@
     const askColumn = [...(header?.cells ?? [])].findIndex(cell => cell.textContent.trim() === "Sälj");
     if (header && !header.querySelector(".avz-capacity-cell")) {
       const th = document.createElement("th"); th.className = "avz-capacity-cell";
-      th.scope = "col"; th.textContent = "MM köpbar SEK";
-      th.title = "Synlig volym på MM:s säljkurs. Befintlig spreadsortering behålls.";
+      th.scope = "col"; th.textContent = "Max köpbelopp";
+      th.title = "Market makerns säljkurs × synligt antal på den nivån, i SEK. Avser orderdjup, inte kontots köpkraft eller garanterad avslutsvolym.";
       header.append(th);
     }
     const rows = [];

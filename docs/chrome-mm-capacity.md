@@ -5,10 +5,11 @@ visible volume at that MM ask level**. It requires no investment amount, order
 field changes or per-trade clicks. It is not account buying power, total depth
 at all prices, an execution guarantee, or a commission-inclusive amount.
 
-Version **0.1.2** fixes list starvation after per-instrument timeouts and uses a
-real authenticated depth batch. When updating, reload the extension and Avanza
-tabs. Pairing survives at the same extension path/ID. Updating the backend needs
-one MCP restart; a memory-only BankID session then needs reconnecting.
+Version **0.1.5** waits ten seconds between completed list passes and order-page
+bridge fallback reads. Passive page-stream/DOM updates remain immediate. The
+source-age limit is fifteen seconds. Reload the extension and Avanza tabs when
+updating. Pairing survives at the same extension path/ID. Backend changes take
+effect after a normal MCP restart; memory-only mode may require reconnecting.
 
 ## Install
 
@@ -46,12 +47,12 @@ one MCP restart; a memory-only BankID session then needs reconnecting.
    Enter the code in the extension popup within ten minutes and choose **Para**.
    `PAIRED` confirms the token exchange. It does not establish fresh market data.
    Do not paste the code or permanent token into chat or GitHub.
-6. Open Avanza's **Hitta certifikat** list. The added **MM köpbar SEK** column
+6. Open Avanza's **Hitta certifikat** list. The added **Max köpbelopp** column
    updates automatically while the tab is visible. Existing Avanza filters and
    spread sorting remain authoritative. This version adds no separate amount
    filter or client-side reordering of Angular-managed rows.
-7. On `/handla/order.html/kop/<id>` or `/salj/<id>`, an information panel appears
-   immediately below the visible order depth. The amount appears only when the
+7. On `/handla/order.html/kop/<id>` or `/salj/<id>`, the **Max köpbelopp i synligt
+   orderdjup** panel appears immediately below the visible order depth. The amount appears only when the
    MM ask marker, SEK currency, price, volume, instrument ID and a fresh snapshot
    agree. The page's own depth stream is preferred and needs no pairing. If its
    source time is unavailable or no longer fresh, the paired local bridge can
@@ -98,7 +99,8 @@ does not imply a fresh book, and delayed books display `STALE`.
 - Version **0.1.4** pauses a row for **30 seconds** after `MM_MISSING`, or when
   the list has no usable ask and a probe returns stale/unavailable depth. The
   cell explicitly says `MM SAKNAS (PAUS)` or `SÄLJKURS SAKNAS (PAUS)`. A changed
-  list ask resumes reads at the next scheduled pass; the timer also triggers a new probe.
+  list ask resumes reads at the next scheduled pass; the timer also triggers a
+  new probe.
   Fresh verified broker depth takes priority over a missing list price and is
   refreshed normally. `STALE` alone never means the market maker is absent.
   Pauses clear on navigation/visibility changes and are bounded to 200 IDs.
@@ -113,12 +115,13 @@ does not imply a fresh book, and delayed books display `STALE`.
   requests for ten seconds; provider `Retry-After` cooldown is also respected by
   the broker. Rendering/freshness checks run every 250 ms and DOM
   changes update the order panel through a MutationObserver. Browser scheduling
-  and multi-batch upstream latency still apply; this is not an exact ten-second per-instrument SLA.
+  and multi-batch upstream latency still apply; this is not an exact ten-second
+  per-instrument SLA.
 - `STALE`, `OFFLINE`, `TIMEOUT`, `BUSY`, `DEPTH_UNAVAILABLE`, `AUTH_REQUIRED`, `RATE_LIMITED`, `PAIR_REQUIRED`, `MM_MISSING`,
   `CURRENCY_UNKNOWN` and unverified DOM all withhold the amount. Hidden tabs
   pause fetching and clear their observations. Failed reads do not extend a
   previous quote's lifetime.
-- Version **0.1.3** keeps the previous verified amount through temporary refresh
+- The extension keeps the previous verified amount through temporary refresh
   gaps (`STALE`, `TIMEOUT`, `BUSY`, `DEPTH_UNAVAILABLE`) while its original book
   timestamp is still within fifteen seconds. A newer conflicting source or hard
   validation/authentication failure invalidates it immediately. The timestamp
@@ -135,9 +138,10 @@ rejects DNS rebinding; ordinary website/null Origins are denied.
 
 Pairing uses a random 80-bit one-time code, ten-minute expiry and at most five
 exchange attempts per ten minutes. A successful exchange pins the exact Chrome
-extension Origin and rotates a random 256-bit bearer token. Windows/macOS/Linux
-native credential storage holds only hashes and the pinned Origin. The token
-stays in `chrome.storage.local` restricted to `TRUSTED_CONTEXTS`; it is never
+extension Origin and rotates a random 256-bit bearer token. The configured `keyring`
+backend holds only hashes and the pinned Origin; use a native operating-system
+backend. An alternate configured backend is not guaranteed to provide native
+credential-store protection. The token stays in `chrome.storage.local` restricted to `TRUSTED_CONTEXTS`; it is never
 returned to content scripts. A global 120-request/minute bound, body limits,
 timeouts and concurrency limits bound local work. Pairing-store failure closes
 access rather than enabling an unauthenticated fallback.
@@ -204,34 +208,20 @@ on Ubuntu 24.04 with Playwright's pinned Chromium installation. Python tests cov
 malformed money fields, currency, cache, source age, partial failures, pairing,
 rotation, origin/Host/body/ID bounds and listener lifecycle.
 
-### Measurements on 2026-11-13
+### Measuring latency safely
 
-The initial real-provider timings below predate the 0.1.2 worker-batch repair;
-they do not establish the repaired path's latency or authenticated freshness.
-
-- Isolated Chromium 151, 20 synthetic DOM updates: median **0.45 ms**, p95
-  **0.80 ms**, max **1.10 ms**, measured from DOM change to panel update. This
-  excludes upstream market delivery and is not a real trading-session SLA.
-- Real Avanza client, one instrument: cold **479 ms**, five warm reads
-  **130–150 ms**, median **137 ms**; cache **0.012 ms**.
-- Real Avanza client, five verified certificate IDs: cold **1,372 ms**, five
-  warm batches **714–791 ms**, median **750 ms**; cache **0.012 ms**. The requested
-  isolated persistent worker returned **zero authenticated responses**: this was
-  public fallback, with source books about **15–65 minutes old**. All amounts
-  correctly remained withheld as `STALE`. These are HTTP/client timings, not
-  evidence of executable live depth.
-- The extension added 20 columns on the actual public Angular certificate list,
-  with `PAIR_REQUIRED` before pairing. The user's existing logged-in list and
-  order depth were visually inspected: links carry order-book identity and the
-  sell-side MM price has the expected asterisk. The extension has **not** been
-  installed in that user's normal Chrome profile; live logged-in SSE matching
-  and sustained authenticated list freshness remain to be accepted there.
+The browser acceptance test reports synthetic DOM-to-panel processing times.
+Those measurements exclude Avanza delivery, authentication and upstream reads.
+The optional benchmark reports HTTP/client timings and source ages separately;
+fast responses alone do not establish fresh depth. Keep machine-specific timing
+reports, live-session observations and screenshots local. Do not commit browser
+profiles, pairing material, account identifiers or deployment details.
 
 ## Disable / rollback
 
-Disable/remove the extension in Chrome. Unset `AVANZA_CAPACITY_BRIDGE` or
-re-register the Windows launcher without `-CapacityBridge`, then restart the
-existing MCP process when convenient. No orders, account settings, Avanza
-filters or Trade Alert settings need changing. Re-pairing rotates any previous
+Disable/remove the extension in Chrome. Remove `-CapacityBridge` from the
+Windows launcher startup and ensure `AVANZA_CAPACITY_BRIDGE` is unset or not `1`
+in its environment, then restart the existing MCP process when convenient.
+No orders, account settings, Avanza filters or Trade Alert settings need changing. Re-pairing rotates any previous
 bridge token. A code update does not require re-pairing when the extension ID
 and native pairing record remain the same.
