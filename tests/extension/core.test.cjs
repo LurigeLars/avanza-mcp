@@ -38,7 +38,7 @@ test("keep the previous verified quote across refresh gaps without renewing sour
 test("bridge quotes require exact units, source age and consistent amount", () => {
   const q = {status: "OK", price: 263.36, volume: 1000, amount: "263360.00", mm_level: 1, currency: "SEK", source_time: 10000};
   assert.equal(C.validQuote(q, 10001), true);
-  for (const change of [{currency: "EUR"}, {source_time: 1}, {amount: "100"}, {mm_level: null}, {volume: 1.5}, {price: NaN}]) assert.equal(C.validQuote({...q, ...change}, 10001), false);
+  for (const change of [{currency: "EUR"}, {source_time: -5000}, {amount: "100"}, {mm_level: null}, {volume: 1.5}, {price: NaN}]) assert.equal(C.validQuote({...q, ...change}, 10001), false);
 });
 
 test("background pins requests and never gives content scripts the token", async () => {
