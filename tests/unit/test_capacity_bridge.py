@@ -33,7 +33,7 @@ def test_uses_mm_index_not_best_ask_or_sum():
     ("marketMakerLevelInAsk", None), ("marketMakerLevelInAsk", -1),
     ("marketMakerLevelInAsk", True), ("marketMakerLevelInAsk", 2),
     ("marketMakerLevelInAsk", 0.0), ("receivedTime", None),
-    ("receivedTime", NOW - 5001), ("receivedTime", NOW + 1),
+    ("receivedTime", NOW - 8001), ("receivedTime", NOW + 1),
     ("receivedTime", True), ("levels", []), ("levels", None)])
 def test_uncertain_depth_fails_closed(field, value):
     raw = depth(); raw[field] = value
@@ -98,6 +98,8 @@ async def test_cache_coalesces_concurrent_tabs_and_rechecks_source_age(monkeypat
     assert client.get.await_count == 1
     assert client.get_public.await_count == 1
     clock[0] += 6
+    assert (await reader.batch(["123"]))["items"]["123"]["status"] == "OK"
+    clock[0] += 3
     result = (await reader.batch(["123"]))["items"]["123"]
     assert result["status"] == "STALE" and result["amount"] is None
 
