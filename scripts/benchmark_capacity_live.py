@@ -19,11 +19,18 @@ async def run(ids, authenticated):
         if result is not None:
             auth_responses += 1
         return result
+    async def batch_delegate(paths):
+        nonlocal auth_responses
+        result = await broker.market_data_batch(paths)
+        if result is not None:
+            auth_responses += sum(item is not None for item in result)
+        return result
     try:
         if broker:
             await broker.warm_market_worker()
-        async with AvanzaClient(authenticated_request_delegate=delegate if broker else None) as client:
-            reader = CapacityReader(client)
+        async with AvanzaClient(authenticated_request_delegate=delegate if broker else None,
+                                authenticated_market_data_batch_delegate=batch_delegate if broker else None) as client:
+            reader = CapacityReader(client, client.get_authenticated_order_depth_batch if broker else None)
             timings, statuses, ages = [], [], []
             for i in range(6):
                 if i:
