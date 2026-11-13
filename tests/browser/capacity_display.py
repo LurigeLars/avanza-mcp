@@ -117,18 +117,20 @@ def main():
                 page.goto("https://www.avanza.se/borshandlade-produkter/certifikat-torg/lista.html?s=spread.asc")
                 page.wait_for_function("document.querySelector('tbody .avz-capacity-cell')?.textContent.includes('263')")
                 assert page.locator("tbody .avz-capacity-cell").count() == 10
+                expect(page.locator("thead .avz-capacity-cell")).to_have_text("Max köpbelopp")
                 assert "360" in page.locator("tbody .avz-capacity-cell").first.inner_text()
                 assert reader.calls >= 1
                 page.wait_for_function("document.querySelectorAll('tbody .avz-capacity-cell')[5].textContent.includes('263')")
                 page.wait_for_function("document.querySelectorAll('tbody .avz-capacity-cell')[8].textContent.includes('PAUS')")
                 assert reader.requested == {"123", "456", "124", "125", "126", "127", "128", "129", "130"}
-                page.wait_for_timeout(2200)
+                page.wait_for_timeout(9000)
                 assert reader.requested_counts["128"] == reader.requested_counts["130"] == 1
-                assert reader.requested_counts["129"] >= 2, "Fresh broker depth overrides missing list price"
+                assert reader.requested_counts["129"] == 1, "No normal refresh before ten seconds"
                 reader.missing_mm_restored = True
                 page.locator("tbody tr").nth(6).locator("td").nth(2).evaluate("cell => cell.textContent='263,36'")
                 page.wait_for_function("document.querySelectorAll('tbody .avz-capacity-cell')[6].textContent.includes('263')", timeout=5000)
-                assert reader.requested_counts["128"] >= 2, "A changed list ask must resume reads immediately"
+                assert reader.requested_counts["129"] >= 2, "Fresh depth overrides missing list price on the next pass"
+                assert reader.requested_counts["128"] >= 2, "A changed list ask must resume at the next scheduled pass"
                 page.locator("tbody tr").first.locator("a").evaluate("a => a.href='/handla/order.html/kop/invalid'")
                 page.wait_for_function("document.querySelector('tbody .avz-capacity-cell').textContent.includes('IDENTITET OKÄND')")
                 context.unroute("https://www.avanza.se/**")
@@ -146,6 +148,7 @@ def main():
                 context.route("https://www.avanza.se/**", website)
                 page.goto("https://www.avanza.se/handla/order.html/kop/123")
                 page.wait_for_selector(".avz-capacity strong")
+                expect(page.locator(".avz-capacity span")).to_have_text("Max köpbelopp i synligt orderdjup")
                 page.wait_for_function("document.querySelector('.avz-capacity strong').textContent.includes('263')")
                 page.locator(".price.sell").nth(1).evaluate("e => e.textContent = '200,00 *'")
                 page.wait_for_function("document.querySelector('.avz-capacity strong').textContent.includes('SIDANS DJUP AVVIKER')")
@@ -182,9 +185,9 @@ def main():
                 page.locator(".price.sell").nth(1).evaluate("e => e.textContent = '263,36 *'")
                 page.wait_for_function("!document.querySelector('.avz-capacity strong').textContent.startsWith('—')")
                 reader.forced_status = "STALE"
-                page.wait_for_timeout(6500)
+                page.wait_for_timeout(11500)
                 assert not page.locator(".avz-capacity strong").inner_text().startswith("—")
-                page.wait_for_timeout(2500)
+                page.wait_for_timeout(4500)
                 assert "STALE" in page.locator(".avz-capacity strong").inner_text()
                 assert page.locator("#quantity").input_value() == ""
                 assert not errors, errors
@@ -195,7 +198,7 @@ def main():
                 page.set_content(LIST)
                 page.wait_for_function("document.querySelector('tbody .avz-capacity-cell')?.textContent.includes('OFFLINE')", timeout=15000)
                 print(json.dumps({"browser": context.browser.version, "pairing": "PASS",
-                                  "list_bridge": "PASS", "unquoted_pause_and_resume": "PASS", "dom_mm_level_1": "PASS", "order_bridge_fallback": "PASS",
+                                  "list_bridge": "PASS", "unquoted_pause_and_resume": "PASS", "ten_second_polling": "PASS", "dom_mm_level_1": "PASS", "order_bridge_fallback": "PASS",
                                   "missing_mm_stale_offline": "PASS", "order_fields_unchanged": "PASS",
                                   "dom_update_ms": {"n": len(timings), "p50": statistics.median(timings),
                                                     "p95": sorted(timings)[18], "max": max(timings)}}))

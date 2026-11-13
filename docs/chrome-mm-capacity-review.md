@@ -19,7 +19,7 @@ most twenty visible rows per pass.
    certificate detail link but no buy/sell link. Identifying rows only through
    order URLs would leave the column empty. The parser now accepts the exact
    certificate-detail path too, while excluding the underlying stock link.
-   Pure-parser, browser-fixture and actual public-page checks cover this case.
+   Pure-parser and synthetic browser-fixture checks cover this case.
 
 2. **Embedded listener lifecycle.** A second Uvicorn listener must not take
    ownership of the MCP process's signal handlers. The embedded server leaves
@@ -71,14 +71,13 @@ passed. The required fork CI also runs the complete final unit suite, extension
 tests and isolated real-MV3/real-loopback browser acceptance test.
 
 The isolated browser verifies MM level 1, visible DOM parsing, pairing,
-source-time gating, stale/offline behavior and unchanged order fields. The
-actual public Avanza Angular list was tested with the extension; the user's
-logged-in list and order book were visually inspected without order actions.
-See [measurements and installation](chrome-mm-capacity.md) for timing evidence.
+source-time gating, stale/offline behavior and unchanged order fields using
+synthetic pages/data. See the [installation guide](chrome-mm-capacity.md) for
+reproducible validation commands. Machine-specific measurements and private
+session observations are excluded from public documentation.
 
-Verdict: Ship the opt-in implementation through normal CI/PR gates. Do not call
-authenticated live behavior accepted until the extension is loaded in the normal
-Chrome session and fresh source snapshots match there.
+Verdict: Ship the opt-in implementation through normal CI/PR gates. Synthetic
+acceptance does not establish sustained authenticated live freshness or a production latency guarantee.
 
 Not checked: sustained trading-session load, actual fills, a long-run latency
 SLA, or future Avanza UI/API compatibility. No separate sorting/filtering system,
@@ -101,20 +100,18 @@ existing stream or a snapshot without receivedTime). A paired fallback now
 verifies only the instrument from the page URL and requires the same visible MM
 index, price, volume and SEK currency. A mismatched book remains hidden; source
 age is still capped at five seconds. Fresh passive observations take priority
-and stop fallback reads. The exact reason for the reported normal-profile
-passive-observer failure remains unverified; this is an explicit bounded
-verification fallback, not a claim that an unknown source timestamp is fresh.
+and stop fallback reads. This is an explicit bounded verification fallback;
+an unknown source timestamp is never treated as fresh.
 
 Validation includes existing connected-code unit tests, seven added batch,
 deadline, rate-limit and privacy tests, and real-MV3/real-loopback acceptance for
 first-batch timeout/later-row progress, fallback/mismatch, passive priority,
 stale/offline behavior and untouched order fields. The browser fixture now uses
 an ephemeral port and a temporary extension copy to avoid a live-bridge conflict.
-Normal-profile acceptance after extension reload/BankID reconnect remains open.
 
 ## 0.1.3 follow-up: eight-second display window
 
-At the user's request, source age now expires at eight seconds instead of five.
+Version 0.1.3 extended source age to eight seconds instead of five.
 The previous verified amount survives temporary refresh gaps only while its
 original timestamp is still valid. Newer conflicting source evidence, missing
 MM/currency or hard connection/authentication failures still invalidate it.
@@ -140,3 +137,20 @@ list ask continues refreshing, and that a changed ask resumes a paused row.
 The local request limit is explicitly documented as distinct from a verified
 provider quota. There is no claim of rate-limit immunity or measured total
 production traffic reduction.
+
+## 0.1.5 follow-up: ten-second refresh interval
+
+Successful list passes and order-page bridge fallback now wait ten seconds
+before another read. The existing passive stream and DOM observer still update
+the order panel immediately without additional network reads. The source-age
+limit is fifteen seconds, leaving five seconds for ordinary scheduling/response
+latency; the original timestamp is never renewed. Slow or failed updates still
+expire, and hard errors or DOM mismatches still hide the amount immediately.
+The browser acceptance check proves no second healthy-row request in the first
+nine seconds, a new pass after ten seconds, pause/resume, and eventual expiry
+beyond fifteen seconds. This does not establish an Avanza-approved quota.
+
+The column is labelled **Max köpbelopp** and the order panel **Max köpbelopp i
+synligt orderdjup**. Both explain the market-maker ask-price times visible-volume
+calculation and distinguish order depth from account buying power. Browser
+acceptance checks the displayed labels.
