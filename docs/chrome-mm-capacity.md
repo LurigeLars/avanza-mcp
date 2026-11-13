@@ -1,4 +1,4 @@
-# Optional Chrome extension: MM köpbar SEK
+# Avanza Ordertillägg — optional Chrome extension
 
 The separate Manifest V3 extension in `chrome-extension/` shows **MM ask price ×
 visible volume at that MM ask level**. It requires no investment amount, order
