@@ -124,3 +124,19 @@ transient versus hard failures, and rejection of newer conflicting stale data.
 Browser acceptance checks that the amount remains after 6.5 seconds and expires
 after nine. The frontend also works with an already-running five-second bridge,
 so this display update does not require discarding the live BankID session.
+
+## 0.1.4 follow-up: pause unusable list rows
+
+After the initial read, a verified missing MM or an unusable/stale book combined
+with a missing visible list ask pauses that row's polling for thirty seconds.
+Fresh broker depth overrides a missing list ask. A changed list ask resumes
+immediately, and expiry/visibility/navigation trigger another probe. `STALE`
+with a usable list ask does not pause polling. Pause state is capped at 200 IDs.
+This changes only the extension; no live server/BankID restart is required.
+
+Browser acceptance verifies that two unusable rows receive one request while
+healthy rows receive repeated refreshes, that a fresh book despite a missing
+list ask continues refreshing, and that a changed ask resumes a paused row.
+The local request limit is explicitly documented as distinct from a verified
+provider quota. There is no claim of rate-limit immunity or measured total
+production traffic reduction.

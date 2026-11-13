@@ -5,6 +5,7 @@
   let listBusy = false, nextPoll = 0, lastRoute = location.href;
   let orderBusy = false, nextOrderPoll = 0, orderFailure = "DJUP EJ VERIFIERAT";
   const values = new Map();
+  const paused = new Map();
   const seen = new WeakMap();
   const visible = element => {
     const r = element.getBoundingClientRect();
@@ -78,6 +79,7 @@
     const table = document.querySelector("aza-certificate-list table");
     if (!table) return [];
     const header = table.querySelector("thead tr");
+    const askColumn = [...(header?.cells ?? [])].findIndex(cell => cell.textContent.trim() === "Sälj");
     if (header && !header.querySelector(".avz-capacity-cell")) {
       const th = document.createElement("th"); th.className = "avz-capacity-cell";
       th.scope = "col"; th.textContent = "MM köpbar SEK";
@@ -94,13 +96,20 @@
         continue;
       }
       const id = [...ids][0];
+      const ask = askColumn >= 0 && row.cells[askColumn] ? C.number(row.cells[askColumn].textContent) : undefined;
+      const pause = paused.get(id);
+      if (pause && (ask !== pause.ask || performance.now() >= pause.until)) paused.delete(id);
       let cell = row.querySelector(".avz-capacity-cell");
       if (!cell) { cell = document.createElement("td"); cell.className = "avz-capacity-cell"; row.append(cell); }
       if (seen.get(row) !== id) { seen.set(row, id); display(cell, null, "HÄMTAR"); }
       const value = values.get(id);
       display(cell, value, "HÄMTAR");
+      if (paused.has(id)) {
+        text(cell, paused.get(id).label);
+        cell.title = "Hämtningen är pausad för denna rad. Ny kontroll inom 30 sekunder, eller direkt om listans säljkurs ändras.";
+      }
       if (visible(row)) {
-        if (rows.length < 20) rows.push({id, row, cell});
+        if (rows.length < 20) rows.push({id, row, cell, ask});
         else display(cell, null, "GRÄNS: 20 SYNLIGA RADER");
       }
     }
@@ -108,7 +117,7 @@
   }
   async function pollList() {
     if (location.pathname !== "/borshandlade-produkter/certifikat-torg/lista.html") return;
-    const rows = listRows();
+    const rows = listRows().filter(r => !paused.has(r.id));
     if (!rows.length || listBusy || performance.now() < nextPoll) return;
     const route = location.href;
     const ids = [...new Set(rows.map(r => r.id))];
@@ -116,7 +125,7 @@
     try {
       for (let offset = 0; offset < ids.length; offset += 5) {
         if (document.hidden || location.href !== route) return;
-        const visibleIds = new Set(listRows().map(r => r.id));
+        const visibleIds = new Set(listRows().filter(r => !paused.has(r.id)).map(r => r.id));
         const group = ids.slice(offset, offset + 5).filter(id => visibleIds.has(id));
         if (!group.length) continue;
         const result = await chrome.runtime.sendMessage({type: "CAPACITY", ids: group});
@@ -124,6 +133,11 @@
         for (const id of group) {
           const q = C.keepFresh(values.get(id), result?.items?.[id] ?? {status: result?.status ?? "OFFLINE"});
           values.set(id, C.validQuote(q) ? q : {status: q?.status === "OK" ? "STALE" : q?.status ?? result?.status ?? "OFFLINE"});
+          const ask = rows.find(r => r.id === id)?.ask;
+          if (q?.status === "MM_MISSING" || (ask === null && ["STALE", "DEPTH_UNKNOWN", "DEPTH_UNAVAILABLE"].includes(q?.status))) {
+            paused.set(id, {ask, until: performance.now() + 30000,
+              label: q.status === "MM_MISSING" ? "— MM SAKNAS (PAUS)" : "— SÄLJKURS SAKNAS (PAUS)"});
+          }
         }
         listRows();
         if (!result?.items) {
@@ -145,21 +159,22 @@
     } finally {
       listBusy = false;
       while (values.size > 200) values.delete(values.keys().next().value);
+      while (paused.size > 200) paused.delete(paused.keys().next().value);
       listRows();
     }
   }
   function tick() {
     if (location.href !== lastRoute) {
-      snapshot = null; values.clear(); nextPoll = 0; nextOrderPoll = 0; orderFailure = "DJUP EJ VERIFIERAT"; lastRoute = location.href;
+      snapshot = null; values.clear(); paused.clear(); nextPoll = 0; nextOrderPoll = 0; orderFailure = "DJUP EJ VERIFIERAT"; lastRoute = location.href;
     }
     if (document.hidden) {
-      snapshot = null; values.clear();
+      snapshot = null; values.clear(); paused.clear();
       if (orderPanel) display(orderPanel.querySelector("strong"), null, "PAUSAD");
       return;
     }
     discoverOrder(); pollOrder(); pollList();
   }
   document.addEventListener("visibilitychange", tick);
-  window.addEventListener("pageshow", () => { snapshot = null; values.clear(); nextPoll = 0; tick(); });
+  window.addEventListener("pageshow", () => { snapshot = null; values.clear(); paused.clear(); nextPoll = 0; tick(); });
   setInterval(tick, 250);
 })();
