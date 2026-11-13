@@ -43,6 +43,7 @@ async def run(ids, authenticated):
                               "warm_p50_ms": statistics.median(timings[1:]),
                               "warm_max_ms": max(timings[1:]), "cache_ms": round(cache_ms, 3),
                               "statuses": statuses, "source_ages_ms": ages}))
+            await reader.aclose()
     finally:
         if broker:
             await broker.aclose()

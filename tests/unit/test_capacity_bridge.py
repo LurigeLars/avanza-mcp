@@ -116,22 +116,45 @@ async def test_failures_do_not_reuse_success_or_leak_exception(monkeypatch):
     assert "sensitive" not in json.dumps(result)
 
 
-async def test_timeout_cancels_reader_and_rate_limit_is_distinct():
+async def test_timeout_preserves_shared_session_and_pending_reads_are_bounded(monkeypatch):
+    monkeypatch.setattr(time, "time", lambda: NOW / 1000)
     client = AsyncMock()
-    client.get_public.return_value = {"orderbookId": "123", "listing": {"currency": "SEK"}}
+    async def metadata(path):
+        return {"orderbookId": path.rsplit("/", 1)[1], "listing": {"currency": "SEK"}}
+    client.get_public.side_effect = metadata
     cancelled = asyncio.Event()
+    release = asyncio.Event()
     async def blocked(*_):
         try:
-            await asyncio.Event().wait()
-        finally:
+            await release.wait()
+            return depth()
+        except asyncio.CancelledError:
             cancelled.set()
+            raise
     client.get.side_effect = blocked
     reader = CapacityReader(client)
-    assert (await reader.batch(["123"]))["items"]["123"]["status"] == "TIMEOUT"
-    assert cancelled.is_set()
+    ids = [str(i) for i in range(5)]
+    result = await reader.batch(ids)
+    assert all(q["status"] == "TIMEOUT" for q in result["items"].values())
+    assert not cancelled.is_set()
+    assert len(reader.pending) == 5
+    assert (await reader.batch(["999"]))["items"]["999"]["status"] == "BUSY"
+    assert client.get.await_count == 5
+    # A cancelled HTTP request must not retire the shared auth worker either.
+    waiting = asyncio.create_task(reader.batch(ids))
+    await asyncio.sleep(0)
+    waiting.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiting
+    assert not cancelled.is_set()
+    release.set()
+    await asyncio.gather(*reader.pending.values())
+    assert not cancelled.is_set()
+    assert (await reader.batch(ids))["items"]["0"]["status"] == "OK"
     reader.cache.clear()
     client.get.side_effect = AvanzaRateLimitError(30)
-    assert (await reader.batch(["123"]))["items"]["123"]["status"] == "RATE_LIMITED"
+    assert (await reader.batch(["0"]))["items"]["0"]["status"] == "RATE_LIMITED"
+    await reader.aclose()
 
 
 async def test_partial_batch_preserves_healthy_instrument(monkeypatch):

@@ -109,7 +109,7 @@
           nextPoll = performance.now() + 10000;
           return;
         }
-        if (group.some(id => ["RATE_LIMITED", "OFFLINE", "TIMEOUT"].includes(values.get(id)?.status))) {
+        if (group.some(id => ["RATE_LIMITED", "OFFLINE", "TIMEOUT", "BUSY"].includes(values.get(id)?.status))) {
           nextPoll = performance.now() + 10000;
           return;
         }

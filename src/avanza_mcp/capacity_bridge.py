@@ -75,26 +75,26 @@ class CapacityReader:
         self.client = client
         self.cache: OrderedDict[str, tuple[float, dict]] = OrderedDict()
         self.metadata: OrderedDict[str, tuple[float, str | None]] = OrderedDict()
+        self.pending: dict[str, asyncio.Task] = {}
         self.lock = asyncio.Lock()
 
     async def _read(self, book_id: str) -> dict:
         try:
-            async with asyncio.timeout(2):
-                meta = self.metadata.get(book_id)
-                if meta is None or time.monotonic() - meta[0] > 300:
-                    raw = await self.client.get_public(
-                        PublicEndpoint.CERTIFICATE_INFO.format(id=book_id))
-                    currency = (raw.get("listing") or {}).get("currency")
-                    if str(raw.get("orderbookId")) != book_id:
-                        currency = None
-                    self.metadata[book_id] = (time.monotonic(), currency)
-                    while len(self.metadata) > 200:
-                        self.metadata.popitem(last=False)
-                else:
-                    currency = meta[1]
-                depth = await self.client.get(
-                    PublicEndpoint.STOCK_ORDERDEPTH.format(id=book_id))
-                result = capacity(depth, currency, int(time.time() * 1000))
+            meta = self.metadata.get(book_id)
+            if meta is None or time.monotonic() - meta[0] > 300:
+                raw = await self.client.get_public(
+                    PublicEndpoint.CERTIFICATE_INFO.format(id=book_id))
+                currency = (raw.get("listing") or {}).get("currency")
+                if str(raw.get("orderbookId")) != book_id:
+                    currency = None
+                self.metadata[book_id] = (time.monotonic(), currency)
+                while len(self.metadata) > 200:
+                    self.metadata.popitem(last=False)
+            else:
+                currency = meta[1]
+            depth = await self.client.get(
+                PublicEndpoint.STOCK_ORDERDEPTH.format(id=book_id))
+            result = capacity(depth, currency, int(time.time() * 1000))
         except AvanzaRateLimitError:
             result = {"status": "RATE_LIMITED", "amount": None}
         except (TimeoutError, AvanzaTimeoutError):
@@ -108,6 +108,28 @@ class CapacityReader:
             self.cache.popitem(last=False)
         return result
 
+    async def _bounded_read(self, book_id):
+        task = self.pending.get(book_id)
+        if task is None:
+            if len(self.pending) >= MAX_IDS:
+                return {"status": "BUSY", "amount": None}
+            task = asyncio.create_task(self._read(book_id))
+            self.pending[book_id] = task
+            task.add_done_callback(lambda _: self.pending.pop(book_id, None))
+        try:
+            async with asyncio.timeout(2):
+                # Cancelling shared broker IPC retires its memory-only session.
+                return await asyncio.shield(task)
+        except TimeoutError:
+            return {"status": "TIMEOUT", "amount": None}
+
+    async def aclose(self):
+        # Only the owning MCP lifespan's shutdown may cancel these reads.
+        tasks = list(self.pending.values())
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
     async def batch(self, ids: list[str]) -> dict:
         # One bounded upstream batch at a time also coalesces concurrent tabs.
         async with self.lock:
@@ -119,7 +141,7 @@ class CapacityReader:
                     values[book_id] = cached[1]
                 else:
                     missing.append(book_id)
-            results = await asyncio.gather(*(self._read(i) for i in missing))
+            results = await asyncio.gather(*(self._bounded_read(i) for i in missing))
             values.update(zip(missing, results))
             now = int(time.time() * 1000)
             for book_id, value in list(values.items()):
@@ -264,7 +286,8 @@ async def serve_bridge(client, *, port=PORT):
         logging.getLogger(__name__).warning("Capacity bridge OFFLINE: loopback port unavailable")
         yield
         return
-    config = uvicorn.Config(create_app(CapacityReader(client), Pairing(), port=port),
+    reader = CapacityReader(client)
+    config = uvicorn.Config(create_app(reader, Pairing(), port=port),
                             host="127.0.0.1", port=port, access_log=False,
                             log_config=None, log_level="warning", limit_concurrency=8,
                             timeout_keep_alive=2, timeout_graceful_shutdown=3, ws="none")
@@ -279,8 +302,13 @@ async def serve_bridge(client, *, port=PORT):
         yield
     finally:
         server.should_exit = True
-        await task
-        listener.close()
+        try:
+            await task
+        finally:
+            try:
+                await reader.aclose()
+            finally:
+                listener.close()
 
 
 def main():

@@ -69,9 +69,14 @@ does not imply a fresh book, and delayed books display `STALE`.
   an old book fresh. Both bridge and extension check the source clock.
 - The bridge processes at most **5 unique numeric IDs per request**, 1 KiB
   request bodies, four application requests and eight HTTP connections at a
-  time. Reads have a two-second per-instrument deadline and three-second batch
-  deadline. The existing client's provider concurrency, pacing and cooldown
-  remain in force.
+  time. Display responses have a two-second per-instrument deadline and
+  three-second batch deadline. At most five shielded reads may remain pending;
+  repeated IDs reuse that task and further work returns `BUSY`. The existing
+  client's provider concurrency, pacing, request deadlines and cooldown remain
+  in force. A display timeout does **not** cancel shared broker IPC, which would
+  otherwise retire a memory-only session. A slow shared upstream operation can
+  still delay other MCP reads until its existing deadline; the extension stays
+  fail-closed meanwhile. Pending tasks are cancelled only on owner shutdown.
 - Up to **20 currently visible rows**, top first, are fetched progressively in
   batches of five. Extra visible rows explicitly show the limit. Scrolling
   brings other rows into scope. Hidden/offscreen rows cause no new fetches.
@@ -82,7 +87,7 @@ does not imply a fresh book, and delayed books display `STALE`.
   requests for ten seconds. Rendering/freshness checks run every 250 ms and DOM
   changes update the order panel through a MutationObserver. Browser scheduling
   and multi-batch upstream latency still apply; this is not a one-second SLA.
-- `STALE`, `OFFLINE`, `TIMEOUT`, `RATE_LIMITED`, `PAIR_REQUIRED`, `MM_MISSING`,
+- `STALE`, `OFFLINE`, `TIMEOUT`, `BUSY`, `RATE_LIMITED`, `PAIR_REQUIRED`, `MM_MISSING`,
   `CURRENCY_UNKNOWN` and unverified DOM all withhold the amount. Hidden tabs
   pause fetching and clear their observations. Failed reads do not extend a
   previous quote's lifetime.

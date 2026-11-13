@@ -45,6 +45,17 @@ most twenty visible rows per pass.
    Missing or conflicting identity now clears the cell, with a browser regression
    check. The extension cache is pruned on failed as well as successful passes.
 
+6. **Display deadlines versus shared authentication.** The broker deliberately
+   retires an IPC worker on cancellation to avoid consuming a mismatched late
+   response. Cancelling a slow bridge read would therefore discard a memory-only
+   Avanza session. Display deadlines now shield the underlying read, coalesce
+   pending IDs, and allow at most five pending tasks; other IDs return `BUSY`.
+   Tests prove both timeout and request cancellation leave the underlying read
+   alive, that the pending bound holds, and that a late result remains usable
+   only with its original source timestamp. The owner's existing request
+   deadline still bounds slow upstream work; shared MCP read contention remains
+   a documented limit.
+
 No unresolved correctness/security findings were identified in the reviewed
 implementation. Missing/negative/wrong-type MM indexes, missing currency,
 stale/future source timestamps, malformed price/volume, upstream errors,
