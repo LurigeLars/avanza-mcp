@@ -95,6 +95,13 @@ does not imply a fresh book, and delayed books display `STALE`.
 - Up to **20 currently visible rows**, top first, are fetched progressively in
   batches of five. Extra visible rows explicitly show the limit. Scrolling
   brings other rows into scope. Hidden/offscreen rows cause no new fetches.
+- Version **0.1.4** pauses a row for **30 seconds** after `MM_MISSING`, or when
+  the list has no usable ask and a probe returns stale/unavailable depth. The
+  cell explicitly says `MM SAKNAS (PAUS)` or `SÄLJKURS SAKNAS (PAUS)`. A changed
+  list ask resumes reads immediately; the timer also triggers a new probe.
+  Fresh verified broker depth takes priority over a missing list price and is
+  refreshed normally. `STALE` alone never means the market maker is absent.
+  Pauses clear on navigation/visibility changes and are bounded to 200 IDs.
 - Quote cache: **750 ms**, at most 200 entries, shared across tabs. Cached
   results are checked again against source age before returning. Duplicate
   concurrent reads coalesce. Metadata cache is also bounded to 200 entries.
@@ -156,6 +163,16 @@ running. The embedded listener does not replace the owner's signal handlers.
 
 Chrome platform references: [cross-origin requests and sender validation](https://developer.chrome.com/docs/extensions/develop/concepts/network-requests)
 and [storage access levels](https://developer.chrome.com/docs/extensions/reference/api/storage).
+
+## Rate-limit boundary
+
+The local 120-request/minute bound is **not** a verified Avanza quota. Each
+accepted bridge request can fetch five books: the theoretical ceiling is 600
+depth HTTP requests/minute before cache/pauses, plus cold metadata reads.
+Avanza's own page traffic and other MCP reads are additional. The broker
+respects depth HTTP 429 / Retry-After after a limit response, but this does not
+guarantee avoidance of an initial limit. The 30-second per-row pause removes
+unproductive reads; it is not a provider-wide upstream request budget.
 
 ## Validation
 

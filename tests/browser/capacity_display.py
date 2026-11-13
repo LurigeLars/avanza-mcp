@@ -32,13 +32,21 @@ class SyntheticReader:
     calls = 0
     requested = set()
     forced_status = None
+    requested_counts = {}
+    missing_mm_restored = False
     async def batch(self, ids):
         self.calls += 1
         self.requested.update(ids)
+        for i in ids:
+            self.requested_counts[i] = self.requested_counts.get(i, 0) + 1
         now = int(time.time() * 1000)
-        return {"items": {i: {"status": self.forced_status or ("TIMEOUT" if i == "124" else "OK"), "amount": "263360.00", "price": 263.36,
-                              "volume": 1000, "mm_level": 1, "currency": "SEK",
-                              "source_time": now} for i in ids}, "server_time": now}
+        items = {}
+        for i in ids:
+            status = self.forced_status or {"124": "TIMEOUT", "128": "OK" if self.missing_mm_restored else "MM_MISSING", "130": "STALE"}.get(i, "OK")
+            items[i] = ({"status": status, "amount": "263360.00", "price": 263.36,
+                         "volume": 1000, "mm_level": 1, "currency": "SEK", "source_time": now}
+                        if status == "OK" else {"status": status, "amount": None, "source_time": now - 20000 if status == "STALE" else now})
+        return {"items": items, "server_time": now}
 
 
 ORDER = """<!doctype html><meta charset=utf-8>
@@ -50,14 +58,17 @@ ORDER = """<!doctype html><meta charset=utf-8>
 </div></aza-order-depth>
 <script>window.orderClicks=0;document.getElementById('review').onclick=()=>window.orderClicks++;</script>"""
 LIST = """<!doctype html><meta charset=utf-8><aza-certificate-list>
-<table><thead><tr><th>Namn</th><th>Spread</th></tr></thead><tbody>
-<tr><td><a href=/handla/order.html/kop/123>Test A</a></td><td>1,1%</td></tr>
-<tr><td><a href=/borshandlade-produkter/certifikat-torg/om-certifikatet.html/456/test-b>Test B</a><a href=/aktier/om-aktien.html/789/underlying>Underliggande</a></td><td>1,2%</td></tr>
-<tr><td><a href=/handla/order.html/kop/124>Timeout</a></td><td>1,3%</td></tr>
-<tr><td><a href=/handla/order.html/kop/125>Test D</a></td><td>1,4%</td></tr>
-<tr><td><a href=/handla/order.html/kop/126>Test E</a></td><td>1,5%</td></tr>
-<tr><td><a href=/handla/order.html/kop/127>Test F</a></td><td>1,6%</td></tr>
-<tr style="transform:translateY(2000px)"><td><a href=/handla/order.html/kop/999>Utanför vyn</a></td><td>2%</td></tr>
+<table><thead><tr><th>Namn</th><th>Spread</th><th>Sälj</th></tr></thead><tbody>
+<tr><td><a href=/handla/order.html/kop/123>Test A</a></td><td>1,1%</td><td>263,36</td></tr>
+<tr><td><a href=/borshandlade-produkter/certifikat-torg/om-certifikatet.html/456/test-b>Test B</a><a href=/aktier/om-aktien.html/789/underlying>Underliggande</a></td><td>1,2%</td><td>263,36</td></tr>
+<tr><td><a href=/handla/order.html/kop/124>Timeout</a></td><td>1,3%</td><td>263,36</td></tr>
+<tr><td><a href=/handla/order.html/kop/125>Test D</a></td><td>1,4%</td><td>263,36</td></tr>
+<tr><td><a href=/handla/order.html/kop/126>Test E</a></td><td>1,5%</td><td>263,36</td></tr>
+<tr><td><a href=/handla/order.html/kop/127>Test F</a></td><td>1,6%</td><td>263,36</td></tr>
+<tr><td><a href=/handla/order.html/kop/128>MM missing</a></td><td>—</td><td>—</td></tr>
+<tr><td><a href=/handla/order.html/kop/129>Live depth overrides missing list ask</a></td><td>—</td><td>—</td></tr>
+<tr><td><a href=/handla/order.html/kop/130>No list ask and stale depth</a></td><td>—</td><td>—</td></tr>
+<tr style="transform:translateY(2000px)"><td><a href=/handla/order.html/kop/999>Utanför vyn</a></td><td>2%</td><td>263,36</td></tr>
 </tbody></table></aza-certificate-list>"""
 
 
@@ -105,11 +116,19 @@ def main():
                     content_type="text/html", body=LIST if "lista.html" in route.request.url else ORDER))
                 page.goto("https://www.avanza.se/borshandlade-produkter/certifikat-torg/lista.html?s=spread.asc")
                 page.wait_for_function("document.querySelector('tbody .avz-capacity-cell')?.textContent.includes('263')")
-                assert page.locator("tbody .avz-capacity-cell").count() == 7
+                assert page.locator("tbody .avz-capacity-cell").count() == 10
                 assert "360" in page.locator("tbody .avz-capacity-cell").first.inner_text()
                 assert reader.calls >= 1
                 page.wait_for_function("document.querySelectorAll('tbody .avz-capacity-cell')[5].textContent.includes('263')")
-                assert reader.requested == {"123", "456", "124", "125", "126", "127"}, "Timeout in first batch must not starve later visible rows"
+                page.wait_for_function("document.querySelectorAll('tbody .avz-capacity-cell')[8].textContent.includes('PAUS')")
+                assert reader.requested == {"123", "456", "124", "125", "126", "127", "128", "129", "130"}
+                page.wait_for_timeout(2200)
+                assert reader.requested_counts["128"] == reader.requested_counts["130"] == 1
+                assert reader.requested_counts["129"] >= 2, "Fresh broker depth overrides missing list price"
+                reader.missing_mm_restored = True
+                page.locator("tbody tr").nth(6).locator("td").nth(2).evaluate("cell => cell.textContent='263,36'")
+                page.wait_for_function("document.querySelectorAll('tbody .avz-capacity-cell')[6].textContent.includes('263')", timeout=5000)
+                assert reader.requested_counts["128"] >= 2, "A changed list ask must resume reads immediately"
                 page.locator("tbody tr").first.locator("a").evaluate("a => a.href='/handla/order.html/kop/invalid'")
                 page.wait_for_function("document.querySelector('tbody .avz-capacity-cell').textContent.includes('IDENTITET OKÄND')")
                 context.unroute("https://www.avanza.se/**")
@@ -176,7 +195,7 @@ def main():
                 page.set_content(LIST)
                 page.wait_for_function("document.querySelector('tbody .avz-capacity-cell')?.textContent.includes('OFFLINE')", timeout=15000)
                 print(json.dumps({"browser": context.browser.version, "pairing": "PASS",
-                                  "list_bridge": "PASS", "dom_mm_level_1": "PASS", "order_bridge_fallback": "PASS",
+                                  "list_bridge": "PASS", "unquoted_pause_and_resume": "PASS", "dom_mm_level_1": "PASS", "order_bridge_fallback": "PASS",
                                   "missing_mm_stale_offline": "PASS", "order_fields_unchanged": "PASS",
                                   "dom_update_ms": {"n": len(timings), "p50": statistics.median(timings),
                                                     "p95": sorted(timings)[18], "max": max(timings)}}))
