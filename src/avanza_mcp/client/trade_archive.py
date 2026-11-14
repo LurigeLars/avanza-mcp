@@ -432,7 +432,7 @@ async def _download_due_notes(
     return attempted, downloaded, reused, failed, deferred
 
 
-def _count_notes(connection: sqlite3.Connection, today: date) -> tuple[int, int, int]:
+def _count_notes(connection: sqlite3.Connection, today: date) -> tuple[int, int, int, int]:
     same_day = connection.execute(
         "SELECT COUNT(*) FROM broker_transaction WHERE trade_day >= ? AND note_file IS NULL",
         (today.isoformat(),),
@@ -440,7 +440,8 @@ def _count_notes(connection: sqlite3.Connection, today: date) -> tuple[int, int,
     no_ref = connection.execute(
         """SELECT COUNT(*) FROM broker_transaction
            WHERE trade_day < ? AND note_file IS NULL
-             AND (note_owner_ref IS NULL OR note_id IS NULL)""",
+             AND transaction_id NOT LIKE 'intra-day-%'
+             AND (note_owner_ref IS NULL OR note_id IS NULL)"""
         (today.isoformat(),),
     ).fetchone()[0]
     due = connection.execute(
@@ -449,7 +450,11 @@ def _count_notes(connection: sqlite3.Connection, today: date) -> tuple[int, int,
              AND note_owner_ref IS NOT NULL AND note_id IS NOT NULL""",
         (today.isoformat(),),
     ).fetchone()[0]
-    return same_day, no_ref, due
+    provisional = connection.execute(
+        """SELECT COUNT(*) FROM broker_transaction
+           WHERE note_file IS NULL AND transaction_id LIKE 'intra-day-%'""",
+    ).fetchone()[0]
+    return same_day, no_ref, due, provisional
 
 
 async def sync_trade_archive(
@@ -505,7 +510,7 @@ async def sync_trade_archive(
             attempted, downloaded, reused, failed, deferred = await _download_due_notes(
                 account, connection, folder, today, now, max_notes
             )
-        same_day, without_ref, awaiting = _count_notes(connection, today)
+        same_day, without_ref, awaiting, provisional = _count_notes(connection, today)
         total = connection.execute("SELECT COUNT(*) FROM broker_transaction").fetchone()[0]
 
         return ArchiveSync(
@@ -525,6 +530,7 @@ async def sync_trade_archive(
             notes_deferred=deferred,
             notes_pending_publication=same_day,
             notes_awaiting_reference=without_ref,
+            provisional_transactions=provisional,
             notes_not_cached=awaiting,
             last_synced_at=now.isoformat(),
             storage_hint=hint,
@@ -584,6 +590,8 @@ def read_trade_archive(
                 note_state = "SAVED"
             elif date.fromisoformat(r["trade_day"]) >= today:
                 note_state = "PENDING_PUBLICATION"
+            elif r["transaction_id"].startswith("intra-day-"):
+                note_state = "PROVISIONAL"
             elif not r["note_owner_ref"] or not r["note_id"]:
                 note_state = "AWAITING_REFERENCE"
             elif r["note_retry_after"]:
