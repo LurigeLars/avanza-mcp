@@ -9,6 +9,7 @@ from avanza_mcp.client.accounts import AccountAuthExpired, AccountClient, Accoun
 from avanza_mcp.client.bankid import SessionMaterial
 from avanza_mcp.client.base import AvanzaClient
 from avanza_mcp.client.contract_notes import _MAX_PDF_BYTES, _read_pdf
+from avanza_mcp.client.note_policy import NoteReadError
 
 _ORIGIN = "https://www.avanza.se"
 _PATH = "/_api/contract-notes/documents/synthetic-owner/synthetic-note/note.pdf"
@@ -111,7 +112,7 @@ async def test_three_hops_succeed_and_clear_waits_for_the_chain(respx_mock):
         assert not clear.done()
         finish.set()
         assert await read == _PDF
-        await clear
+        assert await clear is None
         assert client._authenticated_client is None
     assert len(respx_mock.calls) == 4
 
@@ -195,7 +196,7 @@ async def test_entire_chain_has_one_deadline(respx_mock):
 @pytest.mark.parametrize("path", ["/logout", "//evil.example/note", _PATH + "?token=secret"])
 async def test_document_transport_has_fixed_entry_route(respx_mock, path):
     async with _client() as (client, _):
-        with pytest.raises(AccountReadError, match="^request_not_allowed$"):
+        with pytest.raises(NoteReadError, match="^request_not_allowed$"):
             await client.request_authenticated_note(path)
     assert len(respx_mock.calls) == 0
 

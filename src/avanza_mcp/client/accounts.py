@@ -1,7 +1,6 @@
 """Fixed-endpoint authenticated account reads with explicit projections."""
 
 import asyncio
-import re
 from datetime import date
 from typing import Any
 
@@ -46,6 +45,7 @@ from ..models.account import (
 )
 from .base import AvanzaClient
 from .exceptions import AvanzaAuthError
+from .note_policy import NOTE_ROUTE_RE as _NOTE_ROUTE_RE
 
 _ACCOUNTS = "/_api/account-overview/overview/categorizedAccounts"
 _ACCOUNT_LIST = "/_api/account-overview/accounts/list"
@@ -53,7 +53,6 @@ _LIGHTWEIGHT_ACCOUNTS = "/_api/trading-critical/rest/lightweightaccounts"
 _TRADING_ACCOUNTS = "/_api/trading-critical/rest/accounts"
 _POSITIONS = "/_api/position-data/positions"
 _TRANSACTIONS = "/_api/transactions/list"
-_NOTE_ROUTE_RE = re.compile(r"^/_api/contract-notes/documents/[A-Za-z0-9_-]{1,128}/[A-Za-z0-9_-]{1,128}/note\.pdf$", re.ASCII)
 _CREDIT_INFO = "/_api/superloan/creditinfo/{credit_type}"
 _WATCHLISTS = "/_api/watchlist/watchlist"
 _PRICE_ALERTS = "/_cqbe/marketing/service/alert/{order_book_id}"
