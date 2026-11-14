@@ -201,7 +201,7 @@ class AccountClient:
     async def read_trade_archive(
         self, from_date: date, to_date: date, limit: int, offset: int = 0
     ) -> ArchivedTrades:
-        """Read cached broker history without an upstream Avanza request."""
+        """Read cached broker history without refetching broker transactions."""
         from .trade_archive import read_trade_archive
 
         return read_trade_archive(from_date, to_date, limit, offset)
