@@ -103,15 +103,28 @@ def _open_archive(*, create: bool) -> tuple[sqlite3.Connection | None, Path, str
     if database.exists() and not database.is_file():
         raise AccountReadError("unsafe_storage")
     try:
-        # The archive lives under the user's private app-data directory.
-        # WAL allows repeatable reads while another import is writing.
-        connection = sqlite3.connect(database, timeout=10.0)
+        # Cache-only reads open the existing SQLite database in true read-only
+        # mode. They cannot initialize/migrate tables or mutate WAL state.
+        connection = sqlite3.connect(
+            database if create else database.as_uri() + "?mode=ro",
+            timeout=10.0, uri=not create,
+        )
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA busy_timeout=10000")
-        connection.execute("PRAGMA journal_mode=WAL")
-        connection.executescript(_SCHEMA)
-        if os.name != "nt":
-            os.chmod(database, 0o600)
+        if create:
+            connection.execute("PRAGMA journal_mode=WAL")
+            version = connection.execute("PRAGMA user_version").fetchone()[0]
+            if version not in (0, 1):
+                raise AccountReadError("unsupported_archive_version")
+            connection.executescript(_SCHEMA)
+            if version == 0:
+                connection.execute("PRAGMA user_version=1")
+            if os.name != "nt":
+                os.chmod(database, 0o600)
+        else:
+            connection.execute("PRAGMA query_only=ON")
+            if connection.execute("PRAGMA user_version").fetchone()[0] != 1:
+                raise AccountReadError("unsupported_archive_version")
         return connection, folder, hint
     except sqlite3.Error:
         raise AccountReadError("archive_unavailable") from None
@@ -527,7 +540,7 @@ def _money_model(amount: str | None, currency: str | None) -> Money | None:
 def read_trade_archive(
     from_date: date, to_date: date, limit: int, offset: int = 0,
 ) -> ArchivedTrades:
-    """Offline read from SQLite only; no Avanza request, PDF or note IDs."""
+    """Offline broker-history read; auth validation is handled by the worker."""
     if (
         from_date > to_date or (to_date - from_date).days > _MAX_DATE_SPAN_DAYS
         or not 1 <= limit <= 500 or not 0 <= offset <= 100_000
