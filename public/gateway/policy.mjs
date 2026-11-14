@@ -49,6 +49,7 @@ const AUTH_TOOLS = [
   'get_accounts',
   'get_holdings',
   'get_transactions',
+  'download_contract_notes',
   'get_watchlists',
   'get_price_alerts',
   'get_portfolio_insights',
