@@ -12,9 +12,6 @@ from ..models.account import (
     ActiveOrder,
     ActiveOrders,
     CashPosition,
-    ContractNoteExport,
-    ArchiveSync,
-    ArchivedTrades,
     CreditBreakpoint,
     CreditInfo,
     CreditInformation,
@@ -176,34 +173,6 @@ class AccountClient:
             truncated=total > len(items),
             first_transaction_date=first if isinstance(first, str) else None,
         )
-
-    async def contract_notes(
-        self, from_date: date, to_date: date, *, dry_run: bool = False
-    ) -> ContractNoteExport:
-        """Download verified PDFs locally without exposing note identifiers."""
-        from .contract_notes import download_contract_notes
-
-        return await download_contract_notes(self, from_date, to_date, dry_run=dry_run)
-
-    async def sync_trade_archive(
-        self, from_date: date | None = None, to_date: date | None = None,
-        *, download_notes: bool = True, max_notes: int = 30,
-    ) -> ArchiveSync:
-        """Persist broker evidence in private local SQLite; retry due notes only."""
-        from .trade_archive import sync_trade_archive
-
-        return await sync_trade_archive(
-            self, from_date, to_date,
-            download_notes=download_notes, max_notes=max_notes,
-        )
-
-    async def read_trade_archive(
-        self, from_date: date, to_date: date, limit: int, offset: int = 0
-    ) -> ArchivedTrades:
-        """Read cached broker history without refetching broker transactions."""
-        from .trade_archive import read_trade_archive
-
-        return read_trade_archive(from_date, to_date, limit, offset)
 
     async def credit_info(self, credit_type: str) -> CreditInformation:
         body = await self._get(_CREDIT_INFO.format(credit_type=credit_type))
