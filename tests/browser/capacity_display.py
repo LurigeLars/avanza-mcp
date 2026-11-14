@@ -72,6 +72,91 @@ LIST = """<!doctype html><meta charset=utf-8><aza-certificate-list>
 </tbody></table></aza-certificate-list>"""
 
 
+def verify_content_lifecycle(p):
+    """Exercise the real content scripts with controlled message failures/time."""
+    browser = p.chromium.launch(headless=True, executable_path=os.environ.get("CAPACITY_TEST_CHROMIUM"))
+    try:
+        def setup(path, body):
+            page = browser.new_page(viewport={"width": 1280, "height": 900})
+            page.route("https://www.avanza.se/**", lambda route: route.fulfill(content_type="text/html", body=body))
+            page.goto("https://www.avanza.se" + path)
+            page.evaluate("""() => {
+                window.testCalls=0; window.testHidden=false; window.testOffset=0; window.testMode='ok';
+                const originalNow=performance.now.bind(performance);
+                performance.now=()=>originalNow()+testOffset;
+                Object.defineProperty(document, 'hidden', {get:()=>testHidden});
+                window.chrome={runtime:{sendMessage:message=>{
+                    testCalls++;
+                    if(testMode==='reject') return Promise.reject(new Error('Synthetic message failure'));
+                    if(testMode==='pending') return new Promise((resolve,reject)=>{window.testReject=reject;});
+                    return {items:Object.fromEntries(message.ids.map(id=>[id,{status:'OK',price:263.36,
+                        volume:1000,amount:'263360.00',mm_level:1,currency:'SEK',source_time:Date.now()}]))};
+                }}};
+            }""")
+            for name in ["core.js", "content.js"]:
+                page.add_script_tag(content=(ROOT / "chrome-extension" / name).read_text(encoding="utf-8"))
+            return page
+
+        for path, body, selector in [
+            ("/borshandlade-produkter/certifikat-torg/lista.html", LIST, "tbody .avz-capacity-cell"),
+            ("/handla/order.html/kop/123", ORDER, ".avz-capacity strong"),
+        ]:
+            page = setup(path, body)
+            page.wait_for_function("s=>document.querySelector(s)?.textContent.includes('kr')", arg=selector)
+            before = page.evaluate("testCalls")
+            page.evaluate("testHidden=true;document.dispatchEvent(new Event('visibilitychange'))")
+            page.wait_for_timeout(300)
+            assert page.evaluate("testCalls") == before, "Hidden tabs must not fetch"
+            page.evaluate("testHidden=false;document.dispatchEvent(new Event('visibilitychange'))")
+            page.wait_for_function("testCalls>" + str(before), timeout=2000)
+            expect(page.locator(selector).first).to_contain_text("kr")
+            page.wait_for_timeout(300)
+            assert page.evaluate("testCalls") == before * 2, "Resume must fetch once, then keep the normal interval"
+            resumed_calls = page.evaluate("testCalls")
+            page.evaluate("window.dispatchEvent(new Event('pageshow'))")
+            page.wait_for_function("testCalls>" + str(resumed_calls), timeout=2000)
+            expect(page.locator(selector).first).to_contain_text("kr")
+            page.close()
+
+        page = setup("/handla/order.html/kop/123", ORDER)
+        amount = page.locator(".avz-capacity strong")
+        expect(amount).to_contain_text("kr")
+        page.evaluate("testMode='reject';testOffset=11000;document.dispatchEvent(new Event('visibilitychange'))")
+        expect(amount).to_contain_text("OFFLINE")
+        page.wait_for_timeout(300)
+        expect(amount).to_contain_text("OFFLINE")
+        page.evaluate("testMode='ok';testOffset=22000;document.dispatchEvent(new Event('visibilitychange'))")
+        expect(amount).to_contain_text("kr")
+
+        page.evaluate("testMode='pending';testOffset=33000;document.dispatchEvent(new Event('visibilitychange'))")
+        page.wait_for_function("typeof testReject==='function'")
+        page.evaluate("""() => new Promise(resolve => {
+            window.addEventListener('message', function received(e) {
+                if(e.data?.type==='AVZ_CAPACITY_DEPTH') {window.removeEventListener('message',received);resolve();}
+            });
+            window.postMessage({type:'AVZ_CAPACITY_DEPTH',id:'123',source_time:Date.now(),
+                mm_level:1,price:263.36,volume:1000},location.origin);
+        })""")
+        page.evaluate("testReject(new Error('Synthetic old request failure'))")
+        page.wait_for_timeout(300)
+        expect(amount).to_contain_text("kr")
+
+        # A failed request for the old route must not postpone reads for the new book.
+        page.evaluate("testMode='pending';testOffset=50000;history.replaceState({},'', '/handla/order.html/kop/456');document.dispatchEvent(new Event('visibilitychange'))")
+        pending_calls = page.evaluate("testCalls")
+        page.evaluate("history.replaceState({},'', '/handla/order.html/kop/789');document.dispatchEvent(new Event('visibilitychange'))")
+        page.evaluate("testMode='ok';testReject(new Error('Synthetic previous-route failure'))")
+        page.wait_for_function("testCalls>" + str(pending_calls), timeout=2000)
+        expect(amount).to_contain_text("kr")
+        assert page.locator("#amount").input_value() == ""
+        assert page.locator("#quantity").input_value() == ""
+        assert page.evaluate("window.orderClicks") == 0
+        print(json.dumps({"content_visibility_resume": "PASS", "hard_message_failure": "PASS",
+                          "fresh_stream_survives_failure": "PASS", "previous_route_failure": "PASS"}))
+    finally:
+        browser.close()
+
+
 def main():
     store, reader = Pairing(MemoryStore()), SyntheticReader()
     listener = socket.socket()
@@ -218,6 +303,7 @@ def main():
                                                     "p95": sorted(timings)[18], "max": max(timings)}}))
             finally:
                 context.close()
+            verify_content_lifecycle(p)
     finally:
         server.should_exit = True
         thread.join(timeout=5)

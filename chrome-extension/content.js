@@ -79,7 +79,11 @@
       }
       nextOrderPoll = performance.now() + 10000;
     } catch {
-      orderFailure = "OFFLINE"; nextOrderPoll = performance.now() + 10000;
+      if (document.hidden || C.bookId(location.href) !== id) return;
+      if (!(snapshot?.via === "stream" && C.fresh(snapshot.source_time))) {
+        snapshot = null; orderFailure = "OFFLINE";
+      }
+      nextOrderPoll = performance.now() + 10000;
     } finally { orderBusy = false; updateOrder(); }
   }
   function listRows() {
@@ -179,7 +183,10 @@
     }
     discoverOrder(); pollOrder(); pollList();
   }
-  document.addEventListener("visibilitychange", tick);
-  window.addEventListener("pageshow", () => { snapshot = null; values.clear(); paused.clear(); nextPoll = 0; tick(); });
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) { nextPoll = 0; nextOrderPoll = 0; }
+    tick();
+  });
+  window.addEventListener("pageshow", () => { snapshot = null; values.clear(); paused.clear(); nextPoll = 0; nextOrderPoll = 0; tick(); });
   setInterval(tick, 250);
 })();
