@@ -74,6 +74,13 @@ CREATE TABLE IF NOT EXISTS archive_meta (
     name TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS scan_coverage (
+    first_day TEXT NOT NULL,
+    last_day TEXT NOT NULL,
+    completed_at TEXT NOT NULL,
+    PRIMARY KEY(first_day, last_day),
+    CHECK(first_day <= last_day)
+);
 """
 
 
@@ -504,6 +511,13 @@ async def sync_trade_archive(
             if previous is None or last > date.fromisoformat(previous):
                 _set_meta(connection, "last_scanned_to", last.isoformat())
             _set_meta(connection, "last_synced_at", now.isoformat())
+            connection.execute(
+                """INSERT INTO scan_coverage(first_day,last_day,completed_at)
+                   VALUES (?,?,?)
+                   ON CONFLICT(first_day,last_day)
+                   DO UPDATE SET completed_at=excluded.completed_at""",
+                (first.isoformat(), last.isoformat(), now.isoformat()),
+            )
 
         attempted = downloaded = reused = failed = deferred = 0
         if download_notes and max_notes:
@@ -543,6 +557,35 @@ def _money_model(amount: str | None, currency: str | None) -> Money | None:
     return Money(amount=amount, currency=currency or "SEK") if amount is not None else None
 
 
+def _coverage_gaps(
+    connection: sqlite3.Connection, first: date, last: date
+) -> list[tuple[str, str]]:
+    """Return uncovered calendar ranges, not merely missing transaction rows."""
+    intervals = connection.execute(
+        """SELECT first_day, last_day FROM scan_coverage
+           WHERE last_day >= ? AND first_day <= ?
+           ORDER BY first_day, last_day""",
+        (first.isoformat(), last.isoformat()),
+    ).fetchall()
+    expected = first
+    gaps: list[tuple[str, str]] = []
+    for record in intervals:
+        start = date.fromisoformat(record["first_day"])
+        end = date.fromisoformat(record["last_day"])
+        if start > expected:
+            gaps.append((
+                expected.isoformat(),
+                min(last, start - timedelta(days=1)).isoformat(),
+            ))
+        if end >= expected:
+            expected = end + timedelta(days=1)
+        if expected > last:
+            break
+    if expected <= last:
+        gaps.append((expected.isoformat(), last.isoformat()))
+    return gaps
+
+
 def read_trade_archive(
     from_date: date, to_date: date, limit: int, offset: int = 0,
 ) -> ArchivedTrades:
@@ -558,6 +601,8 @@ def read_trade_archive(
             from_date=from_date.isoformat(),
             to_date=to_date.isoformat(),
             available=False,
+            coverage_complete=False,
+            missing_intervals=[(from_date.isoformat(), to_date.isoformat())],
             returned=0,
             total=0,
             has_more=False,
@@ -615,10 +660,13 @@ def read_trade_archive(
                     note_saved=(note_state == "SAVED"),
                 )
             )
+        missing_intervals = _coverage_gaps(connection, from_date, to_date)
         return ArchivedTrades(
             from_date=from_date.isoformat(),
             to_date=to_date.isoformat(),
             available=True,
+            coverage_complete=(len(missing_intervals) == 0),
+            missing_intervals=missing_intervals[:20],
             returned=len(records),
             total=total,
             has_more=offset + len(records) < total,
