@@ -255,6 +255,21 @@ async def test_bounded_note_attempts_and_recovers_without_rereading_history(arch
     assert next_run.archive_total == 5
 
 
+@pytest.mark.asyncio
+async def test_provisional_intraday_id_is_not_a_missing_settled_note(archive_folder):
+    item = _transaction(1, "2026-11-12")
+    item["id"] = "intra-day-synthetic"
+    source = FakeAvanza([item])
+    synced = await sync_trade_archive(
+        source, date(2026, 11, 12), date(2026, 11, 12),
+        today=date(2026, 11, 14), now=_at("2026-11-14"),
+    )
+    assert synced.provisional_transactions == 1
+    assert synced.notes_awaiting_reference == 0
+    history = read_trade_archive(date(2026, 11, 12), date(2026, 11, 12), 20)
+    assert history.transactions[0].note_status == "PROVISIONAL"
+
+
 def test_no_archive_yields_explicit_unavailable_status(archive_folder):
     result = read_trade_archive(date(2026, 11, 10), date(2026, 11, 14), 30)
     assert result.available is False and result.transactions == []
