@@ -26,7 +26,7 @@ The server provides:
 - optional BankID-authenticated **read-only** account and portfolio context.
 - stock, fund, ETF, certificate, warrant, option and futures/forward data.
 - bounded leveraged-product and option screening.
-- transaction, holdings, order/deal and portfolio reads.
+- transaction, holdings, order/deal and portfolio reads, plus local contract-note PDF download.
 - instrument news, insider transactions and Avanza forum reads.
 - a separate Placera Forum login for explicitly confirmed forum posts.
 - model-facing gateways for local agents and ChatGPT.
@@ -229,6 +229,7 @@ Examples include:
 - `get_accounts`
 - `get_holdings`
 - `get_transactions` — supports date, ISIN and transaction-type filtering
+- `download_contract_notes` — fetch up to 200 BUY/SELL notes per call (local PDFs, no document bytes in MCP response)
 - `get_portfolio_snapshot`
 - `get_portfolio_insights`
 - `get_watchlists`
@@ -307,7 +308,7 @@ fabricate realtime status.
 <details>
 <summary><strong>Current tool catalog</strong></summary>
 
-The current source-checkout surface contains 59 tools: 37 market-data tools and 22
+The current source-checkout surface contains 61 tools: 37 market-data tools and 24
 reviewed authenticated/session/forum tools.
 
 ### Market data
@@ -358,7 +359,7 @@ The reviewed authenticated/session/forum surface contains:
 
 `connect_avanza`, `disconnect_avanza`, `get_auth_status`,
 `get_execution_quote`, `get_accounts`, `get_holdings`,
-`get_transactions`, `get_watchlists`, `get_price_alerts`,
+`get_transactions`, `download_contract_notes`, `get_watchlists`, `get_price_alerts`,
 `get_portfolio_insights`, `get_portfolio_snapshot`,
 `get_instrument_news`, `get_instrument_news_batch`,
 `get_forum_posts`, `get_insider_transactions`, `get_active_orders`,
@@ -462,6 +463,36 @@ pwsh -File .\scripts\windows\uninstall-public-http-task.ps1
 
 The background task runs as the current Windows user without a privileged service
 account. The FastMCP listener remains loopback-only.
+
+### Contract notes (BankID authenticated)
+
+Use `download_contract_notes(from_date="2026-11-01", to_date="2026-11-13",
+dry_run=true)` to check whether Avanza's transaction response exposes
+document references. Use `dry_run=false` to fetch up to 200 BUY/SELL notes
+from that date interval. Results include `complete` and, when the interval
+exceeds the 200-transaction limit, `next_from_date` for a subsequent call
+with the **same** `to_date`. The tool never silently drops later days.
+If a single day contains over 200 transactions it fails closed; narrow
+the export manually on Avanza's website.
+
+PDFs are stored only on the authenticated host, under
+`%LOCALAPPDATA%\AvanzaMCP\contract-notes` on Windows, or
+`~/.local/share/avanza-mcp/contract-notes` elsewhere. No remote client
+can choose the destination or receive raw PDF bytes, account URL IDs,
+note IDs, absolute paths, or BankID session material. Filenames contain
+the trade date and a one-way digest of the private note reference.
+The tool is idempotent for existing valid PDFs, validates PDF magic,
+content type and size, and returns a manifest of successes, failures and
+missing references. Downloading writes private local files, but never
+places trades or modifies the Avanza account.
+
+**Limitations:** Avanza's contract-note PDF URL is undocumented and may
+stop working. The first live attempt should be a small `dry_run` followed
+by one short, verified date interval. Historical transaction rows can
+lack note IDs. The tool does not yet parse timestamps or guarantee that
+each transaction corresponds one-to-one with a PDF. The 200 limit is
+applied to transaction batches even though Avanza's web UI describes
+a 200-note export limit.
 
 ## ChatGPT / remote deployment
 
