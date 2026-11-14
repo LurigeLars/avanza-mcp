@@ -1,6 +1,7 @@
 """Fixed-endpoint authenticated account reads with explicit projections."""
 
 import asyncio
+import re
 from datetime import date
 from typing import Any
 
@@ -12,6 +13,7 @@ from ..models.account import (
     ActiveOrder,
     ActiveOrders,
     CashPosition,
+    ContractNoteExport,
     CreditBreakpoint,
     CreditInfo,
     CreditInformation,
@@ -49,6 +51,7 @@ _LIGHTWEIGHT_ACCOUNTS = "/_api/trading-critical/rest/lightweightaccounts"
 _TRADING_ACCOUNTS = "/_api/trading-critical/rest/accounts"
 _POSITIONS = "/_api/position-data/positions"
 _TRANSACTIONS = "/_api/transactions/list"
+_NOTE_ROUTE_RE = re.compile(r"^/_api/contract-notes/documents/[A-Za-z0-9_-]{1,128}/[A-Za-z0-9_-]{1,128}/note\.pdf$", re.ASCII)
 _CREDIT_INFO = "/_api/superloan/creditinfo/{credit_type}"
 _WATCHLISTS = "/_api/watchlist/watchlist"
 _PRICE_ALERTS = "/_cqbe/marketing/service/alert/{order_book_id}"
@@ -84,6 +87,8 @@ def _account_request_allowed(method: str, path: str) -> bool:
         return True
     if method != "GET":
         return False
+    if _NOTE_ROUTE_RE.fullmatch(path):
+        return True
 
     credit_prefix = _CREDIT_INFO.split("{", 1)[0]
     if path.startswith(credit_prefix):
@@ -170,6 +175,14 @@ class AccountClient:
             truncated=total > len(items),
             first_transaction_date=first if isinstance(first, str) else None,
         )
+
+    async def contract_notes(
+        self, from_date: date, to_date: date, *, dry_run: bool = False
+    ) -> ContractNoteExport:
+        """Download verified PDFs locally without exposing note identifiers."""
+        from .contract_notes import download_contract_notes
+
+        return await download_contract_notes(self, from_date, to_date, dry_run=dry_run)
 
     async def credit_info(self, credit_type: str) -> CreditInformation:
         body = await self._get(_CREDIT_INFO.format(credit_type=credit_type))

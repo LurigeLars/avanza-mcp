@@ -13,10 +13,11 @@ async def test_authenticated_http_discovery_uses_single_combined_avanza_surface(
     async with run_server_async(server) as url:
         async with Client(url) as client:
             tools = {tool.name for tool in await client.list_tools()}
-            assert len(tools) == 60
+            assert len(tools) == 61
             assert "get_stock_quote" in tools
             assert "connect_avanza" in tools
             assert "get_accounts" in tools
+            assert "download_contract_notes" in tools
             assert "get_active_orders" in tools
             assert "get_credit_info" not in tools
             assert "get_current_offers" not in tools
