@@ -24,7 +24,7 @@ test('default allowlist is the authenticated Avanza and explicitly confirmed for
   assert.equal(allowed.has('create_forum_post'), true);
   assert.equal(allowed.has('reply_to_forum_post'), true);
   assert.equal(allowed.has('future_place_order'), false);
-  assert.equal(ALL_ALLOWED_TOOLS.split(',').length, 60);
+  assert.equal(ALL_ALLOWED_TOOLS.split(',').length, 61);
 });
 
 test('legacy authenticated profile token maps to the same single surface', () => {
