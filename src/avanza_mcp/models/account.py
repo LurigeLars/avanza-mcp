@@ -79,6 +79,26 @@ class Transactions(PrivateModel):
     first_transaction_date: str | None = None
 
 
+class ContractNoteExport(PrivateModel):
+    """Safe manifest only; never contains note IDs, account IDs or PDF bytes."""
+
+    from_date: str
+    to_date: str
+    dry_run: bool
+    selected_transactions: int
+    unique_notes: int
+    downloaded: int
+    already_present: int
+    missing_reference: int
+    duplicate_transactions: int
+    duplicate_notes: int
+    failed: int
+    complete: bool
+    next_from_date: str | None = None
+    storage_hint: str
+    failure_codes: list[str]
+
+
 class CreditBreakpoint(PrivateModel):
     interest: str | None = None
     upper_limit: str | None = None
