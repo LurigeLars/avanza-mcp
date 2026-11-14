@@ -469,11 +469,11 @@ account. The FastMCP listener remains loopback-only.
 
 ### Incremental broker-evidence archive (BankID authenticated)
 
-The preferred workflow is \`sync_trade_archive\`, not repeatedly downloading
+The preferred workflow is `sync_trade_archive`, not repeatedly downloading
 historical exports. The archive is a **local, private SQLite evidence cache**:
-\`%LOCALAPPDATA%\AvanzaMCP\trade_archive.sqlite3\` on Windows and
-\`~/.local/share/avanza-mcp/trade_archive.sqlite3\` elsewhere. PDFs are
-stored in the adjacent \`contract-notes\` directory. The database retains
+`%LOCALAPPDATA%\AvanzaMCP\trade_archive.sqlite3` on Windows and
+`~/.local/share/avanza-mcp/trade_archive.sqlite3` elsewhere. PDFs are
+stored in the adjacent `contract-notes` directory. The database retains
 broker transaction IDs, instrument/amount/commission, source timestamps,
 note availability and private document references, never in GitHub or CI.
 
@@ -481,25 +481,25 @@ On the first invocation without explicit dates, the tool ingests the last
 30 days. Later calls automatically re-fetch only a **rolling seven-day
 overlap** to pick up late-settled transactions and note references.
 For older backfill, call
-\`sync_trade_archive(from_date="2026-09-01", to_date="2026-11-13")\`.
-You can set \`max_notes=0\` or \`download_notes=false\` to cache broker
+`sync_trade_archive(from_date="2026-09-01", to_date="2026-11-13")`.
+You can set `max_notes=0` or `download_notes=false` to cache broker
 transactions without PDF downloads. Documents already present and valid
 are not downloaded again; older pending notes can be processed on later
 calls even when their transactions are not re-fetched.
 
 **Publication timing:** Avanza generates contract notes after midnight.
 A same-day BUY/SELL is saved as a transaction immediately, with its note
-in \`PENDING_PUBLICATION\`. The downloader does **not** attempt that PDF
+in `PENDING_PUBLICATION`. The downloader does **not** attempt that PDF
 until the next calendar day in Europe/Stockholm. Missing/404 PDFs are
 tracked and retried no earlier than 01:00 the next local day. A failed
 attempt is not proof that a trade has no note. Each invocation downloads
-at most \`max_notes\` (default 30, maximum 200) PDFs and has a combined
+at most `max_notes` (default 30, maximum 200) PDFs and has a combined
 50 MiB download budget.
 
-\`read_trade_archive(from_date="...", to_date="...")\` retrieves the
-cached broker transactions without any Avanza network calls; it still
+`read_trade_archive(from_date="...", to_date="...")` retrieves the
+cached broker transactions without re-fetching broker transaction history; it still
 requires BankID account access because the archive contains personal
-financial records. The response reports \`last_synced_at\` and note status
+financial records. The response reports `last_synced_at` and note status
 and never returns PDF bytes, account URL IDs, raw note IDs, or local
 absolute paths. The archive is **not the canonical Trade Spine position,
 trade-episode, or profit-and-loss ledger**. Intra-day and settled Avanza
