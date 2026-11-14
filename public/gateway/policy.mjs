@@ -50,6 +50,8 @@ const AUTH_TOOLS = [
   'get_holdings',
   'get_transactions',
   'download_contract_notes',
+  'sync_trade_archive',
+  'read_trade_archive',
   'get_watchlists',
   'get_price_alerts',
   'get_portfolio_insights',

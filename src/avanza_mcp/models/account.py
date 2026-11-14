@@ -79,6 +79,61 @@ class Transactions(PrivateModel):
     first_transaction_date: str | None = None
 
 
+class ArchivedTransaction(PrivateModel):
+    """Trade evidence from local SQLite; no private note or account references."""
+
+    transaction_id: str
+    transaction_type: str
+    date: str
+    description: str
+    settlement_date: str | None = None
+    instrument_name: str | None = None
+    isin: str | None = None
+    order_book_id: str | None = None
+    volume: str | None = None
+    amount: Money | None = None
+    commission: Money | None = None
+    note_status: str
+    note_saved: bool
+
+
+class ArchivedTrades(PrivateModel):
+    from_date: str
+    to_date: str
+    available: bool
+    coverage_complete: bool
+    missing_intervals: list[tuple[str, str]]
+    returned: int
+    total: int
+    has_more: bool
+    last_synced_at: str | None = None
+    storage_hint: str
+    transactions: list[ArchivedTransaction]
+
+
+class ArchiveSync(PrivateModel):
+    from_date: str
+    to_date: str
+    source_scanned_complete: bool
+    upstream_requests: int
+    source_transactions: int
+    duplicates_discarded: int
+    transactions_inserted: int
+    transactions_refreshed: int
+    archive_total: int
+    note_attempts: int
+    notes_downloaded: int
+    notes_reused: int
+    notes_failed: int
+    notes_deferred: int
+    notes_pending_publication: int
+    notes_awaiting_reference: int
+    provisional_transactions: int
+    notes_not_cached: int
+    last_synced_at: str
+    storage_hint: str
+
+
 class ContractNoteExport(PrivateModel):
     """Safe manifest only; never contains note IDs, account IDs or PDF bytes."""
 
