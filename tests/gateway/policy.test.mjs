@@ -11,12 +11,13 @@ import {
 
 test('default allowlist is the authenticated Avanza and explicitly confirmed forum surface', () => {
   const allowed = parseAllowedTools();
-  assert.equal(allowed.size, 60);
+  assert.equal(allowed.size, 61);
   assert.equal(allowed.has('search_instruments'), true);
   assert.equal(allowed.has('screen_leveraged_instruments'), true);
   assert.equal(allowed.has('enrich_leveraged_snapshot'), false);
   assert.equal(allowed.has('connect_avanza'), true);
   assert.equal(allowed.has('get_accounts'), true);
+  assert.equal(allowed.has('download_contract_notes'), true);
   assert.equal(allowed.has('get_stop_loss_orders'), true);
   assert.equal(allowed.has('get_forum_posts'), true);
   assert.equal(allowed.has('connect_forum'), true);
