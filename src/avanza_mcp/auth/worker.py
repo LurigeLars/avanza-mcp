@@ -14,6 +14,8 @@ from datetime import date
 from typing import Any, TextIO
 
 from ..client.accounts import AccountAuthExpired, AccountClient, AccountReadError
+from ..client.contract_notes import download_contract_notes
+from ..client.trade_archive import read_trade_archive, sync_trade_archive
 from ..models.account import InstrumentNewsBatch, InstrumentNewsBatchItem
 from ..client.bankid import BankIDClient, BankIDError, SessionMaterial
 from ..client.base import (
@@ -392,8 +394,8 @@ async def _account_operation(
                     raise ValueError
                 if from_date > to_date or (to_date - from_date).days > 366:
                     raise ValueError
-                result = await account.contract_notes(
-                    from_date, to_date, dry_run=dry_run
+                result = await download_contract_notes(
+                    account, from_date, to_date, dry_run=dry_run
                 )
             elif operation == "sync_trade_archive":
                 _only_arguments(
@@ -411,8 +413,8 @@ async def _account_operation(
                 should_download = arguments.get("download_notes", True)
                 if not isinstance(should_download, bool):
                     raise ValueError
-                result = await account.sync_trade_archive(
-                    from_date=from_date, to_date=to_date,
+                result = await sync_trade_archive(
+                    account, from_date, to_date,
                     download_notes=should_download,
                     max_notes=_bounded_int(
                         arguments.get("max_notes"),
@@ -429,9 +431,9 @@ async def _account_operation(
                     raise ValueError
                 from_date = date.fromisoformat(raw_from)
                 to_date = date.fromisoformat(raw_to)
-                result = await account.read_trade_archive(
-                    from_date=from_date, to_date=to_date,
-                    limit=_bounded_int(
+                result = read_trade_archive(
+                    from_date, to_date,
+                    _bounded_int(
                         arguments.get("limit"), default=100, minimum=1, maximum=500
                     ),
                     offset=_bounded_int(

@@ -2,7 +2,7 @@
 
 Never use real account IDs, broker documents, credentials or trades in CI.
 """
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 import httpx
 import pytest
 

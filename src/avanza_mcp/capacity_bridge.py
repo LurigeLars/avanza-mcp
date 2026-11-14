@@ -153,7 +153,7 @@ class CapacityReader:
                 # A display deadline must never cancel shared auth-worker IPC.
                 await asyncio.gather(*(asyncio.shield(t) for t in tasks))
         except TimeoutError:
-            pass
+            pass  # Deadline reached: unfinished reads are reported as TIMEOUT below.
         return {i: (self.cache[i][1] if i in self.cache and self.cache[i][0] >= started
                     else {"status": "TIMEOUT" if i in self.pending else "BUSY", "amount": None}) for i in ids}
 
@@ -329,14 +329,14 @@ async def serve_bridge(client, *, port=PORT, depth_batch=None):
     try:
         while not server.started:
             if task.done():
-                await task
+                task.result()  # Re-raise the server's own startup error, if any.
                 raise RuntimeError("Capacity bridge failed to start")
             await asyncio.sleep(0.01)
         yield
     finally:
         server.should_exit = True
         try:
-            await task
+            await asyncio.gather(task)
         finally:
             try:
                 await reader.aclose()
