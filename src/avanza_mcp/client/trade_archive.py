@@ -34,7 +34,7 @@ _STOCKHOLM = ZoneInfo("Europe/Stockholm")
 _MAX_DATE_SPAN_DAYS = 366
 _MAX_SCAN_CALLS = 128
 _MAX_TRANSACTION_PAGE = 1000
-_SYNC_LOOKBACK_DAYS = 7
+_SYNC_LOOKBACK_DAYS = 6  # Seven calendar days including the last scanned day
 _MAX_NOTES_PER_SYNC = 200
 
 _SCHEMA = """
