@@ -19,6 +19,7 @@ import httpx
 from ..models.account import ContractNoteExport
 from .accounts import AccountAuthExpired, AccountReadError, _account_request_allowed
 from .exceptions import AvanzaAuthError
+from .note_policy import MAX_PDF_BYTES as _MAX_PDF_BYTES, NoteReadError
 
 if TYPE_CHECKING:
     from .accounts import AccountClient
@@ -26,7 +27,6 @@ if TYPE_CHECKING:
 _NOTE_ROUTE = "/_api/contract-notes/documents/{account}/{note}/note.pdf"
 _SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$", re.ASCII)
 _MAX_NOTES = 200
-_MAX_PDF_BYTES = 2 * 1024 * 1024
 _MAX_EXPORT_BYTES = 50 * 1024 * 1024
 _MAX_SCAN_REQUESTS = 64
 
@@ -186,10 +186,14 @@ async def _read_pdf(account: AccountClient, url_account: str, note_id: str) -> b
     if not _account_request_allowed("GET", path):
         raise AccountReadError("request_not_allowed")
     try:
-        response = await account._client.request_authenticated("GET", path)
+        response = await account._client.request_authenticated_note(path)
     except AvanzaAuthError:
         raise AccountAuthExpired from None
-    except httpx.TransportError:
+    except NoteReadError as error:
+        raise AccountReadError(str(error)) from None
+    except httpx.InvalidURL:
+        raise AccountReadError("redirect_invalid_location") from None
+    except (httpx.TransportError, TimeoutError):
         raise AccountReadError("network") from None
     if response.status_code == 401:
         raise AccountAuthExpired
@@ -319,6 +323,7 @@ async def download_contract_notes(
                     "redirect_insecure", "redirect_invalid_location",
                     "redirect_same_origin", "redirect_avanza_subdomain",
                     "redirect_external", "redirect_relative",
+                    "redirect_limit", "redirect_loop", "redirect_unsupported_status",
                 }:
                     failure_codes.add(code)
                 else:
