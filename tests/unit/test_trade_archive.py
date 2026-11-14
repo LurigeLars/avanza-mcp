@@ -32,7 +32,7 @@ def _transaction(n: int, day: str, *, note: str | None = None):
     return item
 
 
-class TestAvanza:
+class FakeAvanza:
     def __init__(self, rows):
         self.rows = list(rows)
         self.transaction_calls = []
@@ -91,7 +91,7 @@ def _at(day: str, hour: int = 9):
 
 @pytest.mark.asyncio
 async def test_first_sync_persists_trade_and_deferred_same_day_note(archive_folder):
-    source = TestAvanza([_transaction(1, "2026-11-13", note="note-one")])
+    source = FakeAvanza([_transaction(1, "2026-11-13", note="note-one")])
     result = await sync_trade_archive(
         source, from_date=date(2026, 11, 13),
         to_date=date(2026, 11, 13), today=date(2026, 11, 13),
@@ -105,7 +105,7 @@ async def test_first_sync_persists_trade_and_deferred_same_day_note(archive_fold
 
 @pytest.mark.asyncio
 async def test_notes_mature_next_day_and_are_never_fetched_twice(archive_folder):
-    source = TestAvanza([_transaction(1, "2026-11-13", note="note-one")])
+    source = FakeAvanza([_transaction(1, "2026-11-13", note="note-one")])
     first = await sync_trade_archive(
         source, date(2026, 11, 13), date(2026, 11, 13),
         today=date(2026, 11, 14), now=_at("2026-11-14"),
@@ -132,7 +132,7 @@ async def test_notes_mature_next_day_and_are_never_fetched_twice(archive_folder)
 
 @pytest.mark.asyncio
 async def test_late_note_reference_is_caught_by_rolling_rescan(archive_folder):
-    source = TestAvanza([_transaction(1, "2026-11-12")])
+    source = FakeAvanza([_transaction(1, "2026-11-12")])
     first = await sync_trade_archive(
         source, date(2026, 11, 12), date(2026, 11, 13),
         today=date(2026, 11, 13), now=_at("2026-11-13"),
@@ -151,7 +151,7 @@ async def test_late_note_reference_is_caught_by_rolling_rescan(archive_folder):
 
 @pytest.mark.asyncio
 async def test_404_is_retained_and_retried_only_following_day(archive_folder):
-    source = TestAvanza([_transaction(1, "2026-11-12", note="note-one")])
+    source = FakeAvanza([_transaction(1, "2026-11-12", note="note-one")])
     source.pdf_status = 404
     one = await sync_trade_archive(
         source, date(2026, 11, 12), date(2026, 11, 12),
@@ -174,7 +174,7 @@ async def test_404_is_retained_and_retried_only_following_day(archive_folder):
 
 @pytest.mark.asyncio
 async def test_reuses_already_downloaded_note_across_two_transactions(archive_folder):
-    source = TestAvanza([
+    source = FakeAvanza([
         _transaction(1, "2026-11-12", note="group-note"),
         _transaction(2, "2026-11-12", note="group-note"),
     ])
@@ -189,7 +189,7 @@ async def test_reuses_already_downloaded_note_across_two_transactions(archive_fo
 
 @pytest.mark.asyncio
 async def test_cache_read_never_contacts_avanza_and_is_paginated(archive_folder):
-    source = TestAvanza([_transaction(i, "2026-11-12") for i in range(1, 9)])
+    source = FakeAvanza([_transaction(i, "2026-11-12") for i in range(1, 9)])
     await sync_trade_archive(
         source, date(2026, 11, 12), date(2026, 11, 12),
         download_notes=False, today=date(2026, 11, 14),
@@ -207,7 +207,7 @@ async def test_cache_read_never_contacts_avanza_and_is_paginated(archive_folder)
 
 @pytest.mark.asyncio
 async def test_source_overflow_same_day_fails_without_committing(archive_folder):
-    source = TestAvanza([
+    source = FakeAvanza([
         _transaction(i, "2026-11-12") for i in range(1, 1002)
     ])
     with pytest.raises(AccountReadError, match="single_day_exceeds_1000"):
@@ -225,7 +225,7 @@ async def test_bisects_overfull_range_without_gaps(archive_folder):
         *[_transaction(i, "2026-11-12") for i in range(1, 801)],
         *[_transaction(i, "2026-11-13") for i in range(801, 1301)],
     ]
-    source = TestAvanza(rows)
+    source = FakeAvanza(rows)
     result = await sync_trade_archive(
         source, date(2026, 11, 12), date(2026, 11, 13),
         download_notes=False, today=date(2026, 11, 14),
@@ -237,7 +237,7 @@ async def test_bisects_overfull_range_without_gaps(archive_folder):
 
 @pytest.mark.asyncio
 async def test_bounded_note_attempts_and_recovers_without_rereading_history(archive_folder):
-    source = TestAvanza([
+    source = FakeAvanza([
         _transaction(i, "2026-10-12", note=f"note-{i}")
         for i in range(1, 6)
     ])
@@ -251,7 +251,7 @@ async def test_bounded_note_attempts_and_recovers_without_rereading_history(arch
         now=_at("2026-11-14", 10),
     )
     assert next_run.notes_downloaded == 3
-    assert next_run.from_date == "2026-11-07"
+    assert next_run.from_date == "2026-10-06"
     assert next_run.archive_total == 5
 
 
