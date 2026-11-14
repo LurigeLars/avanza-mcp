@@ -20,9 +20,9 @@
         const {value, done} = await reader.read();
         if (done) break;
         buffer = (buffer + decoder.decode(value, {stream: true})).replace(/\r\n/g, "\n");
-        if (buffer.length > 65536) break;
         let end;
         while ((end = buffer.indexOf("\n\n")) >= 0) {
+          if (end + 2 > 65536) return;
           const frame = buffer.slice(0, end); buffer = buffer.slice(end + 2);
           if (!/^event:\s*ORDER_DEPTH\s*$/m.test(frame)) continue;
           try {
@@ -35,6 +35,7 @@
               price: side?.sellPrice, volume: side?.sellVolume}, location.origin);
           } catch { /* Invalid frames cannot refresh freshness. */ }
         }
+        if (buffer.length > 65536) return;
       }
     } finally { await reader.cancel().catch(() => {}); }
   }

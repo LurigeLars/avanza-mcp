@@ -5,13 +5,13 @@ visible volume at that MM ask level**. It requires no investment amount, order
 field changes or per-trade clicks. It is not account buying power, total depth
 at all prices, an execution guarantee, or a commission-inclusive amount.
 
-Version **0.1.6** leaves the amount field blank for missing MM quotes and an
-order book displaying no ask prices. Other unverifiable depth still shows a
-status. The extension waits ten seconds between completed list passes and
-order-page bridge fallback reads. Passive page-stream/DOM updates remain immediate. The
-source-age limit is fifteen seconds. Reload the extension and Avanza tabs when
-updating. Pairing survives at the same extension path/ID. Backend changes take
-effect after a normal MCP restart; memory-only mode may require reconnecting.
+Version **0.1.7** refreshes immediately when a tab becomes visible again,
+clears previous bridge data after a hard message-channel failure, and accepts
+multiple small SSE events in a large network chunk. A fresh page stream takes
+priority over a failed older bridge request. Normal refresh pauses remain ten
+seconds and source age remains limited to fifteen seconds. Missing MM quotes
+leave the amount field blank. Reload the extension and Avanza tabs to update;
+pairing survives at the same extension path/ID.
 
 ## Install
 
@@ -115,7 +115,9 @@ does not imply a fresh book, and delayed books display `STALE`.
   Whole-bridge failures, missing authentication/pairing or rate limits pause
   requests for ten seconds; provider `Retry-After` cooldown is also respected by
   the broker. Rendering/freshness checks run every 250 ms and DOM
-  changes update the order panel through a MutationObserver. Browser scheduling
+  changes update the order panel through a MutationObserver. Returning to a
+  visible tab or restoring a page triggers an immediate read; existing bridge
+  limits and provider cooldown still apply. Browser scheduling
   and multi-batch upstream latency still apply; this is not an exact ten-second
   per-instrument SLA.
 - `STALE`, `OFFLINE`, `TIMEOUT`, `BUSY`, `DEPTH_UNAVAILABLE`, `AUTH_REQUIRED`, `RATE_LIMITED`, `PAIR_REQUIRED`, `MM_MISSING`,
@@ -154,7 +156,9 @@ MAIN-world observer only clones Avanza's **existing order-depth SSE response**;
 it never reads request headers, cookies, security tokens, account streams or
 order fields. Only allowlisted public depth scalars cross to the isolated
 content script, where they are checked against the visible MM row and URL.
-SSE frame buffering is capped at 64 KiB and 50 levels. Changed/unreadable
+Each SSE event and the unfinished-frame buffer are capped at 64 KiB; up to
+50 levels are accepted per event. Coalesced network chunks can contain multiple
+valid events without triggering the per-event limit. Changed/unreadable
 responses produce an unverified/stale panel, not guessed capacity.
 
 Page DOM and MAIN-world messages are not cryptographically authenticated market

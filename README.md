@@ -379,8 +379,8 @@ is not a guarantee that the displayed volume can be filled.
 
 - **Certificate list:** adds the **Max köpbelopp** column. Up to twenty visible
   rows are read in batches of five through a paired, read-only local bridge.
-  Another pass starts ten seconds after the previous pass finishes. Hidden tabs
-  stop fetching; unusable MM/ask rows pause for thirty seconds before a new probe.
+  Another pass starts ten seconds after the previous pass finishes. Returning
+  to a tab starts a fresh read immediately. Hidden tabs stop fetching; unusable MM/ask rows pause for thirty seconds before a new probe.
 - **Order page:** shows **Max köpbelopp i synligt orderdjup**, reads the visible
   MM ask row and verifies it against the page's
   existing depth stream. Those page updates remain immediate and add no network

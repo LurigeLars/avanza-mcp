@@ -65,12 +65,8 @@ test("background pins requests and never gives content scripts the token", async
   assert.equal((await send({type: "CAPACITY", ids: ["123", "456"]}, orderSender)).status, "INVALID");
 });
 
-test("passive SSE observer handles split CRLF without requests or credential leakage", async () => {
+async function observeDepthChunks(chunks) {
   const messages = [];
-  const payload = {orderbookId: "123", receivedTime: Date.now(), marketMakerLevelInAsk: 1,
-    levels: [{sellPrice: 1, sellVolume: 9000000}, {sellPrice: 263.36, sellVolume: 1000}], cookies: "must-not-leave"};
-  const raw = `event: ORDER_DEPTH\r\ndata: ${JSON.stringify(payload)}\r\n\r\n`;
-  const chunks = raw.split("");
   let calls = 0;
   const window = {fetch: async () => {
     calls++;
@@ -83,8 +79,16 @@ test("passive SSE observer handles split CRLF without requests or credential lea
     window, location: {href: "https://www.avanza.se/handla/order.html/kop/123", origin: "https://www.avanza.se"}, URL, TextDecoder
   });
   const response = await window.fetch("/_push/order-depth-web-push/123");
-  assert.equal(await response.text(), raw);
+  assert.equal(await response.text(), chunks.join(""));
   await new Promise(r => setTimeout(r, 30));
+  return {messages, calls, window};
+}
+
+test("passive SSE observer handles split CRLF without requests or credential leakage", async () => {
+  const payload = {orderbookId: "123", receivedTime: Date.now(), marketMakerLevelInAsk: 1,
+    levels: [{sellPrice: 1, sellVolume: 9000000}, {sellPrice: 263.36, sellVolume: 1000}], cookies: "must-not-leave"};
+  const raw = `event: ORDER_DEPTH\r\ndata: ${JSON.stringify(payload)}\r\n\r\n`;
+  const {messages, calls, window} = await observeDepthChunks(raw.split(""));
   assert.equal(calls, 1);
   assert.equal(messages.length, 1);
   assert.equal(messages[0].mm_level, 1);
@@ -93,4 +97,31 @@ test("passive SSE observer handles split CRLF without requests or credential lea
   await window.fetch("/_api/accounts");
   await new Promise(r => setTimeout(r, 10));
   assert.equal(messages.length, 1);
+});
+
+test("SSE accepts many small frames in large and coalesced chunks", async () => {
+  const payload = {orderbookId: "123", receivedTime: Date.now(), marketMakerLevelInAsk: 0,
+    levels: [{sellPrice: 2, sellVolume: 100}]};
+  const frame = `event: ORDER_DEPTH\ndata: ${JSON.stringify(payload)}\n\n`;
+  const raw = frame.repeat(500);
+  assert.ok(raw.length > 65536);
+  for (const chunks of [[raw], [raw.slice(0, 10), raw.slice(10, 65546), raw.slice(65546)]]) {
+    const {messages, calls} = await observeDepthChunks(chunks);
+    assert.equal(messages.length, 500);
+    assert.equal(calls, 1);
+  }
+});
+
+test("SSE keeps the per-frame and unfinished-buffer size limits", async () => {
+  const frame = padding => `event: ORDER_DEPTH\ndata: ${JSON.stringify({orderbookId: "123",
+    receivedTime: Date.now(), marketMakerLevelInAsk: 0, levels: [{sellPrice: 2, sellVolume: 100}], padding})}\n\n`;
+  const atLimit = frame("x".repeat(65536 - frame("").length));
+  assert.equal(atLimit.length, 65536);
+  const accepted = await observeDepthChunks([atLimit.slice(0, -1), atLimit.slice(-1)]);
+  assert.equal(accepted.messages.length, 1);
+  const oversized = frame("x".repeat(65537 - frame("").length));
+  const rejected = await observeDepthChunks([oversized + frame("")]);
+  assert.equal(rejected.messages.length, 0);
+  const unfinished = await observeDepthChunks(["x".repeat(65536), "x", frame("")]);
+  assert.equal(unfinished.messages.length, 0);
 });
