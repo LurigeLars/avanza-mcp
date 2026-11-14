@@ -101,6 +101,8 @@ class ArchivedTrades(PrivateModel):
     from_date: str
     to_date: str
     available: bool
+    coverage_complete: bool
+    missing_intervals: list[tuple[str, str]]
     returned: int
     total: int
     has_more: bool
