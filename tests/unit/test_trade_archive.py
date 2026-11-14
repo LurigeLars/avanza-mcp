@@ -58,8 +58,7 @@ class FakeAvanza:
             "transactionsAfterFiltering": len(selected),
         }
 
-    async def request_authenticated(self, method, path):
-        assert method == "GET"
+    async def request_authenticated_note(self, path):
         assert path.startswith("/_api/contract-notes/documents/synthetic-user/")
         self.pdf_calls.append(path)
         if self.pdf_status == 404:

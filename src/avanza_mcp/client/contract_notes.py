@@ -12,7 +12,7 @@ import tempfile
 from datetime import date, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 import httpx
 
@@ -29,6 +29,7 @@ _MAX_NOTES = 200
 _MAX_PDF_BYTES = 2 * 1024 * 1024
 _MAX_EXPORT_BYTES = 50 * 1024 * 1024
 _MAX_SCAN_REQUESTS = 64
+_MAX_NOTE_REDIRECTS = 3
 
 
 def _note_directory() -> tuple[Path, str]:
@@ -179,6 +180,38 @@ def _classify_redirect(location: str | None) -> str:
         return "redirect_invalid_location"
 
 
+def _resolve_note_redirect(current: httpx.URL, location: str | None) -> httpx.URL:
+    """Resolve worker-private document URLs without trusting their authority."""
+    if not location:
+        raise AccountReadError("redirect_missing_location")
+    if (
+        len(location) > 8192
+        or any(ord(char) <= 32 or ord(char) == 127 for char in location)
+        or "\\" in location
+        or location.startswith("//")
+    ):
+        raise AccountReadError("redirect_invalid_location")
+    try:
+        parsed = urlsplit(location)
+        target = current.join(location)
+        if parsed.fragment or "#" in location or target.userinfo:
+            raise AccountReadError("redirect_invalid_location")
+        if target.scheme != "https":
+            raise AccountReadError("redirect_insecure")
+        if target.host != "www.avanza.se" or target.port not in (None, 443):
+            raise AccountReadError("redirect_external")
+        path = unquote(target.path).lower()
+        if any(term in path for term in (
+            "/login", "/logout", "/auth", "/bankid", "/session", "/disconnect",
+        )):
+            raise AccountReadError("redirect_login")
+        if "\\" in path or any(part in {".", ".."} for part in path.split("/")):
+            raise AccountReadError("redirect_invalid_location")
+        return target
+    except (ValueError, httpx.InvalidURL):
+        raise AccountReadError("redirect_invalid_location") from None
+
+
 async def _read_pdf(account: AccountClient, url_account: str, note_id: str) -> bytes:
     if not _SAFE_ID.fullmatch(url_account) or not _SAFE_ID.fullmatch(note_id):
         raise AccountReadError("invalid_note_reference")
@@ -186,10 +219,12 @@ async def _read_pdf(account: AccountClient, url_account: str, note_id: str) -> b
     if not _account_request_allowed("GET", path):
         raise AccountReadError("request_not_allowed")
     try:
-        response = await account._client.request_authenticated("GET", path)
+        response = await account._client.request_authenticated_note(path)
     except AvanzaAuthError:
         raise AccountAuthExpired from None
-    except httpx.TransportError:
+    except httpx.InvalidURL:
+        raise AccountReadError("redirect_invalid_location") from None
+    except (httpx.TransportError, TimeoutError):
         raise AccountReadError("network") from None
     if response.status_code == 401:
         raise AccountAuthExpired
@@ -319,6 +354,7 @@ async def download_contract_notes(
                     "redirect_insecure", "redirect_invalid_location",
                     "redirect_same_origin", "redirect_avanza_subdomain",
                     "redirect_external", "redirect_relative",
+                    "redirect_limit", "redirect_loop", "redirect_unsupported_status",
                 }:
                     failure_codes.add(code)
                 else:

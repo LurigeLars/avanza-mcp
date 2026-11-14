@@ -598,6 +598,58 @@ class AvanzaClient:
         return response
 
 
+    async def request_authenticated_note(self, path: str) -> httpx.Response:
+        """Read one bounded PDF chain on a single isolated session lease."""
+        from .accounts import AccountReadError, _NOTE_ROUTE_RE
+        from .contract_notes import (
+            _MAX_NOTE_REDIRECTS, _MAX_PDF_BYTES, _resolve_note_redirect,
+        )
+
+        if not _NOTE_ROUTE_RE.fullmatch(path):
+            raise AccountReadError("request_not_allowed")
+        if self._base_url.rstrip("/") != self.DEFAULT_BASE_URL or self._session_provider is None:
+            raise AvanzaAuthError("No authenticated Avanza session is available")
+        # Never delegate document URLs/bytes to the long-lived MCP process.
+        async with asyncio.timeout(self._request_timeout), self._client_lock:
+            session = self._session_provider()
+            if session is None:
+                raise AvanzaAuthError("No authenticated Avanza session is available")
+            client = await self._ensure_authenticated_client_locked(session)
+            target = httpx.URL(self.DEFAULT_BASE_URL + path)
+            visited: set[httpx.URL] = set()
+            for hop in range(_MAX_NOTE_REDIRECTS + 1):
+                if target in visited:
+                    raise AccountReadError("redirect_loop")
+                visited.add(target)
+                async with self._request_semaphore:
+                    await self._pace_request_start()
+                    if self._session_provider() is not session:
+                        raise AvanzaAuthError("Avanza session changed during document read")
+                    async with client.stream(
+                        "GET", target, follow_redirects=False,
+                        headers={"Accept": "application/pdf"},
+                    ) as response:
+                        if 300 <= response.status_code < 400:
+                            if response.status_code not in {301, 302, 303, 307, 308}:
+                                raise AccountReadError("redirect_unsupported_status")
+                            target = _resolve_note_redirect(target, response.headers.get("location"))
+                            if hop == _MAX_NOTE_REDIRECTS:
+                                raise AccountReadError("redirect_limit")
+                            continue
+                        if response.status_code != 200:
+                            return httpx.Response(response.status_code)
+                        content = bytearray()
+                        async for chunk in response.aiter_bytes():
+                            if len(content) + len(chunk) > _MAX_PDF_BYTES:
+                                raise AccountReadError("invalid_pdf_size")
+                            content.extend(chunk)
+                        # Drop upstream cookies, URLs and other document metadata.
+                        return httpx.Response(
+                            200, content=bytes(content),
+                            headers={"content-type": response.headers.get("content-type", "")},
+                        )
+        raise AccountReadError("redirect_limit")
+
     async def request_authenticated_batch(
         self,
         paths: list[str],
