@@ -588,7 +588,7 @@ def create_auth_server(broker: AuthProcessBroker | None = None) -> FastMCP:
         limit: Annotated[int, Field(ge=1, le=500)] = 100,
         offset: Annotated[int, Field(ge=0, le=100000)] = 0,
     ) -> ArchivedTrades:
-        """Read SQLite-cached trades only; never makes an upstream Avanza call.
+        """Read SQLite-cached trades; never refetch transaction history.
 
         Requires BankID session to cross the existing worker boundary.
         Trade Spine remains authoritative for portfolio, P/L and matching.
