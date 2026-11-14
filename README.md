@@ -466,18 +466,18 @@ account. The FastMCP listener remains loopback-only.
 
 ### Contract notes (BankID authenticated)
 
-Use \`download_contract_notes(from_date="2026-11-01", to_date="2026-11-13",
-dry_run=true)\` to check whether Avanza's transaction response exposes
-document references. Use \`dry_run=false\` to fetch up to 200 BUY/SELL notes
-from that date interval. Results include \`complete\` and, when the interval
-exceeds the 200-transaction limit, \`next_from_date\` for a subsequent call
-with the **same** \`to_date\`. The tool never silently drops later days.
+Use `download_contract_notes(from_date="2026-11-01", to_date="2026-11-13",
+dry_run=true)` to check whether Avanza's transaction response exposes
+document references. Use `dry_run=false` to fetch up to 200 BUY/SELL notes
+from that date interval. Results include `complete` and, when the interval
+exceeds the 200-transaction limit, `next_from_date` for a subsequent call
+with the **same** `to_date`. The tool never silently drops later days.
 If a single day contains over 200 transactions it fails closed; narrow
 the export manually on Avanza's website.
 
 PDFs are stored only on the authenticated host, under
-\`%LOCALAPPDATA%\AvanzaMCP\contract-notes\` on Windows, or
-\`~/.local/share/avanza-mcp/contract-notes\` elsewhere. No remote client
+`%LOCALAPPDATA%\AvanzaMCP\contract-notes` on Windows, or
+`~/.local/share/avanza-mcp/contract-notes` elsewhere. No remote client
 can choose the destination or receive raw PDF bytes, account URL IDs,
 note IDs, absolute paths, or BankID session material. Filenames contain
 the trade date and a one-way digest of the private note reference.
@@ -487,7 +487,7 @@ missing references. Downloading writes private local files, but never
 places trades or modifies the Avanza account.
 
 **Limitations:** Avanza's contract-note PDF URL is undocumented and may
-stop working. The first live attempt should be a small \`dry_run\` followed
+stop working. The first live attempt should be a small `dry_run` followed
 by one short, verified date interval. Historical transaction rows can
 lack note IDs. The tool does not yet parse timestamps or guarantee that
 each transaction corresponds one-to-one with a PDF. The 200 limit is
