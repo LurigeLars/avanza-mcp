@@ -126,6 +126,7 @@ class ArchiveSync(PrivateModel):
     notes_deferred: int
     notes_pending_publication: int
     notes_awaiting_reference: int
+    provisional_transactions: int
     notes_not_cached: int
     last_synced_at: str
     storage_hint: str
