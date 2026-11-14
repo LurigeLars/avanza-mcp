@@ -448,7 +448,7 @@ def _count_notes(connection: sqlite3.Connection, today: date) -> tuple[int, int,
         """SELECT COUNT(*) FROM broker_transaction
            WHERE trade_day < ? AND note_file IS NULL
              AND transaction_id NOT LIKE 'intra-day-%'
-             AND (note_owner_ref IS NULL OR note_id IS NULL)"""
+             AND (note_owner_ref IS NULL OR note_id IS NULL)""",
         (today.isoformat(),),
     ).fetchone()[0]
     due = connection.execute(
