@@ -147,7 +147,7 @@ async def test_timeout_preserves_shared_session_and_pending_reads_are_bounded(mo
     await asyncio.sleep(0)
     waiting.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await waiting
+        await asyncio.wait_for(waiting, timeout=5)
     assert not cancelled.is_set()
     release.set()
     await asyncio.gather(*reader.pending.values())
