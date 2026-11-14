@@ -124,6 +124,7 @@ async def test_notes_mature_next_day_and_are_never_fetched_twice(archive_folder)
     assert len(source.pdf_calls) == 1  # Nothing downloaded again.
     history = read_trade_archive(date(2026, 11, 13), date(2026, 11, 13), 100)
     assert history.available and history.total == 1
+    assert history.coverage_complete
     assert history.transactions[0].note_saved is True
     assert history.transactions[0].note_status == "SAVED"
     assert "synthetic-user" not in history.model_dump_json()
@@ -273,6 +274,24 @@ async def test_provisional_intraday_id_is_not_a_missing_settled_note(archive_fol
 def test_no_archive_yields_explicit_unavailable_status(archive_folder):
     result = read_trade_archive(date(2026, 11, 10), date(2026, 11, 14), 30)
     assert result.available is False and result.transactions == []
+    assert result.coverage_complete is False
+    assert result.missing_intervals == [("2026-11-10", "2026-11-14")]
+
+
+@pytest.mark.asyncio
+async def test_partial_coverage_is_not_mistaken_for_zero_trades(archive_folder):
+    source = FakeAvanza([_transaction(1, "2026-11-12")])
+    await sync_trade_archive(
+        source, date(2026, 11, 12), date(2026, 11, 12),
+        download_notes=False, today=date(2026, 11, 14),
+        now=_at("2026-11-14"),
+    )
+    result = read_trade_archive(date(2026, 11, 10), date(2026, 11, 14), 30)
+    assert result.available and not result.coverage_complete
+    assert result.missing_intervals == [
+        ("2026-11-10", "2026-11-11"),
+        ("2026-11-13", "2026-11-14"),
+    ]
 
 
 def test_query_validation_and_database_bounds(archive_folder):
