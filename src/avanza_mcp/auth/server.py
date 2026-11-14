@@ -26,6 +26,7 @@ from ..models.account import (
     Accounts,
     ActiveOrders,
     Deals,
+    ContractNoteExport,
     ForumPosts,
     Holdings,
     InsiderTransactions,
@@ -507,6 +508,38 @@ def create_auth_server(broker: AuthProcessBroker | None = None) -> FastMCP:
                 "limit": limit,
                 "isin": isin,
                 "transaction_types": transaction_types,
+            },
+        )
+
+    @server.tool(
+        annotations={
+            "readOnlyHint": False,  # Writes PDFs to the fixed local user data folder.
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": True,
+        }
+    )
+    async def download_contract_notes(
+        from_date: date,
+        to_date: date,
+        dry_run: bool = False,
+    ) -> ContractNoteExport:
+        """Download up to 200 BUY/SELL note PDFs to private local storage.
+
+        Never returns document contents or internal account/note IDs. If more
+        than 200 transactions are found, next_from_date permits a safe resume.
+        Requires authenticated Avanza account access.
+        """
+        if from_date > to_date or (to_date - from_date).days > 366:
+            raise ToolError("Date range must be 0 to 366 days in chronological order.")
+        return await account_result(
+            "contract_notes",
+            ContractNoteExport,
+            "Avanza could not download contract notes. Retry later.",
+            {
+                "from_date": from_date.isoformat(),
+                "to_date": to_date.isoformat(),
+                "dry_run": dry_run,
             },
         )
 
