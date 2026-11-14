@@ -12,6 +12,7 @@ import tempfile
 from datetime import date, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -145,6 +146,39 @@ def _select_200_whole_days(
     return selected, next_date
 
 
+def _classify_redirect(location: str | None) -> str:
+    """Categorize a broker redirect without leaking its URL or query tokens.
+
+    This helper intentionally does not follow any redirect. The endpoint's
+    destination must first be understood before allowing credentials or
+    document identifiers to reach another origin.
+    """
+    if not location:
+        return "redirect_missing_location"
+    try:
+        parsed = urlsplit(location.strip())
+        if any(term in parsed.path.lower() for term in (
+            "/login", "/auth", "/bankid", "/session",
+        )):
+            return "redirect_login"
+        if parsed.scheme and parsed.scheme.lower() != "https":
+            return "redirect_insecure"
+        if parsed.netloc:
+            host = parsed.hostname
+            if not host:
+                return "redirect_invalid_location"
+            if host.lower() == "www.avanza.se":
+                return "redirect_same_origin"
+            if host.lower() == "avanza.se" or host.lower().endswith(".avanza.se"):
+                return "redirect_avanza_subdomain"
+            return "redirect_external"
+        if parsed.path.startswith("/"):
+            return "redirect_relative"
+        return "redirect_relative"
+    except ValueError:
+        return "redirect_invalid_location"
+
+
 async def _read_pdf(account: AccountClient, url_account: str, note_id: str) -> bytes:
     if not _SAFE_ID.fullmatch(url_account) or not _SAFE_ID.fullmatch(note_id):
         raise AccountReadError("invalid_note_reference")
@@ -159,6 +193,8 @@ async def _read_pdf(account: AccountClient, url_account: str, note_id: str) -> b
         raise AccountReadError("network") from None
     if response.status_code == 401:
         raise AccountAuthExpired
+    if 300 <= response.status_code < 400:
+        raise AccountReadError(_classify_redirect(response.headers.get("location")))
     if response.status_code != 200:
         raise AccountReadError(f"http_{response.status_code}")
     content = response.content
@@ -279,6 +315,10 @@ async def download_contract_notes(
                     "network", "invalid_pdf_size", "invalid_pdf_type",
                     "invalid_pdf", "unsafe_storage", "unsafe_existing_file",
                     "invalid_note_reference", "request_not_allowed",
+                    "redirect_missing_location", "redirect_login",
+                    "redirect_insecure", "redirect_invalid_location",
+                    "redirect_same_origin", "redirect_avanza_subdomain",
+                    "redirect_external", "redirect_relative",
                 }:
                     failure_codes.add(code)
                 else:
