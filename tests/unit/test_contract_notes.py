@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from avanza_mcp.client.accounts import AccountAuthExpired, AccountReadError
-from avanza_mcp.client.contract_notes import download_contract_notes
+from avanza_mcp.client.contract_notes import download_contract_notes, _classify_redirect
 from avanza_mcp.models.account import ContractNoteExport
 
 
@@ -175,6 +175,21 @@ async def test_pdf_failure_is_bounded(safe_folder, status, media_type, body, cod
     assert not result.complete and result.failed == 1
     assert result.failure_codes == [code]
     assert not list(safe_folder.glob("*.pdf"))
+
+
+@pytest.mark.parametrize("location,classification", [
+    (None, "redirect_missing_location"),
+    ("https://www.avanza.se/_api/files?secret=do-not-expose", "redirect_same_origin"),
+    ("https://documents.avanza.se/signed.pdf?secret=do-not-expose", "redirect_avanza_subdomain"),
+    ("https://example.net/attachment?secret=do-not-expose", "redirect_external"),
+    ("http://www.avanza.se/file", "redirect_insecure"),
+    ("/login?state=do-not-expose", "redirect_login"),
+    ("/_api/contract-notes/xyz.pdf?token=do-not-expose", "redirect_relative"),
+])
+def test_redirect_diagnostic_discloses_category_not_target(location, classification):
+    result = _classify_redirect(location)
+    assert result == classification
+    assert "do-not-expose" not in result
 
 
 @pytest.mark.asyncio
