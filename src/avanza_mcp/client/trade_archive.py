@@ -426,6 +426,10 @@ async def _download_due_notes(
                 "invalid_pdf", "invalid_pdf_size", "invalid_pdf_type",
                 "network", "export_size_limit", "storage_error",
                 "request_not_allowed", "unsafe_storage", "unsafe_existing_file",
+                "redirect_missing_location", "redirect_login",
+                "redirect_insecure", "redirect_invalid_location",
+                "redirect_same_origin", "redirect_avanza_subdomain",
+                "redirect_external", "redirect_relative",
             }:
                 code = "note_fetch_failed"
             with connection:
