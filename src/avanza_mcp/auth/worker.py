@@ -47,6 +47,7 @@ _ALLOWED_ACCOUNT_OPERATIONS = frozenset(
         "accounts",
         "holdings",
         "transactions",
+        "contract_notes",
         "watchlists",
         "price_alerts",
         "portfolio_insights",
@@ -374,6 +375,22 @@ async def _account_operation(
                     ),
                     isin=isin,
                     transaction_types=transaction_types,
+                )
+            elif operation == "contract_notes":
+                _only_arguments(arguments, {"from_date", "to_date", "dry_run"})
+                raw_from = arguments.get("from_date")
+                raw_to = arguments.get("to_date")
+                if not isinstance(raw_from, str) or not isinstance(raw_to, str):
+                    raise ValueError
+                from_date = date.fromisoformat(raw_from)
+                to_date = date.fromisoformat(raw_to)
+                dry_run = arguments.get("dry_run", False)
+                if not isinstance(dry_run, bool):
+                    raise ValueError
+                if from_date > to_date or (to_date - from_date).days > 366:
+                    raise ValueError
+                result = await account.contract_notes(
+                    from_date, to_date, dry_run=dry_run
                 )
             elif operation == "watchlists":
                 _only_arguments(arguments, frozenset())
