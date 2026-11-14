@@ -499,7 +499,8 @@ at most `max_notes` (default 30, maximum 200) PDFs and has a combined
 `read_trade_archive(from_date="...", to_date="...")` retrieves the
 cached broker transactions without re-fetching broker transaction history; it still
 requires BankID account access because the archive contains personal
-financial records. The response reports `last_synced_at` and note status
+financial records. The response reports `last_synced_at`, `coverage_complete`,
+`missing_intervals` and note status
 and never returns PDF bytes, account URL IDs, raw note IDs, or local
 absolute paths. The archive is **not the canonical Trade Spine position,
 trade-episode, or profit-and-loss ledger**. Intra-day and settled Avanza
