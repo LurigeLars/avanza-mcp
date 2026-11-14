@@ -430,6 +430,7 @@ async def _download_due_notes(
                 "redirect_insecure", "redirect_invalid_location",
                 "redirect_same_origin", "redirect_avanza_subdomain",
                 "redirect_external", "redirect_relative",
+                "redirect_limit", "redirect_loop", "redirect_unsupported_status",
             }:
                 code = "note_fetch_failed"
             with connection:

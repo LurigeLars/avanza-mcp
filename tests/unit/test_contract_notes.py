@@ -35,6 +35,9 @@ class FakeTransport:
         )
         return httpx.Response(status, headers={"content-type": media_type}, content=body)
 
+    async def request_authenticated_note(self, path):
+        return await self.request_authenticated("GET", path)
+
 
 class FakeAccount:
     def __init__(self, rows, *, count_padding=0):

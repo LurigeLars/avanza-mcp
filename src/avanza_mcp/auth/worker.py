@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import os
 import sys
 import threading
@@ -1434,6 +1435,8 @@ async def _async_main(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
+    # HTTP diagnostics can include signed document URLs; emit safe protocol frames only.
+    logging.disable(logging.CRITICAL)
     _isolate_protocol_stdout()
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument(

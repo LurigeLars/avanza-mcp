@@ -3,9 +3,31 @@
 import asyncio
 import io
 import json
+import logging
+import sys
 
 from avanza_mcp.auth import worker
 from avanza_mcp.client.bankid import SessionMaterial
+
+
+def test_worker_entry_disables_sensitive_library_logs(monkeypatch, caplog):
+    async def run(args):
+        logging.getLogger("httpx").info("private-signed-url")
+        logging.getLogger("httpcore.connection").critical("private-cookie")
+        return 0
+
+    monkeypatch.setattr(worker, "_isolate_protocol_stdout", lambda: None)
+    monkeypatch.setattr(worker, "_async_main", run)
+    monkeypatch.setattr(sys, "argv", [
+        "worker", "--kind", "once", "--mode", "persistent", "--parent-pid", "1",
+    ])
+    previous = logging.root.manager.disable
+    try:
+        with caplog.at_level(logging.DEBUG):
+            assert worker.main() == 0
+        assert not caplog.records
+    finally:
+        logging.disable(previous)
 
 
 class FakeStore:

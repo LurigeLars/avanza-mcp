@@ -531,6 +531,13 @@ content type and size, and returns a manifest of successes, failures and
 missing references. Downloading writes private local files, but never
 places trades or modifies the Avanza account.
 
+Document redirects are resolved only inside the authenticated worker. At most
+three hops are allowed, all to `https://www.avanza.se` on the standard HTTPS
+port. Login/logout destinations, other origins, userinfo, fragments, malformed
+addresses and redirect loops fail closed. A single session lease and deadline
+cover the chain; the body is streamed with a 2 MiB limit. Signed queries are
+preserved without exposing them through MCP results or HTTP diagnostic logs.
+
 **Limitations:** Avanza's contract-note PDF URL is undocumented and may
 stop working. The first live attempt should be a small `dry_run` followed
 by one short, verified date interval. Historical transaction rows can
