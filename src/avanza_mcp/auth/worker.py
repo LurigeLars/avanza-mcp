@@ -48,6 +48,8 @@ _ALLOWED_ACCOUNT_OPERATIONS = frozenset(
         "holdings",
         "transactions",
         "contract_notes",
+        "sync_trade_archive",
+        "read_trade_archive",
         "watchlists",
         "price_alerts",
         "portfolio_insights",
@@ -391,6 +393,49 @@ async def _account_operation(
                     raise ValueError
                 result = await account.contract_notes(
                     from_date, to_date, dry_run=dry_run
+                )
+            elif operation == "sync_trade_archive":
+                _only_arguments(
+                    arguments,
+                    {"from_date", "to_date", "download_notes", "max_notes"},
+                )
+                raw_from = arguments.get("from_date")
+                raw_to = arguments.get("to_date")
+                from_date = date.fromisoformat(raw_from) if isinstance(raw_from, str) else None
+                to_date = date.fromisoformat(raw_to) if isinstance(raw_to, str) else None
+                if raw_from is not None and from_date is None:
+                    raise ValueError
+                if raw_to is not None and to_date is None:
+                    raise ValueError
+                should_download = arguments.get("download_notes", True)
+                if not isinstance(should_download, bool):
+                    raise ValueError
+                result = await account.sync_trade_archive(
+                    from_date=from_date, to_date=to_date,
+                    download_notes=should_download,
+                    max_notes=_bounded_int(
+                        arguments.get("max_notes"),
+                        default=30, minimum=0, maximum=200,
+                    ),
+                )
+            elif operation == "read_trade_archive":
+                _only_arguments(
+                    arguments, {"from_date", "to_date", "limit", "offset"}
+                )
+                raw_from = arguments.get("from_date")
+                raw_to = arguments.get("to_date")
+                if not isinstance(raw_from, str) or not isinstance(raw_to, str):
+                    raise ValueError
+                from_date = date.fromisoformat(raw_from)
+                to_date = date.fromisoformat(raw_to)
+                result = await account.read_trade_archive(
+                    from_date=from_date, to_date=to_date,
+                    limit=_bounded_int(
+                        arguments.get("limit"), default=100, minimum=1, maximum=500
+                    ),
+                    offset=_bounded_int(
+                        arguments.get("offset"), default=0, minimum=0, maximum=100000
+                    ),
                 )
             elif operation == "watchlists":
                 _only_arguments(arguments, frozenset())

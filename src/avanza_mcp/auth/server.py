@@ -27,6 +27,8 @@ from ..models.account import (
     ActiveOrders,
     Deals,
     ContractNoteExport,
+    ArchiveSync,
+    ArchivedTrades,
     ForumPosts,
     Holdings,
     InsiderTransactions,
@@ -540,6 +542,68 @@ def create_auth_server(broker: AuthProcessBroker | None = None) -> FastMCP:
                 "from_date": from_date.isoformat(),
                 "to_date": to_date.isoformat(),
                 "dry_run": dry_run,
+            },
+        )
+
+    @server.tool(
+        annotations={
+            "readOnlyHint": False,  # Writes local SQLite and due note PDFs only.
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": True,
+        }
+    )
+    async def sync_trade_archive(
+        from_date: date | None = None,
+        to_date: date | None = None,
+        download_notes: bool = True,
+        max_notes: Annotated[int, Field(ge=0, le=200)] = 30,
+    ) -> ArchiveSync:
+        """Incrementally persist broker history and fetch due contract notes.
+
+        The first implicit scan covers 30 days. Later scans overlap seven days
+        to catch settled transactions, while already archived history is kept.
+        Same-day trade notes wait until the next Stockholm calendar day.
+        """
+        if from_date and to_date and (
+            from_date > to_date or (to_date - from_date).days > 366
+        ):
+            raise ToolError("Invalid archive date range.")
+        return await account_result(
+            "sync_trade_archive",
+            ArchiveSync,
+            "Avanza trade archive sync failed. Retry later.",
+            {
+                "from_date": from_date.isoformat() if from_date else None,
+                "to_date": to_date.isoformat() if to_date else None,
+                "download_notes": download_notes,
+                "max_notes": max_notes,
+            },
+        )
+
+    @server.tool(annotations=_READ_TOOL)
+    async def read_trade_archive(
+        from_date: date,
+        to_date: date,
+        limit: Annotated[int, Field(ge=1, le=500)] = 100,
+        offset: Annotated[int, Field(ge=0, le=100000)] = 0,
+    ) -> ArchivedTrades:
+        """Read SQLite-cached trades; never refetch transaction history.
+
+        Requires BankID session to cross the existing worker boundary.
+        Trade Spine remains authoritative for portfolio, P/L and matching.
+        """
+        if from_date > to_date or (to_date - from_date).days > 366:
+            raise ToolError("Invalid archive date range.")
+        return await account_result(
+            "read_trade_archive",
+            ArchivedTrades,
+            "Could not read the local trade archive.",
+            {
+                "from_date": from_date.isoformat(),
+                "to_date": to_date.isoformat(),
+                "limit": limit,
+                "offset": offset,
             },
         )
 

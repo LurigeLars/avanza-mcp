@@ -348,6 +348,8 @@ def test_worker_account_allowlist_excludes_hidden_internal_operations():
         "holdings",
         "transactions",
         "contract_notes",
+        "sync_trade_archive",
+        "read_trade_archive",
         "watchlists",
         "price_alerts",
         "portfolio_insights",

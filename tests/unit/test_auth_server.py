@@ -118,7 +118,7 @@ async def test_auth_server_mounts_public_contract_and_adds_auth_tools():
     server = create_auth_server(broker)  # type: ignore[arg-type]
     async with Client(server) as client:
         tools = {tool.name for tool in await client.list_tools()}
-        assert len(tools) == 61
+        assert len(tools) == 63
         assert {
             "connect_avanza",
             "disconnect_avanza",
@@ -128,6 +128,8 @@ async def test_auth_server_mounts_public_contract_and_adds_auth_tools():
             "get_holdings",
             "get_transactions",
             "download_contract_notes",
+            "sync_trade_archive",
+            "read_trade_archive",
             "get_watchlists",
             "get_price_alerts",
             "get_portfolio_insights",
@@ -383,7 +385,7 @@ async def test_transactions_tool_forwards_optional_filters_without_new_tool():
 
     async with Client(create_auth_server(broker)) as client:  # type: ignore[arg-type]
         tools = {tool.name for tool in await client.list_tools()}
-        assert len(tools) == 61
+        assert len(tools) == 63
         result = await client.call_tool(
             "get_transactions",
             {
