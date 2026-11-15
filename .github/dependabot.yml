@@ -1,76 +1,45 @@
 version: 2
+# One weekly pull request for all version updates (every ecosystem), so the
+# strict up-to-date branch rule needs a single CI run. Security updates are
+# not part of this group and still open immediately.
+multi-ecosystem-groups:
+  weekly-dependencies:
+    schedule:
+      interval: weekly
+      day: saturday
+      time: "06:00"
+      timezone: Europe/Stockholm
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: "deps"
+
 updates:
   - package-ecosystem: "uv"
     directory: "/"
-    schedule:
-      interval: "weekly"
-      day: "saturday"
-      time: "06:00"
-      timezone: "Europe/Stockholm"
-    open-pull-requests-limit: 2
+    multi-ecosystem-group: weekly-dependencies
+    patterns: ["*"]
     groups:
       security-minor-patch:
         applies-to: "security-updates"
         patterns: ["*"]
         update-types: ["minor", "patch"]
-      uv-minor-patch:
-        applies-to: "version-updates"
-        patterns:
-          - "*"
-        update-types:
-          - "minor"
-          - "patch"
-    commit-message:
-      prefix: "deps"
 
   - package-ecosystem: "docker-compose"
     directory: "/"
-    schedule:
-      interval: "weekly"
-      day: "saturday"
-      time: "06:10"
-      timezone: "Europe/Stockholm"
-    open-pull-requests-limit: 2
+    multi-ecosystem-group: weekly-dependencies
+    patterns: ["*"]
     groups:
       security-minor-patch:
         applies-to: "security-updates"
         patterns: ["*"]
         update-types: ["minor", "patch"]
-      compose-minor-patch:
-        applies-to: "version-updates"
-        patterns:
-          - "*"
-        update-types:
-          - "minor"
-          - "patch"
-    commit-message:
-      prefix: "deps"
 
   - package-ecosystem: "github-actions"
     directory: "/"
-    schedule:
-      interval: "weekly"
-      day: "saturday"
-      time: "06:20"
-      timezone: "Europe/Stockholm"
-    open-pull-requests-limit: 2
+    multi-ecosystem-group: weekly-dependencies
+    patterns: ["*"]
     groups:
       security-minor-patch:
         applies-to: "security-updates"
         patterns: ["*"]
         update-types: ["minor", "patch"]
-      codeql-actions:
-        applies-to: "version-updates"
-        patterns:
-          - "github/codeql-action/*"
-      actions-minor-patch:
-        applies-to: "version-updates"
-        patterns:
-          - "*"
-        exclude-patterns:
-          - "github/codeql-action/*"
-        update-types:
-          - "minor"
-          - "patch"
-    commit-message:
-      prefix: "deps"
