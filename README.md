@@ -373,6 +373,9 @@ The reviewed authenticated/session/forum surface contains:
 
 ## Optional Chrome extension — Avanza Ordertillägg
 
+The extension popup shows `OFFLINE` if its initial status request to the service
+worker fails or returns no response, rather than remaining at `Kontrollerar…`.
+
 The separate extension in `chrome-extension/` displays the maximum **visible MM
 ask capacity in SEK**: the market maker's current ask price multiplied by the
 visible volume at that exact ask level. It needs no amount entry or extra click
