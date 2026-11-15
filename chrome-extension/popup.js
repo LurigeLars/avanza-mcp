@@ -1,5 +1,6 @@
 const status = document.getElementById("status");
-chrome.runtime.sendMessage({type: "STATUS"}).then(r => { status.textContent = r.status; });
+chrome.runtime.sendMessage({type: "STATUS"}).then(r => { status.textContent = r.status; })
+  .catch(() => { status.textContent = "OFFLINE"; });
 document.getElementById("pair").addEventListener("submit", async event => {
   event.preventDefault();
   const input = document.getElementById("code");
