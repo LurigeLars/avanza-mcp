@@ -4,6 +4,7 @@ Run: uv run --with playwright==1.58.0 python tests/browser/capacity_display.py
 Install that Playwright's Chromium first, or set CAPACITY_TEST_CHROMIUM.
 """
 import asyncio
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -225,7 +226,7 @@ def main():
                 source = {"price": 263.36, "volume": 1000}
                 def website(route):
                     if "/_push/" in route.request.url:
-                        body = {"orderbookId": "123", "receivedTime": int(time.time() * 1000),
+                        body = {"orderbookId": "123", "updated": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
                                 "marketMakerLevelInAsk": 1,
                                 "levels": [{"sellPrice": 1, "sellVolume": 9000000},
                                            {"sellPrice": source["price"], "sellVolume": source["volume"]}]}
