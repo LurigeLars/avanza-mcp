@@ -31,7 +31,7 @@
             const i = raw.marketMakerLevelInAsk, side = raw.levels[i];
             // Only public depth scalars cross into the isolated content script.
             window.postMessage({type: "AVZ_CAPACITY_DEPTH", id: String(raw.orderbookId),
-              source_time: raw.receivedTime, mm_level: i,
+              source_time: raw.receivedTime ?? (typeof raw.updated === "string" ? Date.parse(raw.updated) : null), mm_level: i,
               price: side?.sellPrice, volume: side?.sellVolume}, location.origin);
           } catch { /* Invalid frames cannot refresh freshness. */ }
         }
