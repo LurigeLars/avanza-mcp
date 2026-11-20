@@ -590,6 +590,9 @@ def create_auth_server(broker: AuthProcessBroker | None = None) -> FastMCP:
     ) -> ArchivedTrades:
         """Read SQLite-cached trades; never refetch transaction history.
 
+        Each row has execution_status VERIFIED/DATE_ONLY/PROVISIONAL/AMBIGUOUS/
+        MISSING; only VERIFIED rows carry execution_fills parsed from the
+        contract note (Stockholm time with offset). Times are never inferred.
         Requires BankID session to cross the existing worker boundary.
         Trade Spine remains authoritative for portfolio, P/L and matching.
         """
