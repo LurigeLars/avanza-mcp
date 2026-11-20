@@ -29,4 +29,3 @@ form p { margin: 12px 0; }
 input { width: 100%; min-width: 0; padding: 9px; }
 #feedback:empty { display: none; }
 #feedback { color: #f8bd9c; margin-top: 12px; }
-footer { border-top: 1px solid #2c3c33; padding-top: 14px; margin-top: 18px; color: #9cafa4; font-size: 11px; line-height: 1.6; }
