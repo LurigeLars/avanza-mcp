@@ -84,10 +84,9 @@ def verify_content_lifecycle(p):
             page.evaluate("""mode => {
                 window.testCalls=0; window.testHidden=false; window.testOffset=0; window.testMode=mode;
                 window.testAge=0; window.testVolume=1000;
-                const originalNow=performance.now.bind(performance);
                 const originalDateNow=Date.now.bind(Date);
                 Date.now=()=>originalDateNow()+testAge;
-                performance.now=()=>originalNow()+testOffset;
+                performance.now=()=>testOffset;
                 Object.defineProperty(document, 'hidden', {get:()=>testHidden});
                 window.chrome={runtime:{sendMessage:message=>{
                     testCalls++;
@@ -145,7 +144,7 @@ def verify_content_lifecycle(p):
             page.evaluate('testOffset=11000')
             page.wait_for_timeout(300)
             assert page.evaluate('testCalls') == 1, 'Stop the pass and wait instead of requesting the remaining rows'
-            page.evaluate('offset=>testOffset=offset', seconds * 1000 + 1000)
+            page.evaluate('offset=>testOffset=offset', max(60, seconds) * 1000 + 1000)
             page.wait_for_function('testCalls===2')
             page.close()
         print(json.dumps({"stop_overloaded_list_pass": "PASS", "retry_pause": "PASS"}))
@@ -156,6 +155,14 @@ def verify_content_lifecycle(p):
         ]:
             page = setup(path, body)
             page.wait_for_function("s=>document.querySelector(s)?.textContent.includes('kr')", arg=selector)
+            page.wait_for_timeout(300)
+            calls_per_pass = page.evaluate("testCalls")
+            page.evaluate("testOffset=59000")
+            page.wait_for_timeout(300)
+            assert page.evaluate("testCalls") == calls_per_pass, "No normal refresh before one minute"
+            page.evaluate("testOffset=61000")
+            page.wait_for_function("testCalls>" + str(calls_per_pass), timeout=2000)
+            page.wait_for_timeout(300)
             before = page.evaluate("testCalls")
             page.evaluate("testHidden=true;document.dispatchEvent(new Event('visibilitychange'))")
             page.wait_for_timeout(300)
@@ -164,7 +171,7 @@ def verify_content_lifecycle(p):
             page.wait_for_function("testCalls>" + str(before), timeout=2000)
             expect(page.locator(selector).first).to_contain_text("kr")
             page.wait_for_timeout(300)
-            assert page.evaluate("testCalls") == before * 2, "Resume must fetch once, then keep the normal interval"
+            assert page.evaluate("testCalls") == before + calls_per_pass, "Resume must fetch once, then keep the normal interval"
             resumed_calls = page.evaluate("testCalls")
             page.evaluate("window.dispatchEvent(new Event('pageshow'))")
             page.wait_for_function("testCalls>" + str(resumed_calls), timeout=2000)
@@ -265,9 +272,10 @@ def main():
                 assert reader.requested == {"123", "456", "124", "125", "126", "127", "128", "129", "130"}
                 page.wait_for_timeout(9000)
                 assert reader.requested_counts["128"] == reader.requested_counts["130"] == 1
-                assert reader.requested_counts["129"] == 1, "No normal refresh before ten seconds"
+                assert reader.requested_counts["129"] == 1, "No early normal refresh"
                 reader.missing_mm_restored = True
                 page.locator("tbody tr").nth(6).locator("td").nth(2).evaluate("cell => cell.textContent='263,36'")
+                page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
                 page.wait_for_function("document.querySelectorAll('tbody .avz-capacity-cell')[6].textContent.includes('263')", timeout=5000)
                 assert reader.requested_counts["129"] >= 2, "Fresh depth overrides missing list price on the next pass"
                 assert reader.requested_counts["128"] >= 2, "A changed list ask must resume at the next scheduled pass"
@@ -351,7 +359,7 @@ def main():
                 page.set_content(LIST)
                 page.wait_for_function("document.querySelector('tbody .avz-capacity-cell')?.textContent.includes('FAILED')", timeout=15000)
                 print(json.dumps({"browser": context.browser.version, "pairing": "PASS",
-                                  "list_bridge": "PASS", "unquoted_pause_and_resume": "PASS", "ten_second_polling": "PASS", "dom_mm_level_1": "PASS", "order_bridge_fallback": "PASS",
+                                  "list_bridge": "PASS", "unquoted_pause_and_resume": "PASS", "one_minute_polling": "PASS", "dom_mm_level_1": "PASS", "order_bridge_fallback": "PASS",
                                   "missing_mm_stale_offline": "PASS", "blank_absent_ask_and_missing_mm": "PASS", "order_fields_unchanged": "PASS",
                                   "dom_update_ms": {"n": len(timings), "p50": statistics.median(timings),
                                                     "p95": sorted(timings)[18], "max": max(timings)}}))
