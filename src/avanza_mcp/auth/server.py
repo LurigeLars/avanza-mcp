@@ -588,13 +588,10 @@ def create_auth_server(broker: AuthProcessBroker | None = None) -> FastMCP:
         limit: Annotated[int, Field(ge=1, le=500)] = 100,
         offset: Annotated[int, Field(ge=0, le=100000)] = 0,
     ) -> ArchivedTrades:
-        """Read SQLite-cached trades; never refetch transaction history.
+        """Read cached trades and contract-note fill times.
 
-        Each row has execution_status VERIFIED/DATE_ONLY/PROVISIONAL/AMBIGUOUS/
-        MISSING; only VERIFIED rows carry execution_fills parsed from the
-        contract note (Stockholm time with offset). Times are never inferred.
-        Requires BankID session to cross the existing worker boundary.
-        Trade Spine remains authoritative for portfolio, P/L and matching.
+        Only VERIFIED rows include execution_fills (Stockholm with UTC offset).
+        Requires BankID. Use Trade Spine for portfolio and P/L.
         """
         if from_date > to_date or (to_date - from_date).days > 366:
             raise ToolError("Invalid archive date range.")
