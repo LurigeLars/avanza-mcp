@@ -149,32 +149,35 @@ available for the lifetime of that session.
 
 | Client | Recommended connection | Account access |
 |---|---|---:|
-| Claude Desktop / Cursor / VS Code | stdio from this checkout | Yes |
+| Claude Desktop / Cursor | `mcp-remote` -> `http://127.0.0.1:8769/mcp` | Yes |
 | Claude Code / Codex | `http://127.0.0.1:8769/mcp` | Yes |
 | ChatGPT / remote MCP client | Cloudflare Access -> public gateway | Yes |
+| VS Code / standalone use | stdio from this checkout | Yes, separate session |
 | Generic public-only use | published PyPI package | No fork-specific account access |
+
+The BankID session lives in memory in one server process. Every client that points at
+the shared HTTP stack (8767 behind the 8769 gateway) reuses that one login. A stdio
+launch starts its own server process, so it needs its own BankID login, and it loses
+that login whenever the client restarts it.
 
 <details>
 <summary><strong>Claude Desktop / Cursor</strong></summary>
+
+When the background HTTP stack is running, bridge to the shared server:
 
 ```json
 {
   "mcpServers": {
     "avanza": {
-      "command": "uv",
-      "args": [
-        "run",
-        "--directory",
-        "/path/to/avanza-mcp",
-        "--frozen",
-        "avanza-mcp"
-      ]
+      "command": "npx",
+      "args": ["-y", "mcp-remote@0.14.3", "http://127.0.0.1:8769/mcp"]
     }
   }
 }
 ```
 
-On Windows, some desktop clients require the absolute path to `uv.exe`.
+On Windows, Claude Desktop does not resolve PATH. Use the absolute paths to `node.exe` and
+`npm\bin\npx-cli.js`.
 
 </details>
 
