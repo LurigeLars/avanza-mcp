@@ -5,6 +5,7 @@ import io
 import json
 import logging
 import sys
+import types
 
 from avanza_mcp.auth import worker
 from avanza_mcp.client.bankid import SessionMaterial
@@ -389,7 +390,8 @@ async def test_verified_health_read_extends_memory_only_idle_timer(monkeypatch, 
     monkeypatch.setattr(worker, "_account_operation", accounts)
     monkeypatch.setattr(worker, "_start_stdin_reader", feed)
     monkeypatch.setattr(worker, "_parent_alive", lambda _pid: True)
-    monkeypatch.setattr(worker.time, "monotonic", lambda: clock["now"])
+    # Fake only the worker's clock: asyncio's call_later must keep real time.
+    monkeypatch.setattr(worker, "time", types.SimpleNamespace(monotonic=lambda: clock["now"]))
 
     assert await worker._run_daemon("memory_only", 123) == "shutdown"
 
