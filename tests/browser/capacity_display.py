@@ -88,10 +88,11 @@ def verify_content_lifecycle(p):
                 Date.now=()=>originalDateNow()+testAge;
                 performance.now=()=>testOffset;
                 Object.defineProperty(document, 'hidden', {get:()=>testHidden});
-                window.chrome={runtime:{sendMessage:message=>{
+                window.chrome={runtime:{id:"test-extension", onMessage:{addListener:fn=>window.testSettingsListener=fn}, sendMessage:message=>{
+                    if(message.type==='STATE')return Promise.resolve({status:'PAIRED',enabled:true,pollInterval:60000});
                     testCalls++;
                     if(testMode==='reject') return Promise.reject(new Error('Synthetic message failure'));
-                    if(testMode==='pending') return new Promise((resolve,reject)=>{window.testReject=reject;});
+                    if(testMode==='pending') return new Promise((resolve,reject)=>{window.testReject=reject;window.testResolve=resolve;});
                     if(testMode==='backoff')return {status:'BACKOFF',retry_after:30};
                     if(testMode==='stale')return {items:Object.fromEntries(message.ids.map(id=>[id,{status:'STALE'}]))};
                     if(['TIMEOUT','BUSY','RATE_LIMITED'].includes(testMode))return {
@@ -178,6 +179,51 @@ def verify_content_lifecycle(p):
             expect(page.locator(selector).first).to_contain_text("kr")
             page.close()
 
+        # Settings must apply to an existing view, including replies issued before OFF.
+        for path, body, selector in [
+            ("/borshandlade-produkter/certifikat-torg/lista.html", LIST, "tbody .avz-capacity-cell"),
+            ("/handla/order.html/kop/123", ORDER, ".avz-capacity strong"),
+        ]:
+            page = setup(path, body)
+            expect(page.locator(selector).first).to_contain_text("kr")
+            page.wait_for_timeout(300)
+            page.evaluate("testSettingsListener({type:'STATE_CHANGED',enabled:false,pollInterval:0},{id:'other-extension'})")
+            expect(page.locator(selector).first).to_contain_text("kr")
+            page.evaluate("testSettingsListener({type:'STATE_CHANGED',enabled:false,pollInterval:0},{id:'test-extension'})")
+            expect(page.locator(selector)).to_have_count(0)
+            before = page.evaluate("testCalls")
+            page.evaluate("testOffset=600000")
+            page.wait_for_timeout(350)
+            assert page.evaluate("testCalls") == before, "OFF must stop new requests"
+            page.evaluate("testMode='stale';testSettingsListener({type:'STATE_CHANGED',enabled:true,pollInterval:0},{id:'test-extension'})")
+            expect(page.locator(selector).first).to_have_text("—")
+            page.wait_for_timeout(300)
+            before = page.evaluate("testCalls")
+            page.evaluate("testOffset=1200000")
+            page.wait_for_timeout(350)
+            assert page.evaluate("testCalls") == before, "On-visible mode has no timer requests"
+            page.evaluate("testMode='ok';testHidden=true;document.dispatchEvent(new Event('visibilitychange'));testHidden=false;document.dispatchEvent(new Event('visibilitychange'))")
+            expect(page.locator(selector).first).to_contain_text("kr")
+            page.wait_for_timeout(300)
+            # Late responses from before OFF must not become a new-session value.
+            page.evaluate("testMode='pending';document.dispatchEvent(new Event('visibilitychange'))")
+            page.wait_for_function("typeof testResolve==='function'")
+            page.evaluate("testSettingsListener({type:'STATE_CHANGED',enabled:false,pollInterval:0},{id:'test-extension'});testMode='stale';testSettingsListener({type:'STATE_CHANGED',enabled:true,pollInterval:0},{id:'test-extension'});testResolve({items:{123:{status:'OK',price:263.36,volume:1000,amount:'263360',mm_level:1,currency:'SEK',source_time:Date.now()}}})")
+            expect(page.locator(selector).first).to_have_text("—")
+            page.close()
+        for seconds in [30, 120, 300]:
+            page = setup("/handla/order.html/kop/123", ORDER)
+            expect(page.locator(".avz-capacity strong")).to_contain_text("kr")
+            page.evaluate("interval=>testSettingsListener({type:'STATE_CHANGED',enabled:true,pollInterval:interval},{id:'test-extension'})", seconds * 1000)
+            before = page.evaluate("testCalls")
+            page.evaluate("offset=>testOffset=offset", seconds * 1000 - 1)
+            page.wait_for_timeout(300)
+            assert page.evaluate("testCalls") == before
+            page.evaluate("offset=>testOffset=offset", seconds * 1000 + 1)
+            page.wait_for_function("testCalls>" + str(before))
+            page.close()
+        print(json.dumps({"live_on_off": "PASS", "on_visible_mode": "PASS", "interval_settings": "PASS", "late_reply_after_off": "PASS"}))
+
         page = setup("/handla/order.html/kop/123", ORDER)
         amount = page.locator(".avz-capacity strong")
         expect(amount).to_contain_text("kr")
@@ -249,8 +295,8 @@ def main():
                 popup = context.new_page()
                 popup.goto(f"chrome-extension://{extension_id}/popup.html")
                 popup.locator("#code").fill(store.issue())
-                popup.locator("button").click()
-                expect(popup.locator("#status")).to_have_text("PAIRED", timeout=10000)
+                popup.locator("#pair-button").click()
+                expect(popup.locator("#status")).to_have_text("Paired", timeout=10000)
                 assert store.load()["origin"] == f"chrome-extension://{extension_id}"
                 popup.close()
 
@@ -262,7 +308,7 @@ def main():
                 page.goto("https://www.avanza.se/borshandlade-produkter/certifikat-torg/lista.html?s=spread.asc")
                 page.wait_for_function("document.querySelector('tbody .avz-capacity-cell')?.textContent.includes('263')")
                 assert page.locator("tbody .avz-capacity-cell").count() == 10
-                expect(page.locator("thead .avz-capacity-cell")).to_have_text("Max köpbelopp")
+                expect(page.locator("thead .avz-capacity-cell")).to_have_text("Max buy capacity")
                 assert "360" in page.locator("tbody .avz-capacity-cell").first.inner_text()
                 assert reader.calls >= 1
                 page.wait_for_function("document.querySelectorAll('tbody .avz-capacity-cell')[5].textContent.includes('263')")
@@ -281,7 +327,46 @@ def main():
                 assert reader.requested_counts["128"] >= 2, "A changed list ask must resume at the next scheduled pass"
                 page.locator("tbody tr").first.locator("a").evaluate("a => a.href='/handla/order.html/kop/invalid'")
                 expect(page.locator('tbody .avz-capacity-cell').first).to_have_text('— FAILED')
-                assert 'IDENTITET OKÄND' in page.locator('tbody .avz-capacity-cell').first.get_attribute('title')
+                assert 'IDENTITY_UNKNOWN' in page.locator('tbody .avz-capacity-cell').first.get_attribute('title')
+                # Use the real popup and service worker to change existing tabs.
+                popup = context.new_page()
+                popup.goto(f"chrome-extension://{extension_id}/popup.html")
+                expect(popup.locator("#power")).to_have_attribute("aria-checked", "true")
+                assert not popup.locator("#pairing").evaluate("el=>el.open")
+                popup.locator("#interval").select_option("0")
+                expect(popup.locator("#interval")).to_be_enabled()
+                screenshot_dir = os.environ.get("CAPACITY_POPUP_SCREENSHOT_DIR")
+                if screenshot_dir:
+                    Path(screenshot_dir).mkdir(parents=True, exist_ok=True)
+                    popup.locator("body").screenshot(path=str(Path(screenshot_dir) / "avanza-popup-on.png"))
+                popup.locator("#power").click()
+                expect(popup.locator("#power")).to_have_attribute("aria-checked", "false")
+                expect(page.locator(".avz-capacity-cell")).to_have_count(0)
+                assert worker.evaluate("chrome.action.getBadgeText({})") == "OFF"
+                calls = reader.calls
+                page.wait_for_timeout(500)
+                assert reader.calls == calls
+                if screenshot_dir:
+                    popup.locator("body").screenshot(path=str(Path(screenshot_dir) / "avanza-popup-off.png"))
+                popup.close()
+                popup = context.new_page()
+                popup.goto(f"chrome-extension://{extension_id}/popup.html")
+                expect(popup.locator("#power")).to_have_attribute("aria-checked", "false")
+                expect(popup.locator("#interval")).to_have_value("0")
+                expect(popup.locator("#status")).to_have_text("Paired")
+                popup.locator("#power").click()
+                expect(popup.locator("#power")).to_have_attribute("aria-checked", "true")
+                assert worker.evaluate("chrome.action.getBadgeText({})") == "ON"
+                expect(page.locator("thead .avz-capacity-cell")).to_have_text("Max buy capacity")
+                popup.locator("#interval").select_option("60000")
+                expect(popup.locator("#interval")).to_be_enabled()
+                # Keyboard control uses the same switch and retains a visible focus indicator.
+                popup.locator("#power").focus()
+                popup.keyboard.press("Space")
+                expect(popup.locator("#power")).to_have_attribute("aria-checked", "false")
+                popup.keyboard.press("Space")
+                expect(popup.locator("#power")).to_have_attribute("aria-checked", "true")
+                popup.close()
                 context.unroute("https://www.avanza.se/**")
 
                 source = {"price": 263.36, "volume": 1000}
@@ -297,7 +382,7 @@ def main():
                 context.route("https://www.avanza.se/**", website)
                 page.goto("https://www.avanza.se/handla/order.html/kop/123")
                 page.wait_for_selector(".avz-capacity strong")
-                expect(page.locator(".avz-capacity span")).to_have_text("Max köpbelopp i synligt orderdjup")
+                expect(page.locator(".avz-capacity span")).to_have_text("Max buy capacity in visible order depth")
                 page.wait_for_function("document.querySelector('.avz-capacity strong').textContent.includes('263')")
                 page.locator(".price.sell").nth(1).evaluate("e => e.textContent = '200,00 *'")
                 page.wait_for_function("document.querySelector('.avz-capacity strong').textContent.includes('FAILED')")

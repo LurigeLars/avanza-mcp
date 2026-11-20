@@ -7,7 +7,10 @@ const sender = {tab: {id: 1}, frameId: 0, url: "https://www.avanza.se/borshandla
 const ok = body => ({ok: true, json: async () => body});
 function worker(store, clock, fetchResponse) {
   let handler, requests = 0;
+  const notifications = [], badges = [];
   const chrome = {
+    action: {setBadgeText: async x => {badges.push(x.text);}, setBadgeBackgroundColor: async () => {}, setTitle: async () => {}},
+    tabs: {query: async () => [{id: 1}, {id: 2}], sendMessage: async (id, message) => {notifications.push({id, message});}},
     storage: {local: {
       setAccessLevel: async () => {}, get: async () => ({...store}),
       set: async value => {Object.assign(store, value);}
@@ -20,7 +23,8 @@ function worker(store, clock, fetchResponse) {
   });
   return {
     send: (s = sender) => new Promise(resolve => handler({type: "CAPACITY", ids: ["123"]}, s, resolve)),
-    requests: () => requests
+    message: (message, s = sender) => new Promise(resolve => handler(message, s, resolve)),
+    notifications, badges, requests: () => requests
   };
 }
 
@@ -77,5 +81,51 @@ test("the fifth concurrent request waits without issuing another fetch", async (
   assert.equal((await w.send()).status, "BACKOFF");
   assert.equal(w.requests(), 4);
   waiting.forEach(resolve => resolve(ok({items: {123: {status: "OK"}}})));
+  await Promise.all(pending);
+});
+
+const popup = {url: `chrome-extension://${"a".repeat(32)}/popup.html`};
+test("public settings persist, update the badge and notify tabs without sharing credentials", async () => {
+  const store = {token: "a".repeat(64)}, clock = {now: 100000};
+  const w = worker(store, clock, async () => ok({}));
+  const state = await w.message({type: "STATE"});
+  assert.equal(state.enabled, true);
+  assert.equal(state.pollInterval, 60000);
+  assert.equal(state.token, undefined);
+  const changed = await w.message({type: "SET_SETTINGS", enabled: false, pollInterval: 0}, popup);
+  assert.equal(changed.enabled, false);
+  assert.equal(changed.pollInterval, 0);
+  assert.equal(w.badges.at(-1), "OFF");
+  assert.equal(w.notifications.length, 2);
+  assert.equal(w.notifications[0].message.type, "STATE_CHANGED");
+  assert.equal(w.notifications[0].message.token, undefined);
+  assert.equal((await w.send()).status, "OFF");
+  assert.equal(w.requests(), 0);
+  const restarted = worker(store, clock, async () => ok({}));
+  assert.equal((await restarted.message({type: "STATUS"}, popup)).enabled, false);
+  assert.equal((await restarted.message({type: "STATE"})).pollInterval, 0);
+  assert.equal(restarted.badges.at(-1), "OFF");
+  await restarted.message({type: "SET_SETTINGS", enabled: true}, popup);
+  assert.equal(restarted.badges.at(-1), "ON");
+  assert.equal(store.token, "a".repeat(64));
+});
+
+test("only the popup can change settings, with bounded values and strict types", async () => {
+  const store = {}, w = worker(store, {now: 100000}, async () => ok({}));
+  for (const change of [{enabled: false}, {pollInterval: 0}]) {
+    assert.equal((await w.message({type: "SET_SETTINGS", ...change})).status, "INVALID");
+  }
+  for (const change of [{enabled: "false"}, {pollInterval: "60000"}, {pollInterval: -1}, {pollInterval: 1}, {}]) {
+    assert.equal((await w.message({type: "SET_SETTINGS", ...change}, popup)).status, "INVALID");
+  }
+  assert.deepEqual(store, {});
+});
+
+test("OFF remains available while all four capacity requests are busy", async () => {
+  const waiting = [], w = worker({token: "a".repeat(64)}, {now: 100000}, () => new Promise(resolve => waiting.push(resolve)));
+  const pending = Array.from({length: 4}, () => w.send());
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal((await w.message({type: "SET_SETTINGS", enabled: false}, popup)).enabled, false);
+  waiting.forEach(resolve => resolve(ok({items: {}})));
   await Promise.all(pending);
 });
