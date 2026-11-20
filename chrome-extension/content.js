@@ -4,7 +4,7 @@
   const format = new Intl.NumberFormat("sv-SE", {maximumFractionDigits: 2});
   let snapshot = null, orderRoot = null, orderObserver = null, orderPanel = null;
   let listBusy = false, nextPoll = 0, lastRoute = location.href;
-  let orderBusy = false, nextOrderPoll = 0, orderFailure = "DEPTH_UNVERIFIED";
+  let orderBusy = false, orderReadComplete = false, nextOrderPoll = 0, orderFailure = "DEPTH_UNVERIFIED";
   const values = new Map();
   const paused = new Map();
   const seen = new WeakMap();
@@ -18,7 +18,7 @@
     enabled = state.enabled; pollInterval = state.pollInterval;
     if (!enabled) {
       generation++; snapshot = null; values.clear(); paused.clear(); shown = new WeakMap();
-      orderFailure = "DEPTH_UNVERIFIED";
+      orderFailure = "DEPTH_UNVERIFIED"; orderReadComplete = false;
       orderObserver?.disconnect(); orderObserver = null;
       orderPanel?.remove(); orderPanel = null; orderRoot = null;
       document.querySelectorAll(".avz-capacity-cell").forEach(node => node.remove());
@@ -69,7 +69,8 @@
         && snapshot.price === dom.price && snapshot.volume === dom.volume && snapshot.mm_level === dom.mm_level) {
       q = {...dom, source_time: snapshot.source_time, status: "OK"};
     }
-    const failure = noAsk ? "" : !dom ? "MM_DEPTH_UNREADABLE" : !sek ? "CURRENCY_UNVERIFIED"
+    const failure = noAsk ? "" : !snapshot && !orderReadComplete ? "LOADING"
+      : !dom ? "MM_DEPTH_UNREADABLE" : !sek ? "CURRENCY_UNVERIFIED"
       : snapshot && !C.fresh(snapshot.source_time) ? "STALE"
       : snapshot && dom ? "DEPTH_MISMATCH" : orderFailure;
     display(orderPanel.querySelector("strong"), q, failure, id);
@@ -106,6 +107,7 @@
     try {
       const result = await chrome.runtime.sendMessage({type: "CAPACITY", ids: [id]});
       if (!enabled || currentGeneration !== generation || document.hidden || C.bookId(location.href) !== id) return;
+      orderReadComplete = true;
       const q = result?.items?.[id] ?? {status: result?.status ?? "OFFLINE"};
       if (!(snapshot?.via === "stream" && C.fresh(snapshot.source_time))) {
         if (C.validQuote(q)) snapshot = {...q, id, via: "bridge"};
@@ -114,6 +116,7 @@
       nextOrderPoll = nextRead(result?.retry_after);
     } catch {
       if (!enabled || currentGeneration !== generation || document.hidden || C.bookId(location.href) !== id) return;
+      orderReadComplete = true;
       if (!(snapshot?.via === "stream" && C.fresh(snapshot.source_time))) {
         snapshot = null; orderFailure = "OFFLINE";
       }
@@ -209,19 +212,20 @@
   function tick() {
     if (!enabled) return;
     if (location.href !== lastRoute) {
-      shown = new WeakMap(); snapshot = null; values.clear(); paused.clear(); nextPoll = 0; nextOrderPoll = 0; orderFailure = "DEPTH_UNVERIFIED"; lastRoute = location.href;
+      generation++; shown = new WeakMap(); snapshot = null; values.clear(); paused.clear(); nextPoll = 0; nextOrderPoll = 0; orderFailure = "DEPTH_UNVERIFIED"; orderReadComplete = false; lastRoute = location.href;
     }
     if (document.hidden) {
-      shown = new WeakMap(); snapshot = null; values.clear(); paused.clear();
+      shown = new WeakMap(); snapshot = null; values.clear(); paused.clear(); orderFailure = "DEPTH_UNVERIFIED"; orderReadComplete = false;
       if (orderPanel) display(orderPanel.querySelector("strong"), null, "PAUSED");
       return;
     }
     discoverOrder(); pollOrder(); pollList();
   }
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) { nextPoll = 0; nextOrderPoll = 0; }
+    if (document.hidden) generation++;
+    else { nextPoll = 0; nextOrderPoll = 0; }
     tick();
   });
-  window.addEventListener("pageshow", () => { shown = new WeakMap(); snapshot = null; values.clear(); paused.clear(); nextPoll = 0; nextOrderPoll = 0; tick(); });
+  window.addEventListener("pageshow", () => { generation++; shown = new WeakMap(); snapshot = null; values.clear(); paused.clear(); orderFailure = "DEPTH_UNVERIFIED"; orderReadComplete = false; nextPoll = 0; nextOrderPoll = 0; tick(); });
   setInterval(tick, 250);
 })();

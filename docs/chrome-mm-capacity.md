@@ -5,6 +5,11 @@ visible volume at that MM ask level**. It requires no investment amount, order
 field changes or per-trade clicks. It is not account buying power, total depth
 at all prices, an execution guarantee, or a commission-inclusive amount.
 
+Version **0.1.14** starts a new tab view with a dash while the first capacity
+read is pending, including while the order-depth DOM is still loading. A
+completed read or validation failure can then display FAILED. Previous-view
+errors and late replies do not become failures for the new view.
+
 Version **0.1.12** adds an English popup with a persistent **ON/OFF** switch
 and toolbar badge. OFF removes the extension's amounts and stops new bridge
 reads; pairing remains saved. Re-enabling starts a fresh current-view read.
