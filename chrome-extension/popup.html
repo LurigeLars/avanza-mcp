@@ -1,7 +1,14 @@
-<!doctype html><html lang="sv"><meta charset="utf-8"><title>Avanza Ordertillägg</title>
-<body><h3>Avanza Ordertillägg</h3><p id="status" role="status">Kontrollerar…</p>
-<p>Visar maximalt synligt köpbelopp på certifikatlistan och ordersidan, utifrån market makerns säljkurs och orderdjup.</p>
-<p>Engångsparning med lokal brygga för certifikatlistan.</p>
-<form id="pair"><label>Engångskod <input id="code" autocomplete="off" maxlength="20" required pattern="[A-Fa-f0-9]{20}"></label>
-<button>Para</button></form><p>Ordersidan läser synligt djup och verifierar det mot sidans djupström eller den parade bryggan. Beloppet avser synligt MM-djup, inte kontots köpkraft eller garanterad avslutsvolym.</p>
-<script src="popup.js"></script></body></html>
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Avanza Order Extension</title><link rel="stylesheet" href="popup.css"></head>
+<body>
+<header><div class="mark" aria-hidden="true">A</div><div><span class="eyebrow">AVANZA</span><h1>Order Extension</h1></div><span id="status" role="status">Checking…</span></header>
+<main>
+<section class="power-card" aria-label="Extension control"><div><h2>Buy capacity</h2><p>Visible market maker depth</p></div><button id="power" role="switch" aria-checked="false" aria-label="Show buy capacity" disabled><span class="dot" aria-hidden="true"></span><span id="power-label">—</span></button></section>
+<section class="settings"><label for="interval">Refresh capacity</label><select id="interval" disabled><option value="0">When the tab is shown</option><option value="30000">Every 30 seconds</option><option value="60000" selected>Every minute</option><option value="120000">Every 2 minutes</option><option value="300000">Every 5 minutes</option></select><p>Refreshes when you open or return to a tab, plus the selected interval. Avanza’s own live quotes continue as usual.</p></section>
+<details id="pairing" hidden><summary id="pairing-summary">Pair local bridge</summary><form id="pair"><p>Enter a one-time code from your local bridge.</p><label for="code">Pairing code</label><div class="pair-fields"><input id="code" autocomplete="off" spellcheck="false" maxlength="20" required pattern="[A-Fa-f0-9]{20}"><button id="pair-button" type="submit" disabled>Pair</button></div></form></details>
+<p id="feedback" role="status"></p>
+</main><footer>Visible order depth, not account buying power or guaranteed execution.</footer>
+<script src="popup.js"></script>
+</body></html>

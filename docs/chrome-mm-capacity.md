@@ -1,9 +1,25 @@
-# Avanza Ordertillägg — optional Chrome extension
+# Avanza Order Extension — optional Chrome extension
 
 The separate Manifest V3 extension in `chrome-extension/` shows **MM ask price ×
 visible volume at that MM ask level**. It requires no investment amount, order
 field changes or per-trade clicks. It is not account buying power, total depth
 at all prices, an execution guarantee, or a commission-inclusive amount.
+
+Version **0.1.12** adds an English popup with a persistent **ON/OFF** switch
+and toolbar badge. OFF removes the extension's amounts and stops new bridge
+reads; pairing remains saved. Re-enabling starts a fresh current-view read.
+Pairing controls collapse after setup and remain available under **Pair bridge again**.
+
+**Refresh capacity** offers **When the tab is shown**, **Every 30 seconds**,
+**Every minute** (default), **Every 2 minutes** and **Every 5 minutes**.
+Settings apply to open tabs immediately and survive popup/worker restarts.
+**When the tab is shown** reads on opening, returning to the tab or restoring a
+page, with no recurring bridge reads while staying there. Provider cooldowns
+still apply; a failed read in this mode waits for the next view. Avanza's own
+live stream continues normally and can update the order-page amount immediately.
+All extension labels and tooltips are English; Avanza's Swedish site and SEK
+number formatting are unchanged. Reload the extension and open Avanza tabs once
+to install this version's scripts.
 
 Version **0.1.11** waits one minute between completed list passes and order-page
 bridge fallback reads. First reads and returning to a visible tab remain immediate,
@@ -19,7 +35,7 @@ existing fifteen-second source-age validation.
 
 All tabs share a thirty-second retry pause after TIMEOUT/BUSY or connection
 failure, and sixty seconds after RATE_LIMITED. Affected list passes stop early.
-Only the retry deadline, not quote data, persists across worker restarts.
+The retry deadline, settings and pairing persist across worker restarts; quote data does not.
 
 Version **0.1.9** accepts the order stream's ISO `updated` timestamp as well as
 the legacy numeric `receivedTime`. Both preserve the original source time and
@@ -66,15 +82,15 @@ pairing survives at the same extension path/ID.
    uv run --locked python -m avanza_mcp.capacity_bridge pair
    ```
 
-   Enter the code in the extension popup within ten minutes and choose **Para**.
-   `PAIRED` confirms the token exchange. It does not establish fresh market data.
+   Enter the code in the extension popup within ten minutes and choose **Pair**.
+   **Paired** confirms the token exchange. It does not establish fresh market data.
    Do not paste the code or permanent token into chat or GitHub.
-6. Open Avanza's **Hitta certifikat** list. The added **Max köpbelopp** column
+6. Open Avanza's **Hitta certifikat** list. The added **Max buy capacity** column
    updates automatically while the tab is visible. Existing Avanza filters and
    spread sorting remain authoritative. This version adds no separate amount
    filter or client-side reordering of Angular-managed rows.
-7. On `/handla/order.html/kop/<id>` or `/salj/<id>`, the **Max köpbelopp i synligt
-   orderdjup** panel appears immediately below the visible order depth. The amount appears only when the
+7. On `/handla/order.html/kop/<id>` or `/salj/<id>`, the **Max buy capacity in visible
+   order depth** panel appears immediately below the visible order depth. The amount appears only when the
    MM ask marker, SEK currency, price, volume, instrument ID and a fresh snapshot
    agree. The page's own depth stream is preferred and needs no pairing. If its
    source time is unavailable or no longer fresh, the paired local bridge can
@@ -121,20 +137,22 @@ does not imply a fresh book. Delayed books cannot establish a new verified amoun
 - Version **0.1.4** pauses a row for **30 seconds** after `MM_MISSING`, or when
   the list has no usable ask and a probe returns stale/unavailable depth. The
   amount cell is blank during this pause. A changed list ask resumes reads at
-  the next scheduled pass; the timer also triggers a new probe.
+  the next scheduled pass; interval mode also probes again after the pause
+  (on-visible mode waits for the next view).
   Fresh verified broker depth takes priority over a missing list price and is
   refreshed normally. `STALE` alone never means the market maker is absent.
   Pauses clear on navigation/visibility changes and are bounded to 200 IDs.
 - Quote cache: **750 ms**, at most 200 entries, shared across tabs. Cached
   results are checked again against source age before returning. Duplicate
   concurrent reads coalesce. Metadata cache is also bounded to 200 entries.
-- Refresh is **sixty seconds after a completed visible-row pass** (version
-  **0.1.11**). Per-instrument failures do not abort later rows. Order-page bridge
-  fallback also waits sixty seconds between reads; passive DOM/stream updates
+- Refresh defaults to **sixty seconds after a completed visible-row pass**,
+  configurable in the popup since **0.1.12**. The on-visible option has no timer.
+  Per-instrument failures do not abort later rows. Order-page bridge
+  fallback uses the same selected interval; passive DOM/stream updates
   remain immediate.
   Whole-bridge failures, timeouts or busy results pause requests across tabs for
   thirty seconds; rate limits pause them for sixty seconds. Missing authentication
-  or pairing retains the normal sixty-second retry. Provider `Retry-After` is also respected by
+  or pairing retains the selected retry interval. Provider `Retry-After` is also respected by
   the broker. Rendering/freshness checks run every 250 ms and DOM
   changes update the order panel through a MutationObserver. Returning to a
   visible tab or restoring a page triggers an immediate read; existing bridge

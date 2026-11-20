@@ -32,6 +32,7 @@ test("bridge quotes require exact units, source age and consistent amount", () =
 test("background pins requests and never gives content scripts the token", async () => {
   let handler, access, requested;
   const chrome = {
+    action: {setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {}, setTitle: async () => {}},
     storage: {local: {setAccessLevel: async x => {access = x;}, get: async () => ({token: "a".repeat(64)}), set: async () => {}}},
     runtime: {getURL: x => `chrome-extension://${"a".repeat(32)}/${x}`, onMessage: {addListener: fn => {handler = fn;}}}
   };

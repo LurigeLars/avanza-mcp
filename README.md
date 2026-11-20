@@ -35,11 +35,11 @@ The server provides:
 The Avanza banking/trading surface is intentionally read-only. There are no MCP tools
 for placing, editing or cancelling orders, moving money or withdrawing funds.
 
-An optional, separate Chrome MV3 extension, [Avanza Ordertillägg](#optional-chrome-extension--avanza-ordertillägg), displays
-**Max köpbelopp** on the certificate list and order page without amount entry.
-It reads the visible MM ask depth, withholds stale/unverified amounts and uses a
-paired loopback-only read bridge for list rows. It is disabled by default and
-does not change the MCP tool catalog.
+An optional, separate Chrome MV3 extension, [Avanza Order Extension](#optional-chrome-extension--avanza-order-extension), displays
+**Max buy capacity** on the certificate list and order page without amount entry.
+It verifies new amounts against fresh MM ask depth and uses a paired loopback-only
+read bridge for list rows. The optional bridge is disabled by default and does
+not change the MCP tool catalog.
 
 ## Why this fork exists
 
@@ -374,10 +374,15 @@ The reviewed authenticated/session/forum surface contains:
 
 </details>
 
-## Optional Chrome extension — Avanza Ordertillägg
+## Optional Chrome extension — Avanza Order Extension
 
-The extension popup shows `OFFLINE` if its initial status request to the service
-worker fails or returns no response, rather than remaining at `Kontrollerar…`.
+The English popup includes a persistent **ON/OFF** switch and toolbar badge.
+OFF removes extension amounts and stops new capacity reads without losing pairing.
+**Refresh capacity** selects 30 seconds, one minute (default), two minutes, five
+minutes, or **When the tab is shown** (opening/returning only, no recurring reads).
+Settings apply to open tabs immediately. Pairing is collapsed after setup and
+available under **Pair bridge again**. If the worker is unavailable, the popup
+shows **Unavailable** and leaves controls disabled.
 
 The separate extension in `chrome-extension/` displays the maximum **visible MM
 ask capacity in SEK**: the market maker's current ask price multiplied by the
@@ -386,15 +391,16 @@ on an order page. It does not place orders, change order fields, read account
 balances, or calculate account buying power. The amount excludes commission and
 is not a guarantee that the displayed volume can be filled.
 
-- **Certificate list:** adds the **Max köpbelopp** column. Up to twenty visible
+- **Certificate list:** adds the **Max buy capacity** column. Up to twenty visible
   rows are read in batches of five through a paired, read-only local bridge.
-  Another pass starts sixty seconds after the previous pass finishes. Returning
-  to a tab starts a fresh read immediately. Hidden tabs stop fetching; unusable MM/ask rows pause for thirty seconds before a new probe.
-- **Order page:** shows **Max köpbelopp i synligt orderdjup**, reads the visible
+  By default, another pass starts sixty seconds after the previous pass finishes.
+  Returning to a tab starts a fresh read immediately. Hidden tabs stop fetching;
+  unusable MM/ask rows pause before a probe on the next scheduled pass.
+- **Order page:** shows **Max buy capacity in visible order depth**, reads the visible
   MM ask row and verifies it against the page's
   existing depth stream. Those page updates remain immediate and add no network
   requests. If necessary, the paired bridge checks only the instrument in the
-  order URL, with sixty seconds between fallback reads.
+  order URL, using the same selected refresh interval.
 - **Display:** the last verified amount stays visible during background refresh,
   including when its source time becomes older than fifteen seconds. The tooltip
   retains the original book time. Only newly verified data replaces it; a failed
