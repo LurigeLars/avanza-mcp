@@ -7,21 +7,30 @@
   const values = new Map();
   const paused = new Map();
   const seen = new WeakMap();
+  let shown = new WeakMap();
   const visible = element => {
     const r = element.getBoundingClientRect();
     return r.height > 0 && r.width > 0 && r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth
       && !element.closest('[aria-hidden="true"], [hidden]') && getComputedStyle(element).visibility !== "hidden";
   };
   function text(node, value) { if (node.textContent !== value) node.textContent = value; }
-  function display(node, q, failure = "SAKNAR VERIFIERAT DJUP") {
+  function display(node, q, failure = "SAKNAR VERIFIERAT DJUP", id = null) {
+    if (shown.get(node)?.id !== id) shown.delete(node);
     if (failure === "" || q?.status === "MM_MISSING" || failure === "MM_MISSING") {
+      shown.delete(node);
       text(node, ""); node.classList.remove("avz-capacity-stale"); node.removeAttribute("title");
       return;
     }
-    const ok = C.validQuote(q);
-    text(node, ok ? `${format.format(Number(q.amount))} kr` : `— ${q?.status === "OK" ? "STALE" : q?.status ?? failure}`);
-    node.classList.toggle("avz-capacity-stale", !ok);
-    node.title = ok ? `${q.volume} st × ${format.format(q.price)} SEK · boktid ${new Date(q.source_time).toLocaleTimeString("sv-SE")} · MM-nivå ${q.mm_level + 1}. Synligt djup, ingen garanterad fill.` : "Belopp dolt: saknat, gammalt eller obekräftat underlag.";
+    const status = q?.status === "OK" ? "STALE" : q?.status ?? failure;
+    const waiting = ["STALE", "HÄMTAR", "BACKOFF", "DJUP EJ VERIFIERAT", "PAUSAD"].includes(status);
+    if (C.validQuote(q)) shown.set(node, {id, quote: q});
+    else if (!waiting) shown.set(node, {id, failure: status});
+    const entry = shown.get(node), quote = entry?.quote;
+    text(node, quote ? `${format.format(Number(quote.amount))} kr` : entry?.failure ? "— FAILED" : "—");
+    node.classList.toggle("avz-capacity-stale", !quote);
+    if (quote) node.title = `Senast verifierat: ${quote.volume} st × ${format.format(quote.price)} SEK · boktid ${new Date(quote.source_time).toLocaleTimeString("sv-SE")} · MM-nivå ${quote.mm_level + 1}. Synligt djup, ingen garanterad fill.`;
+    else if (entry?.failure) node.title = `Uppdateringen misslyckades: ${entry.failure}.`;
+    else node.removeAttribute("title");
   }
   function updateOrder() {
     if (!orderRoot?.isConnected || !orderPanel?.isConnected) return;
@@ -39,7 +48,7 @@
     const failure = noAsk ? "" : !dom ? "MM-DJUP EJ LÄSBART" : !sek ? "VALUTA EJ VERIFIERAD"
       : snapshot && !C.fresh(snapshot.source_time) ? "STALE"
       : snapshot && dom ? "SIDANS DJUP AVVIKER" : orderFailure;
-    display(orderPanel.querySelector("strong"), q, failure);
+    display(orderPanel.querySelector("strong"), q, failure, id);
   }
   window.addEventListener("message", event => {
     if (event.source !== window || event.origin !== location.origin || event.data?.type !== "AVZ_CAPACITY_DEPTH") return;
@@ -72,12 +81,12 @@
     try {
       const result = await chrome.runtime.sendMessage({type: "CAPACITY", ids: [id]});
       if (document.hidden || C.bookId(location.href) !== id) return;
-      const q = C.keepFresh(snapshot, result?.items?.[id] ?? {status: result?.status ?? "OFFLINE"});
+      const q = result?.items?.[id] ?? {status: result?.status ?? "OFFLINE"};
       if (!(snapshot?.via === "stream" && C.fresh(snapshot.source_time))) {
         if (C.validQuote(q)) snapshot = {...q, id, via: "bridge"};
         else { snapshot = null; orderFailure = q?.status === "OK" ? "STALE" : q?.status ?? result?.status ?? "OFFLINE"; }
       }
-      nextOrderPoll = performance.now() + 10000;
+      nextOrderPoll = performance.now() + Math.max(10000, (result?.retry_after ?? 0) * 1000);
     } catch {
       if (document.hidden || C.bookId(location.href) !== id) return;
       if (!(snapshot?.via === "stream" && C.fresh(snapshot.source_time))) {
@@ -114,7 +123,7 @@
       if (!cell) { cell = document.createElement("td"); cell.className = "avz-capacity-cell"; row.append(cell); }
       if (seen.get(row) !== id) { seen.set(row, id); display(cell, null, "HÄMTAR"); }
       const value = values.get(id);
-      display(cell, value, "HÄMTAR");
+      display(cell, value, "HÄMTAR", id);
       if (paused.has(id)) {
         display(cell, null, "");
       }
@@ -141,7 +150,7 @@
         const result = await chrome.runtime.sendMessage({type: "CAPACITY", ids: group});
         if (location.href !== route || document.hidden) return;
         for (const id of group) {
-          const q = C.keepFresh(values.get(id), result?.items?.[id] ?? {status: result?.status ?? "OFFLINE"});
+          const q = result?.items?.[id] ?? {status: result?.status ?? "OFFLINE"};
           values.set(id, C.validQuote(q) ? q : {status: q?.status === "OK" ? "STALE" : q?.status ?? result?.status ?? "OFFLINE"});
           const ask = rows.find(r => r.id === id)?.ask;
           if (q?.status === "MM_MISSING" || (ask === null && ["STALE", "DEPTH_UNKNOWN", "DEPTH_UNAVAILABLE"].includes(q?.status))) {
@@ -151,13 +160,11 @@
         listRows();
         if (!result?.items) {
           for (const id of ids) values.set(id, {status: result?.status ?? "OFFLINE"});
-          nextPoll = performance.now() + 10000;
+          nextPoll = performance.now() + Math.max(10000, (result?.retry_after ?? 0) * 1000);
           return;
         }
-        if (group.some(id => ["RATE_LIMITED", "AUTH_REQUIRED"].includes(values.get(id)?.status))) {
-          const status = group.map(id => values.get(id)?.status).find(s => ["RATE_LIMITED", "AUTH_REQUIRED"].includes(s));
-          for (const id of ids) if (!values.has(id)) values.set(id, {status});
-          nextPoll = performance.now() + 10000;
+        if (group.some(id => ["RATE_LIMITED", "AUTH_REQUIRED", "TIMEOUT", "BUSY", "OFFLINE"].includes(values.get(id)?.status))) {
+          nextPoll = performance.now() + Math.max(10000, (result?.retry_after ?? 0) * 1000);
           return;
         }
       }
@@ -174,10 +181,10 @@
   }
   function tick() {
     if (location.href !== lastRoute) {
-      snapshot = null; values.clear(); paused.clear(); nextPoll = 0; nextOrderPoll = 0; orderFailure = "DJUP EJ VERIFIERAT"; lastRoute = location.href;
+      shown = new WeakMap(); snapshot = null; values.clear(); paused.clear(); nextPoll = 0; nextOrderPoll = 0; orderFailure = "DJUP EJ VERIFIERAT"; lastRoute = location.href;
     }
     if (document.hidden) {
-      snapshot = null; values.clear(); paused.clear();
+      shown = new WeakMap(); snapshot = null; values.clear(); paused.clear();
       if (orderPanel) display(orderPanel.querySelector("strong"), null, "PAUSAD");
       return;
     }
@@ -187,6 +194,6 @@
     if (!document.hidden) { nextPoll = 0; nextOrderPoll = 0; }
     tick();
   });
-  window.addEventListener("pageshow", () => { snapshot = null; values.clear(); paused.clear(); nextPoll = 0; nextOrderPoll = 0; tick(); });
+  window.addEventListener("pageshow", () => { shown = new WeakMap(); snapshot = null; values.clear(); paused.clear(); nextPoll = 0; nextOrderPoll = 0; tick(); });
   setInterval(tick, 250);
 })();
