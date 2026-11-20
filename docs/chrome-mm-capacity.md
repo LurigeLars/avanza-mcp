@@ -5,6 +5,10 @@ visible volume at that MM ask level**. It requires no investment amount, order
 field changes or per-trade clicks. It is not account buying power, total depth
 at all prices, an execution guarantee, or a commission-inclusive amount.
 
+Version **0.1.9** accepts the order stream's ISO `updated` timestamp as well as
+the legacy numeric `receivedTime`. Both preserve the original source time and
+the fifteen-second age limit; missing, invalid and future times stay unusable.
+
 Version **0.1.7** refreshes immediately when a tab becomes visible again,
 clears previous bridge data after a hard message-channel failure, and accepts
 multiple small SSE events in a large network chunk. A fresh page stream takes

@@ -112,6 +112,30 @@ test("SSE accepts many small frames in large and coalesced chunks", async () => 
   }
 });
 
+test("SSE reads the upstream updated ISO timestamp without replacing source age", async () => {
+  const stamp = Date.now();
+  const payload = {orderbookId: "123", updated: new Date(stamp).toISOString(), marketMakerLevelInAsk: 0,
+    levels: [{sellPrice: 43.03, sellVolume: 61900}]};
+  const {messages} = await observeDepthChunks([`event: ORDER_DEPTH\ndata: ${JSON.stringify(payload)}\n\n`]);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].source_time, stamp);
+  assert.equal(C.fresh(messages[0].source_time, stamp), true);
+  assert.equal(C.fresh(messages[0].source_time, stamp + C.MAX_AGE + 1), false);
+});
+
+test("SSE missing, invalid, future or stale timestamps cannot gain freshness", async () => {
+  const now = Date.now();
+  for (const timestamps of [{}, {updated: "invalid"}, {updated: now},
+    {updated: new Date(now + 1000).toISOString()},
+    {receivedTime: now - C.MAX_AGE - 1, updated: new Date(now).toISOString()}]) {
+    const payload = {orderbookId: "123", ...timestamps, marketMakerLevelInAsk: 0,
+      levels: [{sellPrice: 2, sellVolume: 100}]};
+    const {messages} = await observeDepthChunks([`event: ORDER_DEPTH\ndata: ${JSON.stringify(payload)}\n\n`]);
+    assert.equal(messages.length, 1);
+    assert.equal(C.fresh(messages[0].source_time, now), false);
+  }
+});
+
 test("SSE keeps the per-frame and unfinished-buffer size limits", async () => {
   const frame = padding => `event: ORDER_DEPTH\ndata: ${JSON.stringify({orderbookId: "123",
     receivedTime: Date.now(), marketMakerLevelInAsk: 0, levels: [{sellPrice: 2, sellVolume: 100}], padding})}\n\n`;
