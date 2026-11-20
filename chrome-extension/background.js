@@ -2,6 +2,7 @@
 const ready = chrome.storage.local.setAccessLevel({accessLevel: "TRUSTED_CONTEXTS"});
 const BASE = "http://127.0.0.1:18762";
 let inFlight = 0;
+let retryUntil = 0;
 async function request(path, data, token) {
   const response = await fetch(BASE + path, {
     method: "POST", credentials: "omit", cache: "no-store", redirect: "error",
@@ -21,7 +22,8 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       && ["www.avanza.se", "avanza.se"].includes(url.hostname)
       && (url.pathname === "/borshandlade-produkter/certifikat-torg/lista.html" || orderId);
   } catch { /* Unknown sender is denied. */ }
-  if (!(popup || page) || inFlight >= 4) { reply({status: "DENIED"}); return false; }
+  if (!(popup || page)) { reply({status: "DENIED"}); return false; }
+  if (inFlight >= 4) { reply({status: "BACKOFF", retry_after: 5}); return false; }
   (async () => {
     await ready;
     if (popup && message?.type === "PAIR" && /^[A-F0-9]{20}$/.test(message.code)) {
@@ -32,14 +34,25 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       }
       return {status: result.status ?? "PAIR_REQUIRED"};
     }
-    const {token} = await chrome.storage.local.get("token");
+    const {token, capacityRetryUntil} = await chrome.storage.local.get(["token", "capacityRetryUntil"]);
     if (popup && message?.type === "STATUS") return {status: token ? "PAIRED" : "PAIR_REQUIRED"};
     const ids = message?.ids;
     if (!page || message?.type !== "CAPACITY" || !Array.isArray(ids) || ids.length < 1 || ids.length > 5
         || ids.some(i => typeof i !== "string" || !/^[0-9]{1,12}$/.test(i)) || new Set(ids).size !== ids.length) return {status: "INVALID"};
     if (orderId && (ids.length !== 1 || ids[0] !== orderId)) return {status: "INVALID"};
     if (!token) return {status: "PAIR_REQUIRED"};
-    return request("/capacity", {ids}, token);
+    if (Number.isSafeInteger(capacityRetryUntil)) retryUntil = Math.max(retryUntil, capacityRetryUntil);
+    if (Date.now() < retryUntil) return {status: "BACKOFF", retry_after: Math.ceil((retryUntil - Date.now()) / 1000)};
+    const result = await request("/capacity", {ids}, token).catch(() => ({status: "OFFLINE"}));
+    const statuses = [result.status, ...Object.values(result.items ?? {}).map(q => q?.status)];
+    const delay = statuses.includes("RATE_LIMITED") ? 60000
+      : statuses.some(s => ["TIMEOUT", "BUSY", "OFFLINE"].includes(s)) ? 30000 : 0;
+    if (delay) {
+      retryUntil = Math.max(retryUntil, Date.now() + delay);
+      await chrome.storage.local.set({capacityRetryUntil: retryUntil});
+      result.retry_after = Math.ceil((retryUntil - Date.now()) / 1000);
+    }
+    return result;
   })().then(reply).catch(() => reply({status: "OFFLINE"})).finally(() => { inFlight--; });
   inFlight++;
   return true;

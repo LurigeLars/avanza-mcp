@@ -395,12 +395,18 @@ is not a guarantee that the displayed volume can be filled.
   existing depth stream. Those page updates remain immediate and add no network
   requests. If necessary, the paired bridge checks only the instrument in the
   order URL, with ten seconds between fallback reads.
-- **Freshness:** a previously verified amount remains visible during a temporary
-  refresh gap for at most fifteen seconds from the original book timestamp.
-  Old or unverifiable data, missing currency, hard failures and order-page
-  mismatches withhold the amount and show a status instead. Missing-MM results,
+- **Display:** the last verified amount stays visible during background refresh,
+  including when its source time becomes older than fifteen seconds. The tooltip
+  retains the original book time. Only newly verified data replaces it; a failed
+  read or validation shows **FAILED**. Before a value has been verified, the cell
+  shows a dash. Values live only in the current view's memory and clear on
+  navigation, reload, hidden tabs and page restoration. Missing-MM results,
   paused rows without a usable ask, and an order book displaying no ask prices
   leave the amount field blank.
+- **Overload:** all extension tabs share a thirty-second pause after TIMEOUT/BUSY
+  or a connection failure, and sixty seconds after RATE_LIMITED. An overloaded
+  list pass stops instead of requesting the remaining rows. Existing provider
+  Retry-After handling in the broker remains in force.
 - **Isolation:** the opt-in bridge listens only on `127.0.0.1:18762`, requires
   one-time pairing, validates the extension origin and accepts only bounded
   numeric book IDs. Avanza session credentials stay in the existing isolated

@@ -43,7 +43,7 @@ class SyntheticReader:
         now = int(time.time() * 1000)
         items = {}
         for i in ids:
-            status = self.forced_status or {"124": "TIMEOUT", "128": "OK" if self.missing_mm_restored else "MM_MISSING", "130": "STALE"}.get(i, "OK")
+            status = self.forced_status or {"128": "OK" if self.missing_mm_restored else "MM_MISSING", "130": "STALE"}.get(i, "OK")
             items[i] = ({"status": status, "amount": "263360.00", "price": 263.36,
                          "volume": 1000, "mm_level": 1, "currency": "SEK", "source_time": now}
                         if status == "OK" else {"status": status, "amount": None, "source_time": now - 20000 if status == "STALE" else now})
@@ -77,26 +77,78 @@ def verify_content_lifecycle(p):
     """Exercise the real content scripts with controlled message failures/time."""
     browser = p.chromium.launch(headless=True, executable_path=os.environ.get("CAPACITY_TEST_CHROMIUM"))
     try:
-        def setup(path, body):
+        def setup(path, body, mode='ok'):
             page = browser.new_page(viewport={"width": 1280, "height": 900})
             page.route("https://www.avanza.se/**", lambda route: route.fulfill(content_type="text/html", body=body))
             page.goto("https://www.avanza.se" + path)
-            page.evaluate("""() => {
-                window.testCalls=0; window.testHidden=false; window.testOffset=0; window.testMode='ok';
+            page.evaluate("""mode => {
+                window.testCalls=0; window.testHidden=false; window.testOffset=0; window.testMode=mode;
+                window.testAge=0; window.testVolume=1000;
                 const originalNow=performance.now.bind(performance);
+                const originalDateNow=Date.now.bind(Date);
+                Date.now=()=>originalDateNow()+testAge;
                 performance.now=()=>originalNow()+testOffset;
                 Object.defineProperty(document, 'hidden', {get:()=>testHidden});
                 window.chrome={runtime:{sendMessage:message=>{
                     testCalls++;
                     if(testMode==='reject') return Promise.reject(new Error('Synthetic message failure'));
                     if(testMode==='pending') return new Promise((resolve,reject)=>{window.testReject=reject;});
+                    if(testMode==='backoff')return {status:'BACKOFF',retry_after:30};
+                    if(testMode==='stale')return {items:Object.fromEntries(message.ids.map(id=>[id,{status:'STALE'}]))};
+                    if(['TIMEOUT','BUSY','RATE_LIMITED'].includes(testMode))return {
+                        items:Object.fromEntries(message.ids.map(id=>[id,{status:testMode}])),
+                        retry_after:testMode==='RATE_LIMITED'?60:30};
                     return {items:Object.fromEntries(message.ids.map(id=>[id,{status:'OK',price:263.36,
-                        volume:1000,amount:'263360.00',mm_level:1,currency:'SEK',source_time:Date.now()}]))};
+                        volume:testVolume,amount:String(263.36*testVolume),mm_level:1,currency:'SEK',source_time:Date.now()}]))};
                 }}};
-            }""")
+            }""", mode)
             for name in ["core.js", "content.js"]:
                 page.add_script_tag(content=(ROOT / "chrome-extension" / name).read_text(encoding="utf-8"))
             return page
+
+        for path, body, selector in [
+            ("/borshandlade-produkter/certifikat-torg/lista.html", LIST, "tbody .avz-capacity-cell"),
+            ("/handla/order.html/kop/123", ORDER, ".avz-capacity strong"),
+        ]:
+            page = setup(path, body)
+            amount = page.locator(selector).first
+            expect(amount).to_contain_text("kr")
+            original = amount.inner_text()
+            source_title = amount.get_attribute("title")
+            page.evaluate("testMode='stale';testAge=30000;testOffset=11000;document.dispatchEvent(new Event('visibilitychange'))")
+            page.wait_for_function("testCalls>=2")
+            expect(amount).to_have_text(original)
+            assert amount.get_attribute("title") == source_title, "Refresh must not renew the source timestamp"
+            page.evaluate("testHidden=true;document.dispatchEvent(new Event('visibilitychange'));testHidden=false;document.dispatchEvent(new Event('visibilitychange'))")
+            expect(amount).to_have_text("—")
+            page.evaluate("testMode='ok';testVolume=1200;testOffset=22000;document.querySelectorAll('.volume.sell')[1]?.replaceChildren('1 200');document.dispatchEvent(new Event('visibilitychange'))")
+            page.wait_for_function("testCalls>=3")
+            expect(amount).not_to_have_text(original)
+            expect(amount).to_contain_text("kr")
+            page.evaluate("testMode='reject';testOffset=33000;document.dispatchEvent(new Event('visibilitychange'))")
+            expect(amount).to_have_text("— FAILED")
+            assert "OFFLINE" in amount.get_attribute("title")
+            page.evaluate("testMode='backoff';testOffset=44000;document.dispatchEvent(new Event('visibilitychange'))")
+            page.wait_for_function("testCalls>=5")
+            expect(amount).to_have_text("— FAILED")
+            page.evaluate("testMode='stale';history.replaceState({},'',location.pathname+'?revisit=1')")
+            expect(amount).to_have_text("—")
+            page.evaluate("history.replaceState({},'',location.pathname)")
+            expect(amount).to_have_text("—")
+            page.close()
+        print(json.dumps({"quiet_refresh": "PASS", "no_source_retiming": "PASS", "failed_latches_until_recovery": "PASS", "no_previous_visit_amount": "PASS"}))
+
+        for status, seconds in [('TIMEOUT', 30), ('BUSY', 30), ('RATE_LIMITED', 60)]:
+            page = setup('/borshandlade-produkter/certifikat-torg/lista.html', LIST, mode=status)
+            page.wait_for_function('testCalls===1')
+            expect(page.locator('tbody .avz-capacity-cell').first).to_have_text('— FAILED')
+            page.evaluate('testOffset=11000')
+            page.wait_for_timeout(300)
+            assert page.evaluate('testCalls') == 1, 'Stop the pass and wait instead of requesting the remaining rows'
+            page.evaluate('offset=>testOffset=offset', seconds * 1000 + 1000)
+            page.wait_for_function('testCalls===2')
+            page.close()
+        print(json.dumps({"stop_overloaded_list_pass": "PASS", "retry_pause": "PASS"}))
 
         for path, body, selector in [
             ("/borshandlade-produkter/certifikat-torg/lista.html", LIST, "tbody .avz-capacity-cell"),
@@ -123,9 +175,9 @@ def verify_content_lifecycle(p):
         amount = page.locator(".avz-capacity strong")
         expect(amount).to_contain_text("kr")
         page.evaluate("testMode='reject';testOffset=11000;document.dispatchEvent(new Event('visibilitychange'))")
-        expect(amount).to_contain_text("OFFLINE")
+        expect(amount).to_contain_text("FAILED")
         page.wait_for_timeout(300)
-        expect(amount).to_contain_text("OFFLINE")
+        expect(amount).to_contain_text("FAILED")
         page.evaluate("testMode='ok';testOffset=22000;document.dispatchEvent(new Event('visibilitychange'))")
         expect(amount).to_contain_text("kr")
 
@@ -209,7 +261,7 @@ def main():
                 page.wait_for_function("document.querySelectorAll('tbody .avz-capacity-cell')[5].textContent.includes('263')")
                 expect(page.locator("tbody .avz-capacity-cell").nth(6)).to_have_text("")
                 expect(page.locator("tbody .avz-capacity-cell").nth(8)).to_have_text("")
-                expect(page.locator("tbody .avz-capacity-cell").nth(2)).to_contain_text("TIMEOUT")
+                expect(page.locator("tbody .avz-capacity-cell").nth(2)).to_contain_text("kr")
                 assert reader.requested == {"123", "456", "124", "125", "126", "127", "128", "129", "130"}
                 page.wait_for_timeout(9000)
                 assert reader.requested_counts["128"] == reader.requested_counts["130"] == 1
@@ -220,7 +272,8 @@ def main():
                 assert reader.requested_counts["129"] >= 2, "Fresh depth overrides missing list price on the next pass"
                 assert reader.requested_counts["128"] >= 2, "A changed list ask must resume at the next scheduled pass"
                 page.locator("tbody tr").first.locator("a").evaluate("a => a.href='/handla/order.html/kop/invalid'")
-                page.wait_for_function("document.querySelector('tbody .avz-capacity-cell').textContent.includes('IDENTITET OKÄND')")
+                expect(page.locator('tbody .avz-capacity-cell').first).to_have_text('— FAILED')
+                assert 'IDENTITET OKÄND' in page.locator('tbody .avz-capacity-cell').first.get_attribute('title')
                 context.unroute("https://www.avanza.se/**")
 
                 source = {"price": 263.36, "volume": 1000}
@@ -239,7 +292,7 @@ def main():
                 expect(page.locator(".avz-capacity span")).to_have_text("Max köpbelopp i synligt orderdjup")
                 page.wait_for_function("document.querySelector('.avz-capacity strong').textContent.includes('263')")
                 page.locator(".price.sell").nth(1).evaluate("e => e.textContent = '200,00 *'")
-                page.wait_for_function("document.querySelector('.avz-capacity strong').textContent.includes('SIDANS DJUP AVVIKER')")
+                page.wait_for_function("document.querySelector('.avz-capacity strong').textContent.includes('FAILED')")
                 page.locator(".price.sell").nth(1).evaluate("e => e.textContent = '263,36 *'")
                 page.wait_for_function("document.querySelector('.avz-capacity strong').textContent.includes('263')")
                 fallback_calls = reader.calls
@@ -276,7 +329,7 @@ def main():
                 page.locator(".price.sell").evaluate_all("(cells, values) => cells.forEach((e,i) => e.textContent=values[i])", saved_asks)
                 page.wait_for_function("document.querySelector('.avz-capacity strong').textContent.includes('kr')")
                 page.locator(".volume.sell").nth(1).evaluate("e => e.textContent = 'unreadable'")
-                expect(page.locator(".avz-capacity strong")).to_contain_text("MM-DJUP EJ LÄSBART")
+                expect(page.locator(".avz-capacity strong")).to_contain_text("FAILED")
                 page.locator(".volume.sell").nth(1).evaluate("e => e.textContent = '1 020'")
                 page.wait_for_function("document.querySelector('.avz-capacity strong').textContent.includes('kr')")
 
@@ -288,7 +341,7 @@ def main():
                 page.wait_for_timeout(11500)
                 assert not page.locator(".avz-capacity strong").inner_text().startswith("—")
                 page.wait_for_timeout(4500)
-                assert "STALE" in page.locator(".avz-capacity strong").inner_text()
+                assert "kr" in page.locator(".avz-capacity strong").inner_text()
                 assert page.locator("#quantity").input_value() == ""
                 assert not errors, errors
 
@@ -296,7 +349,7 @@ def main():
                 page.goto("https://www.avanza.se/borshandlade-produkter/certifikat-torg/lista.html")
                 # Swap to a list fixture after order tests, then verify actual network refusal.
                 page.set_content(LIST)
-                page.wait_for_function("document.querySelector('tbody .avz-capacity-cell')?.textContent.includes('OFFLINE')", timeout=15000)
+                page.wait_for_function("document.querySelector('tbody .avz-capacity-cell')?.textContent.includes('FAILED')", timeout=15000)
                 print(json.dumps({"browser": context.browser.version, "pairing": "PASS",
                                   "list_bridge": "PASS", "unquoted_pause_and_resume": "PASS", "ten_second_polling": "PASS", "dom_mm_level_1": "PASS", "order_bridge_fallback": "PASS",
                                   "missing_mm_stale_offline": "PASS", "blank_absent_ask_and_missing_mm": "PASS", "order_fields_unchanged": "PASS",

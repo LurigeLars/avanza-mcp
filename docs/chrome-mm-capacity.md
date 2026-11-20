@@ -5,6 +5,17 @@ visible volume at that MM ask level**. It requires no investment amount, order
 field changes or per-trade clicks. It is not account buying power, total depth
 at all prices, an execution guarantee, or a commission-inclusive amount.
 
+Version **0.1.10** keeps the last verified amount visible during background
+refresh without showing STALE. It is current-view memory only, cleared on
+navigation, reload, hidden tabs and page restoration; no quote is saved for a
+later visit. A failed read/validation displays FAILED until successful recovery.
+The tooltip keeps the original source time. A new amount still requires the
+existing fifteen-second source-age validation.
+
+All tabs share a thirty-second retry pause after TIMEOUT/BUSY or connection
+failure, and sixty seconds after RATE_LIMITED. Affected list passes stop early.
+Only the retry deadline, not quote data, persists across worker restarts.
+
 Version **0.1.9** accepts the order stream's ISO `updated` timestamp as well as
 the legacy numeric `receivedTime`. Both preserve the original source time and
 the fifteen-second age limit; missing, invalid and future times stay unusable.
@@ -64,13 +75,13 @@ pairing survives at the same extension path/ID.
    source time is unavailable or no longer fresh, the paired local bridge can
    verify **only this URL's instrument**. That fallback adds a bounded read of
    the same book through the existing authenticated client. Price, volume and MM
-   index must match the visible DOM; a mismatch withholds the amount and displays
-   `SIDANS DJUP AVVIKER`. Last trade is never a substitute for current ask depth.
+   index must match the visible DOM; a mismatch displays FAILED, with the reason
+   in its tooltip. Last trade is never a substitute for current ask depth.
 
 For an explicitly **public-only** independent process, use
 `uv run --locked python -m avanza_mcp.capacity_bridge serve-public`. Do not run it
 alongside the integrated bridge. Public data can be delayed; a quick HTTP 200
-does not imply a fresh book, and delayed books display `STALE`.
+does not imply a fresh book. Delayed books cannot establish a new verified amount.
 
 ## Freshness and limits
 
@@ -80,7 +91,7 @@ does not imply a fresh book, and delayed books display `STALE`.
 - Currency comes from identity-checked certificate metadata (cached five
   minutes). Only verified SEK is displayed; no implicit FX conversion.
 - A positive finite price, positive integral volume and source `receivedTime`
-  no more than **15 seconds old** are required. Future or missing source times
+  no more than **15 seconds old** are required to accept a new amount. Future or missing source times
   fail closed. HTTP receive time, DOM mutation time and heartbeats cannot make
   an old book fresh. Both bridge and extension check the source clock.
 - The bridge processes at most **5 unique numeric IDs per request**, 1 KiB
@@ -116,25 +127,25 @@ does not imply a fresh book, and delayed books display `STALE`.
   **0.1.5**). Per-instrument failures do not abort later rows. Order-page bridge
   fallback also waits ten seconds between reads; passive DOM/stream updates
   remain immediate.
-  Whole-bridge failures, missing authentication/pairing or rate limits pause
-  requests for ten seconds; provider `Retry-After` cooldown is also respected by
+  Whole-bridge failures, timeouts or busy results pause requests across tabs for
+  thirty seconds; rate limits pause them for sixty seconds. Missing authentication
+  or pairing retains the normal ten-second retry. Provider `Retry-After` is also respected by
   the broker. Rendering/freshness checks run every 250 ms and DOM
   changes update the order panel through a MutationObserver. Returning to a
   visible tab or restoring a page triggers an immediate read; existing bridge
   limits and provider cooldown still apply. Browser scheduling
   and multi-batch upstream latency still apply; this is not an exact ten-second
   per-instrument SLA.
-- `STALE`, `OFFLINE`, `TIMEOUT`, `BUSY`, `DEPTH_UNAVAILABLE`, `AUTH_REQUIRED`, `RATE_LIMITED`, `PAIR_REQUIRED`, `MM_MISSING`,
-  `CURRENCY_UNKNOWN` and unverified DOM all withhold the amount. Hidden tabs
-  pause fetching and clear their observations. Failed reads do not extend a
-  previous quote's lifetime.
-- The extension keeps the previous verified amount through temporary refresh
-  gaps (`STALE`, `TIMEOUT`, `BUSY`, `DEPTH_UNAVAILABLE`) while its original book
-  timestamp is still within fifteen seconds. A newer conflicting source or hard
-  validation/authentication failure invalidates it immediately. The timestamp
-  is never reset to retrieval time. An older five/eight-second bridge can remain
-  running during the extension update; the bridge's fifteen-second limit takes
-  effect at its next normal restart, without needing an immediate BankID reset.
+- STALE or a pending retry keeps the current view's last verified amount, even
+  beyond fifteen seconds. Its original source time is never renewed. With no
+  verified value yet, a dash is shown. The backend's source-age validation is
+  unchanged; retained display history is not a fresh quote.
+- OFFLINE, TIMEOUT, BUSY, DEPTH_UNAVAILABLE, AUTH_REQUIRED, RATE_LIMITED,
+  PAIR_REQUIRED, CURRENCY_UNKNOWN and unverified DOM display FAILED and discard
+  the retained amount. A pending retry does not clear that failure. Missing MM
+  or ask prices still leave the cell blank. Hidden tabs stop fetching and clear
+  observations, display history and errors. Navigation/reload/page restoration
+  also clear them; reused rows never inherit another instrument's value.
 
 ## Security and independence
 
@@ -208,9 +219,10 @@ cookies or tokens. Run only a small, known instrument set.
 The isolated browser test loads the real MV3 extension and reaches a real
 loopback HTTP listener on an ephemeral test port with synthetic pages/data; it
 does not stop or replace a live bridge. It covers pairing, list
-identity (including product links), later-batch progress after a row timeout,
+identity (including product links), early stop/backoff after an overloaded batch,
 MM level 1 rather than best ask, source-time gating, DOM updates, missing MM,
-stale expiry, order-page bridge fallback, exact DOM/bridge match, passive-stream
+current-view retention and clearing, FAILED recovery, order-page bridge fallback,
+exact DOM/bridge match, passive-stream
 priority, actual bridge shutdown/network refusal and unchanged order fields.
 The required `fork-ci` job runs these checks
 on Ubuntu 24.04 with Playwright's pinned Chromium installation. Python tests cover mapping,
