@@ -329,6 +329,95 @@ async def test_order_depth_does_not_extend_memory_only_idle_timer(monkeypatch, c
     assert instances[0].disconnect_calls == 1
 
 
+async def test_verified_health_read_extends_memory_only_idle_timer(monkeypatch, capsys):
+    """get_auth_status is a real authenticated read; it must count as session use."""
+    session = SessionMaterial((), "token")
+    idle = worker._MEMORY_ONLY_IDLE_SECONDS
+    clock = {"now": 0.0}
+    instances = []
+
+    class FakeBrowserAuth:
+        def __init__(self, *args, **kwargs):
+            self.session = None
+            self.disconnect_calls = 0
+            instances.append(self)
+
+        async def open_browser(self):
+            self.session = session
+            return worker.AuthStatus(state="connected", message="connected")
+
+        async def disconnect(self):
+            self.disconnect_calls += 1
+            self.session = None
+            return worker.AuthStatus(state="disconnected", message="disconnected")
+
+        def status(self):
+            state = "connected" if self.session is not None else "disconnected"
+            return worker.AuthStatus(state=state, message=state)
+
+        async def aclose(self):
+            return None
+
+    async def accounts(auth, operation, arguments):
+        assert auth.session is session and operation == "accounts"
+        return {"ok": True, "result": {}}
+
+    # Health at 1h50m, then a status at 2h30m: without the fix the session
+    # would have hit the 2h idle limit (from login at 0) before the status.
+    commands = iter(
+        [
+            (0.0, {"action": "connect"}),
+            (idle - 600, {"action": "health"}),
+            (idle + 1800, {"action": "status"}),
+            (idle + 1800, {"action": "shutdown"}),
+        ]
+    )
+
+    def feed(loop, queue):
+        def push_next():
+            try:
+                at, command = next(commands)
+            except StopIteration:
+                return
+            clock["now"] = at
+            queue.put_nowait(json.dumps(command))
+            loop.call_later(0.01, push_next)
+
+        loop.call_soon(push_next)
+
+    monkeypatch.setattr(worker, "BrowserAuth", FakeBrowserAuth)
+    monkeypatch.setattr(worker, "_account_operation", accounts)
+    monkeypatch.setattr(worker, "_start_stdin_reader", feed)
+    monkeypatch.setattr(worker, "_parent_alive", lambda _pid: True)
+    monkeypatch.setattr(worker.time, "monotonic", lambda: clock["now"])
+
+    assert await worker._run_daemon("memory_only", 123) == "shutdown"
+
+    states = [
+        json.loads(line)["status"]["state"]
+        for line in capsys.readouterr().out.splitlines()
+        if line.strip()
+    ]
+    assert states == ["connected", "connected", "connected", "disconnected"]
+
+
+def test_daemon_expiry_reports_reason_and_exit_code():
+    idle = worker._MEMORY_ONLY_IDLE_SECONDS
+    absolute = worker._MEMORY_ONLY_ABSOLUTE_SECONDS
+    assert worker._daemon_session_expired(
+        mode="memory_only", now=idle, last_activity=0, session_started_at=0
+    ) == "idle_timeout"
+    assert worker._daemon_session_expired(
+        mode="memory_only", now=absolute, last_activity=absolute - 1, session_started_at=0
+    ) == "absolute_timeout"
+    assert worker._daemon_session_expired(
+        mode="memory_only", now=idle - 1, last_activity=0, session_started_at=0
+    ) is None
+    assert worker.DAEMON_EXIT_CODES["shutdown"] == 0
+    assert len(set(worker.DAEMON_EXIT_CODES.values())) == len(worker.DAEMON_EXIT_CODES)
+    assert 1 not in worker.DAEMON_EXIT_CODES.values()  # 1 = terminated or crashed
+
+
 def test_authenticated_market_batch_pacing_is_50ms():
     assert worker._MARKET_BATCH_MIN_REQUEST_INTERVAL == 0.05
 

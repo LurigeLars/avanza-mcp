@@ -45,6 +45,15 @@ _MEMORY_ONLY_IDLE_SECONDS = 2 * 60 * 60
 _MEMORY_ONLY_ABSOLUTE_SECONDS = 16 * 60 * 60
 _ONE_SHOT_IDLE_SECONDS = 5 * 60
 _TERMINAL_STATES = frozenset({"connected", "disconnected", "denied", "timed_out", "error"})
+# Exit codes tell the broker why a memory-only daemon (and its session) ended.
+DAEMON_EXIT_CODES = {
+    "shutdown": 0,
+    "invalid_mode": 2,
+    "idle_timeout": 10,
+    "absolute_timeout": 11,
+    "parent_gone": 12,
+    "stdin_closed": 13,
+}
 _ALLOWED_ACCOUNT_OPERATIONS = frozenset(
     {
         "accounts",
@@ -1086,7 +1095,8 @@ def _daemon_session_expired(
     now: float,
     last_activity: float | None,
     session_started_at: float | None,
-) -> bool:
+) -> str | None:
+    """Return the expiry reason, or None while the session may continue."""
     if last_activity is not None:
         idle_seconds = (
             _MEMORY_ONLY_IDLE_SECONDS
@@ -1094,19 +1104,22 @@ def _daemon_session_expired(
             else _ONE_SHOT_IDLE_SECONDS
         )
         if now - last_activity >= idle_seconds:
-            return True
+            return "idle_timeout"
 
-    return (
+    if (
         mode == "memory_only"
         and session_started_at is not None
         and now - session_started_at >= _MEMORY_ONLY_ABSOLUTE_SECONDS
-    )
+    ):
+        return "absolute_timeout"
+    return None
 
 
-async def _run_daemon(mode: str, parent_pid: int) -> None:
+async def _run_daemon(mode: str, parent_pid: int) -> str:
+    """Serve one in-memory session; return why it ended (see DAEMON_EXIT_CODES)."""
     if mode not in {"memory_only", "one_shot"}:
         _emit({"ok": False, "code": "invalid_mode"})
-        return
+        return "invalid_mode"
     auth = BrowserAuth(
         store=None,
         session_idle_seconds=_INTERNAL_BROWSER_IDLE_SECONDS,
@@ -1123,7 +1136,7 @@ async def _run_daemon(mode: str, parent_pid: int) -> None:
             if not _parent_alive(parent_pid):
                 if auth.session is not None:
                     await auth.disconnect()
-                return
+                return "parent_gone"
 
             if auth.session is not None:
                 if last_activity is None:
@@ -1134,14 +1147,19 @@ async def _run_daemon(mode: str, parent_pid: int) -> None:
                 last_activity = None
                 session_started_at = None
 
-            if auth.session is not None and _daemon_session_expired(
-                mode=mode,
-                now=now,
-                last_activity=last_activity,
-                session_started_at=session_started_at,
-            ):
+            expired = (
+                _daemon_session_expired(
+                    mode=mode,
+                    now=now,
+                    last_activity=last_activity,
+                    session_started_at=session_started_at,
+                )
+                if auth.session is not None
+                else None
+            )
+            if expired is not None:
                 await auth.disconnect()
-                return
+                return expired
 
             try:
                 line = await asyncio.wait_for(queue.get(), timeout=0.25)
@@ -1150,7 +1168,7 @@ async def _run_daemon(mode: str, parent_pid: int) -> None:
             if line is None:
                 if auth.session is not None:
                     await auth.disconnect()
-                return
+                return "stdin_closed"
 
             try:
                 command = json.loads(line)
@@ -1175,6 +1193,10 @@ async def _run_daemon(mode: str, parent_pid: int) -> None:
                 status = auth.status()
                 if status.state == "connected":
                     read_result = await _account_operation(auth, "accounts", {})
+                    # A verified account read is an ordinary authenticated request
+                    # that also refreshes Avanza's own session, so count it as use.
+                    if read_result.get("ok") is True and mode == "memory_only":
+                        last_activity = time.monotonic()
                     status = _account_read_health_status(read_result)
                 _emit(_safe_status(status))
                 continue
@@ -1186,7 +1208,7 @@ async def _run_daemon(mode: str, parent_pid: int) -> None:
                         state="disconnected", message="Avanza is not connected."
                     )
                 _emit(_safe_status(status))
-                return
+                return "shutdown"
             if action == "account":
                 operation = command.get("operation")
                 arguments = command.get("arguments", {})
@@ -1199,7 +1221,7 @@ async def _run_daemon(mode: str, parent_pid: int) -> None:
                     if mode == "one_shot":
                         await auth.disconnect()
                         _emit(response)
-                        return
+                        return "shutdown"
                 _emit(response)
                 continue
             if action == "market":
@@ -1396,8 +1418,7 @@ async def _read_first_command() -> dict[str, Any] | None:
 
 async def _async_main(args: argparse.Namespace) -> int:
     if args.kind == "daemon":
-        await _run_daemon(args.mode, args.parent_pid)
-        return 0
+        return DAEMON_EXIT_CODES[await _run_daemon(args.mode, args.parent_pid)]
 
     if args.kind == "market-daemon":
         if args.mode != "persistent":

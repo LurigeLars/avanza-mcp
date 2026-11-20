@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime
 from time import monotonic
 from typing import Any, Literal
 
@@ -15,6 +16,20 @@ import httpx
 from ..client.endpoints import authenticated_public_request_family
 from ..client.exceptions import AvanzaRateLimitError
 from .browser import AuthStatus
+from .worker import DAEMON_EXIT_CODES
+
+_EXIT_REASONS = {code: reason for reason, code in DAEMON_EXIT_CODES.items()}
+_ACTIVITY_ACTIONS = frozenset({"account", "market", "market_batch"})
+
+
+def _now() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _log_lifecycle(event: str, **fields: object) -> None:
+    """Write one credential-free lifecycle line (PIDs, modes, reason codes, times)."""
+    detail = " ".join(f"{key}={value}" for key, value in fields.items())
+    print(f"{_now()} avanza-auth {event} {detail}", file=sys.stderr, flush=True)
 
 SessionMode = Literal["persistent", "memory_only", "one_shot"]
 SESSION_MODES = frozenset({"persistent", "memory_only", "one_shot"})
@@ -104,6 +119,9 @@ class AuthProcessBroker:
         self._market_auth_backoff_until: dict[str, float] = {}
         self._depth_rate_limit_until = 0.0
         self._closed = False
+        self._exit_watchers: set[asyncio.Task[None]] = set()
+        self._connected_pids: set[int] = set()
+        self._last_activity: str | None = None
 
     async def connect(self) -> AuthStatus:
         self._ensure_open()
@@ -676,7 +694,7 @@ class AuthProcessBroker:
     ) -> asyncio.subprocess.Process:
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
-            return await asyncio.create_subprocess_exec(
+            process = await asyncio.create_subprocess_exec(
                 sys.executable,
                 "-m",
                 "avanza_mcp.auth.worker",
@@ -694,9 +712,47 @@ class AuthProcessBroker:
             )
         except (OSError, ValueError) as error:
             raise AuthWorkerOperationError("Could not start isolated auth worker") from error
+        if kind != "once":
+            _log_lifecycle("worker_started", kind=kind, mode=mode, pid=process.pid)
+            watcher = asyncio.create_task(self._watch_exit(process, kind))
+            self._exit_watchers.add(watcher)
+            watcher.add_done_callback(self._exit_watchers.discard)
+        return process
+
+    async def _watch_exit(self, process: asyncio.subprocess.Process, kind: str) -> None:
+        code = await process.wait()
+        fields: dict[str, object] = {
+            "kind": kind,
+            "pid": process.pid,
+            "code": code,
+            # Code 1 is also what a broker terminate() produces; see worker_retired.
+            "reason": _EXIT_REASONS.get(code, "terminated_or_crashed"),
+        }
+        if kind == "daemon":
+            fields["last_authenticated_call"] = self._last_activity or "none"
+            self._last_activity = None
+            self._connected_pids.discard(process.pid)
+        _log_lifecycle("worker_exited", **fields)
+
+    def _note_daemon_response(
+        self,
+        process: asyncio.subprocess.Process,
+        action: object,
+        response: dict[str, Any],
+    ) -> None:
+        if process is not self._daemon or response.get("ok") is not True:
+            return
+        status = response.get("status")
+        state = status.get("state") if isinstance(status, dict) else None
+        pid = getattr(process, "pid", None)
+        if state == "connected" and pid not in self._connected_pids:
+            self._connected_pids.add(pid)
+            _log_lifecycle("session_connected", mode=self.mode, pid=pid)
+        if action in _ACTIVITY_ACTIONS or (action == "health" and state == "connected"):
+            self._last_activity = _now()
 
     async def _retire_uncertain_worker(
-        self, process: asyncio.subprocess.Process
+        self, process: asyncio.subprocess.Process, reason: str
     ) -> None:
         """Never reuse an IPC worker after a cancelled/mismatched response.
 
@@ -707,6 +763,9 @@ class AuthProcessBroker:
         for attribute in ("_daemon", "_market_daemon", "_forum_daemon"):
             if getattr(self, attribute) is process:
                 setattr(self, attribute, None)
+                _log_lifecycle(
+                    "worker_retired", worker=attribute.strip("_"), pid=getattr(process, "pid", None), reason=reason
+                )
         try:
             await self._stop_process(process)
         except (OSError, ProcessLookupError):
@@ -738,15 +797,16 @@ class AuthProcessBroker:
                 elif action in {"account", "market", "market_batch", "order_depth", "forum_post"}:
                     if "result" not in response:
                         raise AuthWorkerOperationError("Invalid result from worker")
+            self._note_daemon_response(process, action, response)
             return response
         except asyncio.CancelledError:
-            await self._retire_uncertain_worker(process)
+            await self._retire_uncertain_worker(process, "cancelled")
             raise
         except (BrokenPipeError, ConnectionError, TimeoutError) as error:
-            await self._retire_uncertain_worker(process)
+            await self._retire_uncertain_worker(process, "no_response")
             raise AuthWorkerOperationError("Auth worker did not respond") from error
         except AuthWorkerOperationError:
-            await self._retire_uncertain_worker(process)
+            await self._retire_uncertain_worker(process, "protocol_error")
             raise
 
     @staticmethod
