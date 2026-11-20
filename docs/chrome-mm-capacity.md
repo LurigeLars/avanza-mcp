@@ -5,6 +5,11 @@ visible volume at that MM ask level**. It requires no investment amount, order
 field changes or per-trade clicks. It is not account buying power, total depth
 at all prices, an execution guarantee, or a commission-inclusive amount.
 
+Version **0.1.11** waits one minute between completed list passes and order-page
+bridge fallback reads. First reads and returning to a visible tab remain immediate,
+subject to the shared cooldown. Passive page-stream updates remain immediate.
+The fifteen-second gate for accepting new source data is unchanged.
+
 Version **0.1.10** keeps the last verified amount visible during background
 refresh without showing STALE. It is current-view memory only, cleared on
 navigation, reload, hidden tabs and page restoration; no quote is saved for a
@@ -23,8 +28,8 @@ the fifteen-second age limit; missing, invalid and future times stay unusable.
 Version **0.1.7** refreshes immediately when a tab becomes visible again,
 clears previous bridge data after a hard message-channel failure, and accepts
 multiple small SSE events in a large network chunk. A fresh page stream takes
-priority over a failed older bridge request. Normal refresh pauses remain ten
-seconds and source age remains limited to fifteen seconds. Missing MM quotes
+priority over a failed older bridge request. New source data still requires the
+fifteen-second source-age gate. Missing MM quotes
 leave the amount field blank. Reload the extension and Avanza tabs to update;
 pairing survives at the same extension path/ID.
 
@@ -123,18 +128,18 @@ does not imply a fresh book. Delayed books cannot establish a new verified amoun
 - Quote cache: **750 ms**, at most 200 entries, shared across tabs. Cached
   results are checked again against source age before returning. Duplicate
   concurrent reads coalesce. Metadata cache is also bounded to 200 entries.
-- Refresh is **ten seconds after a completed visible-row pass** (version
-  **0.1.5**). Per-instrument failures do not abort later rows. Order-page bridge
-  fallback also waits ten seconds between reads; passive DOM/stream updates
+- Refresh is **sixty seconds after a completed visible-row pass** (version
+  **0.1.11**). Per-instrument failures do not abort later rows. Order-page bridge
+  fallback also waits sixty seconds between reads; passive DOM/stream updates
   remain immediate.
   Whole-bridge failures, timeouts or busy results pause requests across tabs for
   thirty seconds; rate limits pause them for sixty seconds. Missing authentication
-  or pairing retains the normal ten-second retry. Provider `Retry-After` is also respected by
+  or pairing retains the normal sixty-second retry. Provider `Retry-After` is also respected by
   the broker. Rendering/freshness checks run every 250 ms and DOM
   changes update the order panel through a MutationObserver. Returning to a
   visible tab or restoring a page triggers an immediate read; existing bridge
   limits and provider cooldown still apply. Browser scheduling
-  and multi-batch upstream latency still apply; this is not an exact ten-second
+  and multi-batch upstream latency still apply; this is not an exact sixty-second
   per-instrument SLA.
 - STALE or a pending retry keeps the current view's last verified amount, even
   beyond fifteen seconds. Its original source time is never renewed. With no
