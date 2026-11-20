@@ -1,5 +1,6 @@
 (() => {
   const C = globalThis.AvzCapacity;
+  const POLL_INTERVAL = 60000;
   const format = new Intl.NumberFormat("sv-SE", {maximumFractionDigits: 2});
   let snapshot = null, orderRoot = null, orderObserver = null, orderPanel = null;
   let listBusy = false, nextPoll = 0, lastRoute = location.href;
@@ -86,13 +87,13 @@
         if (C.validQuote(q)) snapshot = {...q, id, via: "bridge"};
         else { snapshot = null; orderFailure = q?.status === "OK" ? "STALE" : q?.status ?? result?.status ?? "OFFLINE"; }
       }
-      nextOrderPoll = performance.now() + Math.max(10000, (result?.retry_after ?? 0) * 1000);
+      nextOrderPoll = performance.now() + Math.max(POLL_INTERVAL, (result?.retry_after ?? 0) * 1000);
     } catch {
       if (document.hidden || C.bookId(location.href) !== id) return;
       if (!(snapshot?.via === "stream" && C.fresh(snapshot.source_time))) {
         snapshot = null; orderFailure = "OFFLINE";
       }
-      nextOrderPoll = performance.now() + 10000;
+      nextOrderPoll = performance.now() + POLL_INTERVAL;
     } finally { orderBusy = false; updateOrder(); }
   }
   function listRows() {
@@ -160,18 +161,18 @@
         listRows();
         if (!result?.items) {
           for (const id of ids) values.set(id, {status: result?.status ?? "OFFLINE"});
-          nextPoll = performance.now() + Math.max(10000, (result?.retry_after ?? 0) * 1000);
+          nextPoll = performance.now() + Math.max(POLL_INTERVAL, (result?.retry_after ?? 0) * 1000);
           return;
         }
         if (group.some(id => ["RATE_LIMITED", "AUTH_REQUIRED", "TIMEOUT", "BUSY", "OFFLINE"].includes(values.get(id)?.status))) {
-          nextPoll = performance.now() + Math.max(10000, (result?.retry_after ?? 0) * 1000);
+          nextPoll = performance.now() + Math.max(POLL_INTERVAL, (result?.retry_after ?? 0) * 1000);
           return;
         }
       }
-      nextPoll = performance.now() + 10000;
+      nextPoll = performance.now() + POLL_INTERVAL;
     } catch {
       for (const id of ids) values.set(id, {status: "OFFLINE"});
-      nextPoll = performance.now() + 10000;
+      nextPoll = performance.now() + POLL_INTERVAL;
     } finally {
       listBusy = false;
       while (values.size > 200) values.delete(values.keys().next().value);

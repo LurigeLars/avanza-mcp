@@ -388,13 +388,13 @@ is not a guarantee that the displayed volume can be filled.
 
 - **Certificate list:** adds the **Max köpbelopp** column. Up to twenty visible
   rows are read in batches of five through a paired, read-only local bridge.
-  Another pass starts ten seconds after the previous pass finishes. Returning
+  Another pass starts sixty seconds after the previous pass finishes. Returning
   to a tab starts a fresh read immediately. Hidden tabs stop fetching; unusable MM/ask rows pause for thirty seconds before a new probe.
 - **Order page:** shows **Max köpbelopp i synligt orderdjup**, reads the visible
   MM ask row and verifies it against the page's
   existing depth stream. Those page updates remain immediate and add no network
   requests. If necessary, the paired bridge checks only the instrument in the
-  order URL, with ten seconds between fallback reads.
+  order URL, with sixty seconds between fallback reads.
 - **Display:** the last verified amount stays visible during background refresh,
   including when its source time becomes older than fifteen seconds. The tooltip
   retains the original book time. Only newly verified data replaces it; a failed
