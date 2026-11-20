@@ -106,6 +106,55 @@ def verify_content_lifecycle(p):
                 page.add_script_tag(content=(ROOT / "chrome-extension" / name).read_text(encoding="utf-8"))
             return page
 
+        # A new view must wait for its own request before declaring failure.
+        for restore in ["visibility", "pageshow"]:
+            for path, body, selector in [
+                ("/borshandlade-produkter/certifikat-torg/lista.html", LIST, "tbody .avz-capacity-cell"),
+                ("/handla/order.html/kop/123", ORDER, ".avz-capacity strong"),
+            ]:
+                page = setup(path, body, mode="reject")
+                amount = page.locator(selector).first
+                expect(amount).to_have_text("— FAILED")
+                page.evaluate("testSettingsListener({type:'STATE_CHANGED',enabled:true,pollInterval:0},{id:'test-extension'});testMode='pending'")
+                if restore == "visibility":
+                    page.evaluate("testHidden=true;document.dispatchEvent(new Event('visibilitychange'));testHidden=false;document.dispatchEvent(new Event('visibilitychange'))")
+                else:
+                    page.evaluate("window.dispatchEvent(new Event('pageshow'))")
+                page.wait_for_function("typeof testReject==='function'")
+                expect(amount).to_have_text("—")
+                assert amount.get_attribute("title") is None
+                page.wait_for_timeout(300)
+                expect(amount).to_have_text("—")
+                page.evaluate("testReject(new Error('Synthetic current-view failure'))")
+                expect(amount).to_have_text("— FAILED")
+                page.close()
+
+        # An incomplete DOM is not a failed read while the first book is loading.
+        page = setup("/handla/order.html/kop/123", ORDER.replace("263,36 *", "Loading"), mode="pending")
+        amount = page.locator(".avz-capacity strong")
+        expect(amount).to_have_text("—")
+        page.locator(".price.sell").nth(1).evaluate("el=>el.textContent='263,36 *'")
+        page.wait_for_function("typeof testResolve==='function'")
+        expect(amount).to_have_text("—")
+        page.evaluate("testResolve({items:{123:{status:'OK',price:263.36,volume:1000,amount:'263360',mm_level:1,currency:'SEK',source_time:Date.now()}}})")
+        expect(amount).to_contain_text("kr")
+        page.close()
+
+        # Replies issued before the tab was hidden cannot fail its new view.
+        for path, body, selector in [
+            ("/borshandlade-produkter/certifikat-torg/lista.html", LIST, "tbody .avz-capacity-cell"),
+            ("/handla/order.html/kop/123", ORDER, ".avz-capacity strong"),
+        ]:
+            page = setup(path, body, mode="pending")
+            page.wait_for_function("typeof testReject==='function'")
+            page.evaluate("testSettingsListener({type:'STATE_CHANGED',enabled:true,pollInterval:0},{id:'test-extension'});window.oldReject=testReject;testReject=undefined;testHidden=true;document.dispatchEvent(new Event('visibilitychange'));testHidden=false;document.dispatchEvent(new Event('visibilitychange'));oldReject(new Error('Synthetic previous-view failure'))")
+            page.wait_for_function("typeof testReject==='function'")
+            expect(page.locator(selector).first).to_have_text("—")
+            page.evaluate("testReject(new Error('Synthetic new-view failure'))")
+            expect(page.locator(selector).first).to_have_text("— FAILED")
+            page.close()
+        print(json.dumps({"new_view_waits_for_result": "PASS", "initial_dom_loading": "PASS", "previous_view_reply_ignored": "PASS"}))
+
         for path, body, selector in [
             ("/borshandlade-produkter/certifikat-torg/lista.html", LIST, "tbody .avz-capacity-cell"),
             ("/handla/order.html/kop/123", ORDER, ".avz-capacity strong"),
