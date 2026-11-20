@@ -79,8 +79,29 @@ class Transactions(PrivateModel):
     first_transaction_date: str | None = None
 
 
+class ExecutionFill(PrivateModel):
+    """One fill read from the broker's contract note (never inferred)."""
+
+    index: int
+    executed_at: str  # ISO 8601 Stockholm wall clock with its UTC offset
+    executed_at_utc: str
+    timezone: str
+    precision: str
+    quantity: str
+    price: str
+    currency: str
+    venue: str | None = None
+    order_type: str | None = None
+
+
 class ArchivedTransaction(PrivateModel):
-    """Trade evidence from local SQLite; no private note or account references."""
+    """Trade evidence from local SQLite; no private note or account references.
+
+    execution_status: VERIFIED (fills from the note reconcile with the
+    transaction), DATE_ONLY (note has no usable fill time), PROVISIONAL
+    (intraday API row, not yet settled), AMBIGUOUS (note conflicts or the clock
+    time is DST-ambiguous; no fills returned) or MISSING (no parsed note).
+    """
 
     transaction_id: str
     transaction_type: str
@@ -95,6 +116,11 @@ class ArchivedTransaction(PrivateModel):
     commission: Money | None = None
     note_status: str
     note_saved: bool
+    execution_status: str = "MISSING"
+    execution_reason: str | None = None
+    source_digest: str | None = None  # SHA-256 of the cached note, for idempotent bridges
+    parser_version: str | None = None
+    execution_fills: list[ExecutionFill] = []
 
 
 class ArchivedTrades(PrivateModel):
@@ -109,6 +135,7 @@ class ArchivedTrades(PrivateModel):
     last_synced_at: str | None = None
     storage_hint: str
     transactions: list[ArchivedTransaction]
+    execution_status_counts: dict[str, int] = {}  # for the returned rows
 
 
 class ArchiveSync(PrivateModel):
@@ -130,6 +157,7 @@ class ArchiveSync(PrivateModel):
     notes_awaiting_reference: int
     provisional_transactions: int
     notes_not_cached: int
+    notes_extracted: int = 0
     last_synced_at: str
     storage_hint: str
 

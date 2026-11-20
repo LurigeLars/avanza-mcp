@@ -512,6 +512,37 @@ before measuring performance. No unattended scheduler is installed:
 subsequent syncs must be invoked by a connected workflow, and an expired
 BankID session must be renewed.
 
+**Execution times from cached notes.** Each sync also parses newly cached
+notes offline (no network, no OCR) into separate, immutable tables
+(`note_extraction`, `execution_fill`) keyed by transaction, note SHA-256 and
+parser version; `broker_transaction` and its API date are never changed.
+An Avanza note is a PDF form: every fill row carries quantity, price,
+currency, `Tid` (`YYMMDD HH:MM:SS`, Europe/Stockholm wall clock — it matched
+all intraday API timestamps to the second), order type and venue; page 2+
+continue the table. Affärsdatum, likviddatum, print date and PDF metadata are
+never used as an execution time. A note is VERIFIED only when ISIN, side,
+summed fill quantity, the note's "Totalt antal", the API volume and the
+volume-weighted price (±0.1 %) agree and every fill falls on the note's trade
+date at a DST-unambiguous clock time; otherwise it is AMBIGUOUS or DATE_ONLY
+with a reason code and no fills. A note shared by several transactions is
+AMBIGUOUS. Avanza sometimes serves a stub ("Denna nota kunde inte …"); it is
+moved aside as `*.placeholder-<digest>.pdf` and refetched on the next
+authenticated sync. `read_trade_archive` returns per transaction
+`execution_status` (VERIFIED / DATE_ONLY / PROVISIONAL / AMBIGUOUS / MISSING),
+`execution_reason`, `source_digest`, `parser_version` and `execution_fills`
+(local time with offset, UTC, precision `SECOND`, quantity, price, venue) —
+never note text, account or note IDs.
+
+Local operator commands (aggregate counts only on stdout):
+
+```powershell
+uv run --frozen python -m avanza_mcp.client.trade_archive backfill [--limit N]
+uv run --frozen python -m avanza_mcp.client.trade_archive export --from 2026-01-01 --to 2026-11-20 --out <private file>.json
+```
+
+`export` writes the complete `read_trade_archive` result for Trade Spine's
+`executions` import; keep the file in a private folder.
+
 ### Contract notes (BankID authenticated)
 
 Use `download_contract_notes(from_date="2026-11-01", to_date="2026-11-13",

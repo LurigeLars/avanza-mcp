@@ -8,15 +8,20 @@ Neither secrets nor filesystem paths are returned to MCP clients.
 """
 from __future__ import annotations
 
+import argparse
 import hashlib
+import json
 import os
 import sqlite3
+import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
-from ..models.account import ArchiveSync, ArchivedTrades, ArchivedTransaction, Money
+from ..models.account import (
+    ArchiveSync, ArchivedTrades, ArchivedTransaction, ExecutionFill, Money,
+)
 from .accounts import AccountAuthExpired, AccountReadError
 from .contract_notes import (
     _MAX_PDF_BYTES,
@@ -25,6 +30,9 @@ from .contract_notes import (
     _note_directory,
     _read_pdf,
     _write_pdf,
+)
+from .note_fills import (
+    PARSER_VERSION, TIMEZONE, NoteParseError, parse_note, reconcile, stockholm_instant,
 )
 
 if TYPE_CHECKING:
@@ -80,6 +88,40 @@ CREATE TABLE IF NOT EXISTS scan_coverage (
     completed_at TEXT NOT NULL,
     PRIMARY KEY(first_day, last_day),
     CHECK(first_day <= last_day)
+);
+-- Immutable, content-addressed parse results: one row per transaction, note
+-- digest and parser version. broker_transaction is never modified by parsing.
+CREATE TABLE IF NOT EXISTS note_extraction (
+    account_id TEXT NOT NULL,
+    transaction_id TEXT NOT NULL,
+    note_sha256 TEXT NOT NULL,
+    parser_version TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('VERIFIED','DATE_ONLY','AMBIGUOUS','MISSING')),
+    reason TEXT,
+    fill_count INTEGER NOT NULL,
+    note_trade_day TEXT,
+    extracted_at TEXT NOT NULL,
+    PRIMARY KEY(account_id, transaction_id, note_sha256, parser_version)
+);
+CREATE TABLE IF NOT EXISTS execution_fill (
+    account_id TEXT NOT NULL,
+    transaction_id TEXT NOT NULL,
+    note_sha256 TEXT NOT NULL,
+    parser_version TEXT NOT NULL,
+    fill_index INTEGER NOT NULL CHECK(fill_index > 0),
+    executed_local TEXT NOT NULL,
+    utc_offset TEXT NOT NULL,
+    executed_utc TEXT NOT NULL,
+    timezone TEXT NOT NULL,
+    precision TEXT NOT NULL,
+    quantity TEXT NOT NULL,
+    price TEXT NOT NULL,
+    price_currency TEXT NOT NULL,
+    venue TEXT,
+    order_type TEXT,
+    PRIMARY KEY(account_id, transaction_id, note_sha256, parser_version, fill_index),
+    FOREIGN KEY(account_id, transaction_id, note_sha256, parser_version)
+        REFERENCES note_extraction(account_id, transaction_id, note_sha256, parser_version)
 );
 """
 
@@ -469,6 +511,102 @@ def _count_notes(connection: sqlite3.Connection, today: date) -> tuple[int, int,
     return same_day, no_ref, due, provisional
 
 
+def _quarantine_placeholder(folder: Path, name: str, digest: str) -> None:
+    """Move an Avanza stub note aside so the next authenticated sync refetches it."""
+    source = folder / name
+    target = folder / f"{Path(name).stem}.placeholder-{digest[:12]}.pdf"
+    if target.exists():
+        source.unlink()  # identical bytes (same digest) already kept
+    else:
+        os.replace(source, target)
+
+
+def extract_note_fills(
+    connection: sqlite3.Connection, folder: Path, now: datetime,
+    *, limit: int | None = None,
+) -> dict[str, int]:
+    """Parse cached notes not yet extracted by this parser version; offline only.
+
+    Idempotent: an extraction row is written once per (transaction, note
+    digest, parser version) and never updated. Placeholder stubs are moved
+    aside and rescheduled for download; nothing else in broker_transaction
+    changes.
+    """
+    pending = connection.execute(
+        """SELECT b.account_id, b.transaction_id, b.side, b.isin, b.volume,
+                  b.trade_day, b.note_file, b.note_sha256, b.note_owner_ref, b.note_id,
+                  (SELECT COUNT(*) FROM broker_transaction o
+                    WHERE o.note_owner_ref = b.note_owner_ref AND o.note_id = b.note_id) AS sharing
+           FROM broker_transaction b
+           WHERE b.note_file IS NOT NULL AND b.note_sha256 IS NOT NULL
+             AND NOT EXISTS (SELECT 1 FROM note_extraction e
+                 WHERE e.account_id = b.account_id AND e.transaction_id = b.transaction_id
+                   AND e.note_sha256 = b.note_sha256 AND e.parser_version = ?)
+           ORDER BY b.trade_day, b.transaction_id""",
+        (PARSER_VERSION,),
+    ).fetchall()
+    counts = {"VERIFIED": 0, "DATE_ONLY": 0, "AMBIGUOUS": 0, "MISSING": 0,
+              "fills": 0, "placeholders_requeued": 0}
+    stamp = now.isoformat()
+    for item in pending[:limit]:
+        parsed = None
+        fills: list[tuple] = []
+        file = folder / item["note_file"]
+        if not _valid_existing_pdf(file):
+            status, reason = "MISSING", "note_unreadable"
+        else:
+            data = file.read_bytes()
+            if hashlib.sha256(data).hexdigest() != item["note_sha256"]:
+                status, reason = "MISSING", "note_digest_mismatch"
+            elif item["sharing"] != 1:
+                # A recycled note reference cannot be assigned to one transaction.
+                status, reason = "AMBIGUOUS", "note_shared_by_transactions"
+            else:
+                try:
+                    parsed = parse_note(data)
+                    status, reason = reconcile(
+                        parsed, isin=item["isin"], side=item["side"], volume=item["volume"]
+                    )
+                except NoteParseError as error:
+                    status, reason = "MISSING", str(error)
+        if status == "VERIFIED" and parsed is not None:
+            if parsed.business_date and parsed.business_date.isoformat() != item["trade_day"]:
+                reason = "trade_date_differs_from_api"
+            for fill in parsed.fills:
+                aware, utc = stockholm_instant(fill.local_time)  # type: ignore[misc,arg-type]
+                fills.append((
+                    item["account_id"], item["transaction_id"], item["note_sha256"],
+                    PARSER_VERSION, fill.index, fill.local_time.isoformat(),  # type: ignore[union-attr]
+                    aware.isoformat()[-6:], utc, TIMEZONE, "SECOND",
+                    str(fill.quantity), str(fill.price), fill.currency,
+                    fill.venue, fill.order_type,
+                ))
+        with connection:
+            connection.execute(
+                """INSERT INTO note_extraction (account_id, transaction_id, note_sha256,
+                     parser_version, status, reason, fill_count, note_trade_day, extracted_at)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                (item["account_id"], item["transaction_id"], item["note_sha256"],
+                 PARSER_VERSION, status, reason, len(fills),
+                 parsed.business_date.isoformat() if parsed and parsed.business_date else None,
+                 stamp),
+            )
+            connection.executemany(
+                "INSERT INTO execution_fill VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", fills
+            )
+            if reason == "note_placeholder":
+                _quarantine_placeholder(folder, item["note_file"], item["note_sha256"])
+                _update_note(
+                    connection, item["note_owner_ref"], item["note_id"],
+                    file_name=None, digest=None, attempted_at=stamp,
+                    retry_after=_tomorrow_retry(now), error_code="note_placeholder",
+                )
+                counts["placeholders_requeued"] += 1
+        counts[status] += 1
+        counts["fills"] += len(fills)
+    return counts
+
+
 async def sync_trade_archive(
     account: AccountClient,
     from_date: date | None = None,
@@ -529,6 +667,7 @@ async def sync_trade_archive(
             attempted, downloaded, reused, failed, deferred = await _download_due_notes(
                 account, connection, folder, today, now, max_notes
             )
+        extracted = extract_note_fills(connection, folder, now)
         same_day, without_ref, awaiting, provisional = _count_notes(connection, today)
         total = connection.execute("SELECT COUNT(*) FROM broker_transaction").fetchone()[0]
 
@@ -551,6 +690,7 @@ async def sync_trade_archive(
             notes_awaiting_reference=without_ref,
             provisional_transactions=provisional,
             notes_not_cached=awaiting,
+            notes_extracted=sum(extracted[k] for k in ("VERIFIED", "DATE_ONLY", "AMBIGUOUS", "MISSING")),
             last_synced_at=now.isoformat(),
             storage_hint=hint,
         )
@@ -591,6 +731,51 @@ def _coverage_gaps(
     return gaps
 
 
+def _execution(
+    connection: sqlite3.Connection, row: sqlite3.Row, has_tables: bool,
+) -> dict[str, Any]:
+    """Execution-time evidence for one archived row; never raw note content."""
+    if row["transaction_id"].startswith("intra-day-"):
+        return {"execution_status": "PROVISIONAL", "execution_reason": "intraday_api_timestamp"}
+    if not row["note_file"] or not row["note_sha256"]:
+        return {"execution_status": "MISSING",
+                "execution_reason": row["note_error"] or "note_not_cached"}
+    extraction = connection.execute(
+        """SELECT status, reason FROM note_extraction
+           WHERE account_id=? AND transaction_id=? AND note_sha256=? AND parser_version=?""",
+        (row["account_id"], row["transaction_id"], row["note_sha256"], PARSER_VERSION),
+    ).fetchone() if has_tables else None
+    if extraction is None:
+        return {"execution_status": "MISSING", "execution_reason": "note_not_extracted"}
+    fills = connection.execute(
+        """SELECT * FROM execution_fill
+           WHERE account_id=? AND transaction_id=? AND note_sha256=? AND parser_version=?
+           ORDER BY fill_index""",
+        (row["account_id"], row["transaction_id"], row["note_sha256"], PARSER_VERSION),
+    ).fetchall() if extraction["status"] == "VERIFIED" else []
+    return {
+        "execution_status": extraction["status"],
+        "execution_reason": extraction["reason"],
+        "source_digest": row["note_sha256"],
+        "parser_version": PARSER_VERSION,
+        "execution_fills": [
+            ExecutionFill(
+                index=f["fill_index"],
+                executed_at=f["executed_local"] + f["utc_offset"],
+                executed_at_utc=f["executed_utc"],
+                timezone=f["timezone"],
+                precision=f["precision"],
+                quantity=f["quantity"],
+                price=f["price"],
+                currency=f["price_currency"],
+                venue=f["venue"],
+                order_type=f["order_type"],
+            )
+            for f in fills
+        ],
+    }
+
+
 def read_trade_archive(
     from_date: date, to_date: date, limit: int, offset: int = 0,
 ) -> ArchivedTrades:
@@ -626,7 +811,7 @@ def read_trade_archive(
                       description, instrument_name, isin, order_book_id,
                       volume, amount, amount_currency, commission,
                       commission_currency, trade_day, note_id, note_owner_ref,
-                      note_file, note_retry_after, note_error
+                      note_file, note_retry_after, note_error, account_id, note_sha256
                FROM broker_transaction
                WHERE trade_day BETWEEN ? AND ?
                ORDER BY trade_day DESC, traded_at DESC, transaction_id
@@ -634,6 +819,10 @@ def read_trade_archive(
             (from_date.isoformat(), to_date.isoformat(), limit, offset),
         ).fetchall()
         today = _local_today()
+        has_tables = connection.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
+            " AND name IN ('note_extraction','execution_fill')"
+        ).fetchone()[0] == 2
         records = []
         for r in rows:
             if r["note_file"]:
@@ -663,8 +852,12 @@ def read_trade_archive(
                     commission=_money_model(r["commission"], r["commission_currency"]),
                     note_status=note_state,
                     note_saved=(note_state == "SAVED"),
+                    **_execution(connection, r, has_tables),
                 )
             )
+        counts: dict[str, int] = {}
+        for record in records:
+            counts[record.execution_status] = counts.get(record.execution_status, 0) + 1
         missing_intervals = _coverage_gaps(connection, from_date, to_date)
         return ArchivedTrades(
             from_date=from_date.isoformat(),
@@ -678,6 +871,61 @@ def read_trade_archive(
             last_synced_at=_meta(connection, "last_synced_at"),
             storage_hint=hint,
             transactions=records,
+            execution_status_counts=counts,
         )
     finally:
         _close(connection)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Local operator entry point; prints aggregate counts only, never note content.
+
+    backfill: parse cached notes (offline, idempotent).
+    export:   write the read_trade_archive result for a range to a local JSON
+              file, the reviewed input for Trade Spine's execution-evidence import.
+    """
+    parser = argparse.ArgumentParser(prog="python -m avanza_mcp.client.trade_archive")
+    commands = parser.add_subparsers(dest="command", required=True)
+    backfill = commands.add_parser("backfill")
+    backfill.add_argument("--limit", type=int, default=None)
+    export = commands.add_parser("export")
+    export.add_argument("--from", dest="first", type=date.fromisoformat, required=True)
+    export.add_argument("--to", dest="last", type=date.fromisoformat, required=True)
+    export.add_argument("--out", type=Path, required=True)
+    args = parser.parse_args(argv)
+
+    if args.command == "backfill":
+        connection, folder, _hint = _open_archive(create=True)
+        assert connection is not None
+        try:
+            counts = extract_note_fills(connection, folder, _utc_now(), limit=args.limit)
+        finally:
+            _close(connection)
+        print(json.dumps(counts, sort_keys=True))
+        return 0
+
+    pages: list[ArchivedTrades] = []
+    while not pages or pages[-1].has_more:
+        pages.append(read_trade_archive(
+            args.first, args.last, 500, offset=sum(p.returned for p in pages)
+        ))
+    result = pages[0].model_copy(update={
+        "transactions": [t for p in pages for t in p.transactions],
+        "returned": sum(p.returned for p in pages),
+        "has_more": False,
+        "execution_status_counts": {
+            key: sum(p.execution_status_counts.get(key, 0) for p in pages)
+            for key in {k for p in pages for k in p.execution_status_counts}
+        },
+    })
+    if result.returned != result.total:
+        raise SystemExit("archive changed during export; retry")
+    args.out.write_text(result.model_dump_json(indent=1), encoding="utf-8")
+    print(json.dumps({"returned": result.returned,
+                      "coverage_complete": result.coverage_complete,
+                      "execution_status_counts": result.execution_status_counts}, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
