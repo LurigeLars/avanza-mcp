@@ -108,7 +108,7 @@ button:focus-visible {
 }
 #start { flex:1;color:#fff;background:var(--brand-dark) }
 #start:hover { background:#006548 }
-#cancel { color:var(--ink);background:#eef3f1 }
+#cancel, #close-tab { color:var(--ink);background:#eef3f1 }
 button:disabled { cursor:wait;opacity:.58 }
 .notes {
   margin:22px 0 0;
@@ -137,7 +137,7 @@ button:disabled { cursor:wait;opacity:.58 }
   }
   .stage { background:#101d18 }
   #qr { background:#fff }
-  #cancel { background:#263731;color:var(--ink) }
+  #cancel, #close-tab { background:#263731;color:var(--ink) }
 }
 </style>
 </head>
@@ -169,6 +169,9 @@ button:disabled { cursor:wait;opacity:.58 }
   <button id="start" type="button">$primary</button>
   <button id="cancel" type="button">$secondary</button>
 </div>
+<div id="close-actions" class="actions" hidden>
+  <button id="close-tab" type="button">Close tab</button>
+</div>
 <aside class="notes">
   <p>No Avanza password is requested. Account tool results may be sent to your configured model provider and saved in chat history.</p>
   <p>Avanza MCP is an independent project. It is not affiliated with, endorsed by, or supported by Avanza Bank AB. Use it at your own risk; its maintainers accept no responsibility for losses or damages.</p>
@@ -185,6 +188,8 @@ const qr=document.getElementById('qr');
 const title=document.getElementById('title');
 const lead=document.getElementById('lead');
 const actions=document.getElementById('actions');
+const closeActions=document.getElementById('close-actions');
+let autoCloseScheduled=false;
 const start=document.getElementById('start');
 const success=document.getElementById('success');
 const terminal=['connected','denied','timed_out','error','disconnected'];
@@ -196,6 +201,11 @@ async function call(suffix,method='GET') {
   });
   if(!response.ok) throw new Error('request failed');
   return response.json();
+}
+
+// Browsers may refuse to close tabs opened by an external application.
+function tryCloseTab() {
+  try { window.close(); } catch { /* Keep the manual fallback visible. */ }
 }
 
 function render(state) {
@@ -213,9 +223,18 @@ function render(state) {
     title.textContent=disconnecting?'Still connected':"You're connected";
     lead.textContent='Avanza account access is ready in your MCP client.';
     status.textContent=disconnecting?'Disconnection cancelled':'Authentication complete';
-    helper.textContent='You can now close this window and return to your MCP client.';
+    helper.textContent=disconnecting
+      ?'You can now close this window and return to your MCP client.'
+      :'Chrome may block automatic tab closing. If it stays open, press Ctrl+W.';
     success.classList.add('active');
     actions.hidden=true;
+    if(!disconnecting) {
+      closeActions.hidden=false;
+      if(!autoCloseScheduled) {
+        autoCloseScheduled=true;
+        setTimeout(tryCloseTab,1200);
+      }
+    }
   } else if(['denied','timed_out','error','disconnected'].includes(state.state)) {
     title.textContent=state.state==='disconnected'
       ?(disconnecting?'Disconnected':'Connection cancelled')
@@ -261,6 +280,11 @@ start.onclick=async()=>{
 document.getElementById('cancel').onclick=async()=>{
   render(await call(disconnecting?'/keep':'/cancel','POST'));
   clearInterval(timer);
+};
+
+document.getElementById('close-tab').onclick=()=>{
+  tryCloseTab();
+  helper.textContent='If this tab stays open, press Ctrl+W to close it manually.';
 };
 
 const timer=setInterval(refresh,1500);
