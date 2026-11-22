@@ -107,6 +107,11 @@ async def test_browser_consent_rotates_qr_and_completes_without_secret_results()
             assert page.status_code == 200
             assert "sentinel" not in page.text
             assert 'aria-label="Avanza MCP"' in page.text
+            assert 'id="close-tab" type="button"' in page.text
+            assert "setTimeout(tryCloseTab,1200)" in page.text
+            assert "window.close()" in page.text
+            assert "if(!disconnecting)" in page.text
+            assert "If it stays open, press Ctrl+W." in page.text
             assert "You can now close this window" in page.text
             assert "not affiliated with" in page.text
             assert "Secure local connection" not in page.text
