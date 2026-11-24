@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Avanza Order Extension",
-  "version": "0.1.18",
+  "version": "0.1.19",
   "minimum_chrome_version": "120",
   "description": "Shows maximum visible buy capacity on certificate lists and order pages using market maker ask prices and order depth.",
   "permissions": ["storage"],

@@ -262,6 +262,27 @@ def verify_content_lifecycle(p):
         assert page.evaluate("testIds.flat().filter(id=>id==='123').length") == 2
         page.close()
 
+        # Two stale retries, with increasing delays; no fourth read or re-read of healthy rows.
+        page = setup('/borshandlade-produkter/certifikat-torg/lista.html', LIST, mode='stale')
+        page.evaluate("testSettingsListener({type:'STATE_CHANGED',enabled:true,pollInterval:0},{id:'test-extension'})")
+        page.wait_for_function("testIds.flat().includes('130')")
+        page.evaluate("testOffset=2999")
+        page.wait_for_timeout(500)
+        assert page.evaluate("testIds.flat().filter(id=>id==='123').length") == 1
+        page.evaluate("testOffset=3000")
+        page.wait_for_function("testIds.flat().filter(id=>id==='127').length===2")
+        page.evaluate("testOffset=12999")
+        page.wait_for_timeout(500)
+        assert page.evaluate("testIds.flat().filter(id=>id==='123').length") == 2
+        page.evaluate("testOffset=13000")
+        page.wait_for_function("testIds.flat().filter(id=>id==='127').length===3")
+        page.evaluate("testOffset=120000")
+        page.wait_for_timeout(750)
+        assert page.evaluate("testIds.flat().filter(id=>id==='123').length") == 3
+        assert page.evaluate("testIds.flat().filter(id=>id==='130').length") == 1
+        expect(page.locator('tbody .avz-capacity-cell').first).to_have_attribute("title", "No fresh order depth (STALE).")
+        page.close()
+
         # Settings must apply to an existing view, including replies issued before OFF.
         for path, body, selector in [
             ("/borshandlade-produkter/certifikat-torg/lista.html", LIST, "tbody .avz-capacity-cell"),
@@ -288,6 +309,10 @@ def verify_content_lifecycle(p):
                 page.wait_for_timeout(750)
                 before = page.evaluate("testCalls")
                 page.evaluate("testOffset=1800000")
+                page.wait_for_function("testCalls>=" + str(before + 2))
+                page.wait_for_timeout(750)
+                before = page.evaluate("testCalls")
+                page.evaluate("testOffset=2400000")
             page.wait_for_timeout(1500)
             assert page.evaluate("testCalls") == before, "On-visible mode has no timer requests after bounded retries"
             page.evaluate("testMode='ok';testHidden=true;document.dispatchEvent(new Event('visibilitychange'));testHidden=false;document.dispatchEvent(new Event('visibilitychange'))")

@@ -224,8 +224,8 @@
         const count = (attempts.get(id)?.count ?? 0) + 1;
         const ask = rows.find(r => r.id === id)?.ask;
         const staleWithAsk = status === "STALE" && Number.isFinite(ask) && ask > 0;
-        const retry = count < 2 && (transient(status) || staleWithAsk);
-        const delay = staleWithAsk ? Math.max(3000, (result?.retry_after ?? 0) * 1000)
+        const retry = staleWithAsk ? count < 3 : count < 2 && transient(status);
+        const delay = staleWithAsk ? Math.max(count === 1 ? 3000 : 10000, (result?.retry_after ?? 0) * 1000)
           : retryDelay(status, result?.retry_after);
         attempts.set(id, {count, due: retry ? performance.now() + delay : Infinity});
         if (status === "MM_MISSING" || (ask === null && ["STALE", "DEPTH_UNKNOWN", "DEPTH_UNAVAILABLE"].includes(status))) {
