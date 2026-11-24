@@ -137,8 +137,12 @@ does not imply a fresh book. Delayed books cannot establish a new verified amoun
 - `marketMakerLevelInAsk` is a **zero-based index**. Only that level's sell side
   is used. A missing, negative, malformed or out-of-range index never falls back
   to best ask, bid, last trade, a guessed MM price, or aggregated levels.
-- Currency comes from identity-checked certificate metadata (cached five
-  minutes). Only verified SEK is displayed; no implicit FX conversion.
+- Currency comes from identity-checked certificate metadata. Verified SEK is
+  cached in memory for up to 24 hours; other or unknown currency for five minutes.
+  Only verified SEK is displayed; no implicit FX conversion. The daily discovery
+  catalog does not provide verified trading currency. The integrated bridge
+  overlaps metadata and authenticated depth on a cache miss, retaining existing
+  independent client pacing, batch bounds and deadlines.
 - A positive finite price, positive integral volume and source `receivedTime`
   no more than **15 seconds old** are required to accept a new amount. Future or missing source times
   fail closed. HTTP receive time, DOM mutation time and heartbeats cannot make

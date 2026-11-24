@@ -277,3 +277,26 @@ async def test_port_conflict_keeps_mcp_running(caplog):
         listener.bind(("127.0.0.1", 0)); listener.listen()
         async with serve_bridge(AsyncMock(), port=listener.getsockname()[1]):
             assert "Capacity bridge OFFLINE" in caplog.text
+
+
+async def test_currency_cache_extends_only_verified_sek_and_revalidates_identity(monkeypatch):
+    from avanza_mcp.capacity_bridge import VERIFIED_SEK_TTL, UNVERIFIED_CURRENCY_TTL
+
+    client = AsyncMock()
+    client.get_public.return_value = {"orderbookId": "123", "listing": {"currency": "SEK"}}
+    reader = CapacityReader(client)
+    assert await reader._currency("123") == "SEK"
+    reader.metadata["123"] = (time.monotonic() - 600, "SEK")
+    assert await reader._currency("123") == "SEK"
+    assert client.get_public.await_count == 1
+    reader.metadata["123"] = (time.monotonic() - VERIFIED_SEK_TTL, "SEK")
+    client.get_public.return_value = {"orderbookId": "999", "listing": {"currency": "SEK"}}
+    assert await reader._currency("123") is None
+    assert client.get_public.await_count == 2
+    reader.metadata["123"] = (time.monotonic() - UNVERIFIED_CURRENCY_TTL, None)
+    client.get_public.return_value = {"orderbookId": "123", "listing": {"currency": "EUR"}}
+    assert await reader._currency("123") == "EUR"
+    reader.metadata["123"] = (time.monotonic() - UNVERIFIED_CURRENCY_TTL, "EUR")
+    client.get_public.return_value = {"orderbookId": "123", "listing": {"currency": "SEK"}}
+    assert await reader._currency("123") == "SEK"
+    assert client.get_public.await_count == 4

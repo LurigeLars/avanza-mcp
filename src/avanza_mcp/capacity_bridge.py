@@ -31,6 +31,8 @@ from .client.exceptions import AvanzaAuthError, AvanzaRateLimitError, AvanzaTime
 PORT = 18762
 MAX_AGE_MS = 15000
 MAX_IDS = 5
+VERIFIED_SEK_TTL = 24 * 60 * 60
+UNVERIFIED_CURRENCY_TTL = 300
 ID = re.compile(r"[0-9]{1,12}\Z")
 ORIGIN = re.compile(r"chrome-extension://[a-p]{32}\Z")
 SERVICE = "avanza-mcp-capacity-bridge"
@@ -81,7 +83,8 @@ class CapacityReader:
 
     async def _currency(self, book_id):
         meta = self.metadata.get(book_id)
-        if meta is None or time.monotonic() - meta[0] > 300:
+        ttl = VERIFIED_SEK_TTL if meta is not None and meta[1] == "SEK" else UNVERIFIED_CURRENCY_TTL
+        if meta is None or time.monotonic() - meta[0] >= ttl:
             async with asyncio.timeout(1.5):
                 raw = await self.client.get_public(
                     PublicEndpoint.CERTIFICATE_INFO.format(id=book_id))
@@ -89,9 +92,11 @@ class CapacityReader:
             if str(raw.get("orderbookId")) != book_id:
                 currency = None
             self.metadata[book_id] = (time.monotonic(), currency)
+            self.metadata.move_to_end(book_id)
             while len(self.metadata) > 200:
                 self.metadata.popitem(last=False)
             return currency
+        self.metadata.move_to_end(book_id)
         return meta[1]
 
     def _cache(self, book_id, result):
@@ -121,14 +126,27 @@ class CapacityReader:
             await asyncio.gather(*(self._read(i) for i in ids))
             return
         try:
-            currencies = await asyncio.gather(*(self._currency(i) for i in ids), return_exceptions=True)
-            depths = await self.depth_batch(ids)
+            # Wait for both independent reads even on error; do not abandon broker IPC.
+            currencies, depths = await asyncio.gather(
+                asyncio.gather(*(self._currency(i) for i in ids), return_exceptions=True),
+                self.depth_batch(ids),
+                return_exceptions=True,
+            )
+            if isinstance(depths, BaseException):
+                raise depths
+            if isinstance(currencies, BaseException):
+                raise currencies
             if len(depths) != len(ids):
                 raise ValueError("Depth batch count mismatch")
             now = int(time.time() * 1000)
             for i, currency, depth in zip(ids, currencies, depths):
-                result = (capacity(depth, currency if isinstance(currency, str) else None, now)
-                          if isinstance(depth, dict) else {"status": "DEPTH_UNAVAILABLE", "amount": None})
+                if isinstance(currency, AvanzaRateLimitError):
+                    result = {"status": "RATE_LIMITED", "amount": None}
+                elif isinstance(currency, (TimeoutError, AvanzaTimeoutError)):
+                    result = {"status": "TIMEOUT", "amount": None}
+                else:
+                    result = (capacity(depth, currency if isinstance(currency, str) else None, now)
+                              if isinstance(depth, dict) else {"status": "DEPTH_UNAVAILABLE", "amount": None})
                 self._cache(i, result)
         except Exception as error:
             status = ("AUTH_REQUIRED" if isinstance(error, AvanzaAuthError)

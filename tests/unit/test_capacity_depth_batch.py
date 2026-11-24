@@ -123,3 +123,45 @@ async def test_worker_carries_only_retry_after_from_rate_limit(monkeypatch):
         auth = worker._RequestAuth(SessionMaterial((), "test-token"))
         result = await worker._market_batch_operation(auth, {"paths": ["/_api/market-guide/stock/1/orderdepth"]}, client)
         assert result == {"ok": False, "code": "read_rate_limited", "retry_after": 120}
+
+
+async def test_metadata_and_authenticated_depth_overlap_without_increasing_batch_size():
+    metadata_started = asyncio.Event()
+    depth_started = asyncio.Event()
+    client = AsyncMock()
+    async def metadata(path):
+        metadata_started.set()
+        await asyncio.wait_for(depth_started.wait(), 1)
+        return {"orderbookId": path.rsplit("/", 1)[1], "listing": {"currency": "SEK"}}
+    async def batch(ids):
+        assert ids == ["1", "2", "3", "4", "5"]
+        depth_started.set()
+        await asyncio.wait_for(metadata_started.wait(), 1)
+        return [{"receivedTime": int(time.time() * 1000), "marketMakerLevelInAsk": 0,
+                 "levels": [{"sellSide": {"price": 10, "volume": 100}}]} for _ in ids]
+    client.get_public.side_effect = metadata
+    reader = CapacityReader(client, batch)
+    try:
+        result = (await reader.batch(["1", "2", "3", "4", "5"]))["items"]
+        assert all(q["status"] == "OK" for q in result.values())
+        assert client.get_public.await_count == 5
+    finally:
+        await reader.aclose()
+
+
+async def test_metadata_rate_limit_does_not_hide_healthy_instrument():
+    client = AsyncMock()
+    async def metadata(path):
+        if path.endswith("/2"):
+            raise AvanzaRateLimitError(60)
+        return {"orderbookId": "1", "listing": {"currency": "SEK"}}
+    client.get_public.side_effect = metadata
+    depth = {"receivedTime": int(time.time() * 1000), "marketMakerLevelInAsk": 0,
+             "levels": [{"sellSide": {"price": 10, "volume": 100}}]}
+    reader = CapacityReader(client, AsyncMock(return_value=[depth, depth]))
+    try:
+        result = (await reader.batch(["1", "2"]))["items"]
+        assert result["1"]["status"] == "OK"
+        assert result["2"]["status"] == "RATE_LIMITED"
+    finally:
+        await reader.aclose()
