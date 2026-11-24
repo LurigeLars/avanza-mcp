@@ -236,7 +236,8 @@ def verify_content_lifecycle(p):
             f'<tr><td><a href="/handla/order.html/kop/{i}">Test</a></td><td>263,36</td></tr>' for i in range(1000, 1060)) + '</tbody></table></aza-certificate-list>'
         page = setup('/borshandlade-produkter/certifikat-torg/lista.html', many, mode='partial')
         page.evaluate("testSettingsListener({type:'STATE_CHANGED',enabled:true,pollInterval:0},{id:'test-extension'})")
-        page.wait_for_function("testIds.flat().includes('1020')", timeout=20000)
+        # Five immediate mock responses must reach row 21 without artificial one-second gaps.
+        page.wait_for_function("testIds.flat().includes('1020')", timeout=3000)
         assert page.evaluate("testIds.every(ids=>ids.length<=5)")
         expect(page.locator('tbody .avz-capacity-cell').nth(20)).to_contain_text("kr")
         expect(page.locator('tbody .avz-capacity-cell').first).to_have_text("— FAILED")
