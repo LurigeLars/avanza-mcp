@@ -251,8 +251,8 @@
       if (!globalPause && !terminal && nextPoll === Infinity && rows.every(r => attempts.has(r.id) || paused.has(r.id))) nextPoll = nextRead();
       renderList(listRows());
     } finally {
-      // Serial batches, with a one-second gap even if the bridge responds instantly.
-      setTimeout(() => { listBusy = false; }, 1000);
+      // Keep one batch in flight; the next tick may continue at the bridge's own paced rate.
+      listBusy = false;
     }
   }
   function tick() {

@@ -5,6 +5,11 @@ visible volume at that MM ask level**. It requires no investment amount, order
 field changes or per-trade clicks. It is not account buying power, total depth
 at all prices, an execution guarantee, or a commission-inclusive amount.
 
+Version **0.1.17** removes the extra one-second browser delay between serial
+batches. The next 250 ms rendering tick may start the next batch after the
+previous response, subject to the existing bridge and provider pacing and
+shared cooldowns. No server configuration or permissions changed.
+
 Version **0.1.16** removes the twenty-visible-row limit. Newly visible
 instruments are queued in serial batches of at most five, with a one-second
 gap after each response. On-visible mode does not repeat successful reads
@@ -155,7 +160,8 @@ does not imply a fresh book. Delayed books cannot establish a new verified amoun
   blocking the other books indefinitely. No delayed anonymous fallback is used
   in the integrated bridge; missing authentication displays `AUTH_REQUIRED`.
 - All currently visible rows are eligible for progressive batches of at most
-  five, with a one-second gap after each response. Newly visible rows are queued
+  five, with the next batch eligible on the next rendering tick (250 ms).
+  Existing bridge pacing and cooldowns still apply. Newly visible rows are queued
   ahead of failed-row retries. Hidden/offscreen rows cause no new fetches.
 - Version **0.1.4** pauses a row for **30 seconds** after `MM_MISSING`, or when
   the list has no usable ask and a probe returns stale/unavailable depth. The
