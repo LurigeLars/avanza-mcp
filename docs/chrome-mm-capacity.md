@@ -5,6 +5,12 @@ visible volume at that MM ask level**. It requires no investment amount, order
 field changes or per-trade clicks. It is not account buying power, total depth
 at all prices, an execution guarantee, or a commission-inclusive amount.
 
+Version **0.1.19** allows a second stale-list retry ten seconds after the
+first unsuccessful retry (the first remains after three seconds). Maximum
+three attempts per quoted visible instrument per view; successful reads
+are not repeated in on-visible mode. Other transient retry limits, shared
+cooldowns and the 15-second quote age check are unchanged.
+
 Version **0.1.18** gives a visible list instrument with an actual ask price
 one retry three seconds after a stale response, behind unread instruments.
 No stale result is accepted; a dash without a retained verified value gets
