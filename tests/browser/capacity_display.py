@@ -6,6 +6,7 @@ Install that Playwright's Chromium first, or set CAPACITY_TEST_CHROMIUM.
 import asyncio
 from datetime import datetime, timezone
 import json
+import re
 import os
 from pathlib import Path
 import statistics
@@ -82,7 +83,7 @@ def verify_content_lifecycle(p):
             page.route("https://www.avanza.se/**", lambda route: route.fulfill(content_type="text/html", body=body))
             page.goto("https://www.avanza.se" + path)
             page.evaluate("""mode => {
-                window.testCalls=0; window.testHidden=false; window.testOffset=0; window.testMode=mode;
+                window.testCalls=0; window.testIds=[]; window.testHidden=false; window.testOffset=0; window.testMode=mode;
                 window.testAge=0; window.testVolume=1000;
                 const originalDateNow=Date.now.bind(Date);
                 Date.now=()=>originalDateNow()+testAge;
@@ -90,11 +91,12 @@ def verify_content_lifecycle(p):
                 Object.defineProperty(document, 'hidden', {get:()=>testHidden});
                 window.chrome={runtime:{id:"test-extension", onMessage:{addListener:fn=>window.testSettingsListener=fn}, sendMessage:message=>{
                     if(message.type==='STATE')return Promise.resolve({status:'PAIRED',enabled:true,pollInterval:60000});
-                    testCalls++;
+                    testCalls++; testIds.push([...message.ids]);
                     if(testMode==='reject') return Promise.reject(new Error('Synthetic message failure'));
                     if(testMode==='pending') return new Promise((resolve,reject)=>{window.testReject=reject;window.testResolve=resolve;});
                     if(testMode==='backoff')return {status:'BACKOFF',retry_after:30};
                     if(testMode==='stale')return {items:Object.fromEntries(message.ids.map(id=>[id,{status:'STALE'}]))};
+                    if(testMode==='partial')return {items:Object.fromEntries(message.ids.map(id=>[id,id==='1000'?{status:'TIMEOUT'}:{status:'OK',price:263.36,volume:1000,amount:'263360',mm_level:1,currency:'SEK',source_time:Date.now()}]))};
                     if(['TIMEOUT','BUSY','RATE_LIMITED'].includes(testMode))return {
                         items:Object.fromEntries(message.ids.map(id=>[id,{status:testMode}])),
                         retry_after:testMode==='RATE_LIMITED'?60:30};
@@ -123,7 +125,7 @@ def verify_content_lifecycle(p):
                 page.wait_for_function("typeof testReject==='function'")
                 expect(amount).to_have_text("—")
                 assert amount.get_attribute("title") is None
-                page.wait_for_timeout(300)
+                page.wait_for_timeout(1500)
                 expect(amount).to_have_text("—")
                 page.evaluate("testReject(new Error('Synthetic current-view failure'))")
                 expect(amount).to_have_text("— FAILED")
@@ -167,7 +169,8 @@ def verify_content_lifecycle(p):
             page.evaluate("testMode='stale';testAge=30000;testOffset=11000;document.dispatchEvent(new Event('visibilitychange'))")
             page.wait_for_function("testCalls>=2")
             expect(amount).to_have_text(original)
-            assert amount.get_attribute("title") == source_title, "Refresh must not renew the source timestamp"
+            expect(amount).to_have_class(re.compile(r"avz-capacity-stale"))
+            assert amount.get_attribute("title") == source_title + " Not live; retained value.", "Refresh must not renew the source timestamp"
             page.evaluate("testHidden=true;document.dispatchEvent(new Event('visibilitychange'));testHidden=false;document.dispatchEvent(new Event('visibilitychange'))")
             expect(amount).to_have_text("—")
             page.evaluate("testMode='ok';testVolume=1200;testOffset=22000;document.querySelectorAll('.volume.sell')[1]?.replaceChildren('1 200');document.dispatchEvent(new Event('visibilitychange'))")
@@ -192,7 +195,7 @@ def verify_content_lifecycle(p):
             page.wait_for_function('testCalls===1')
             expect(page.locator('tbody .avz-capacity-cell').first).to_have_text('— FAILED')
             page.evaluate('testOffset=11000')
-            page.wait_for_timeout(300)
+            page.wait_for_timeout(1500)
             assert page.evaluate('testCalls') == 1, 'Stop the pass and wait instead of requesting the remaining rows'
             page.evaluate('offset=>testOffset=offset', max(60, seconds) * 1000 + 1000)
             page.wait_for_function('testCalls===2')
@@ -205,28 +208,43 @@ def verify_content_lifecycle(p):
         ]:
             page = setup(path, body)
             page.wait_for_function("s=>document.querySelector(s)?.textContent.includes('kr')", arg=selector)
-            page.wait_for_timeout(300)
+            page.wait_for_timeout(1500)
             calls_per_pass = page.evaluate("testCalls")
             page.evaluate("testOffset=59000")
-            page.wait_for_timeout(300)
+            page.wait_for_timeout(1500)
             assert page.evaluate("testCalls") == calls_per_pass, "No normal refresh before one minute"
             page.evaluate("testOffset=61000")
             page.wait_for_function("testCalls>" + str(calls_per_pass), timeout=2000)
-            page.wait_for_timeout(300)
+            page.wait_for_timeout(1500)
             before = page.evaluate("testCalls")
             page.evaluate("testHidden=true;document.dispatchEvent(new Event('visibilitychange'))")
-            page.wait_for_timeout(300)
+            page.wait_for_timeout(1500)
             assert page.evaluate("testCalls") == before, "Hidden tabs must not fetch"
             page.evaluate("testHidden=false;document.dispatchEvent(new Event('visibilitychange'))")
             page.wait_for_function("testCalls>" + str(before), timeout=2000)
             expect(page.locator(selector).first).to_contain_text("kr")
-            page.wait_for_timeout(300)
+            page.wait_for_timeout(1500)
             assert page.evaluate("testCalls") == before + calls_per_pass, "Resume must fetch once, then keep the normal interval"
             resumed_calls = page.evaluate("testCalls")
             page.evaluate("window.dispatchEvent(new Event('pageshow'))")
             page.wait_for_function("testCalls>" + str(resumed_calls), timeout=2000)
             expect(page.locator(selector).first).to_contain_text("kr")
             page.close()
+
+        # All visible rows are eligible, new scroll rows are read once, and an isolated timeout does not starve later rows.
+        many = '<aza-certificate-list><table><thead><tr><th>Namn</th><th>Sälj</th></tr></thead><tbody>' + ''.join(
+            f'<tr><td><a href="/handla/order.html/kop/{i}">Test</a></td><td>263,36</td></tr>' for i in range(1000, 1060)) + '</tbody></table></aza-certificate-list>'
+        page = setup('/borshandlade-produkter/certifikat-torg/lista.html', many, mode='partial')
+        page.evaluate("testSettingsListener({type:'STATE_CHANGED',enabled:true,pollInterval:0},{id:'test-extension'})")
+        page.wait_for_function("testIds.flat().includes('1020')", timeout=20000)
+        assert page.evaluate("testIds.every(ids=>ids.length<=5)")
+        expect(page.locator('tbody .avz-capacity-cell').nth(20)).to_contain_text("kr")
+        expect(page.locator('tbody .avz-capacity-cell').first).to_have_text("— FAILED")
+        page.evaluate("window.scrollTo(0,document.body.scrollHeight)")
+        page.wait_for_function("testIds.flat().includes('1059')", timeout=25000)
+        expect(page.locator('tbody .avz-capacity-cell').last).to_contain_text("kr")
+        assert page.evaluate("testIds.flat().filter(id=>id==='1020').length") == 1
+        page.close()
 
         # Settings must apply to an existing view, including replies issued before OFF.
         for path, body, selector in [
@@ -235,25 +253,25 @@ def verify_content_lifecycle(p):
         ]:
             page = setup(path, body)
             expect(page.locator(selector).first).to_contain_text("kr")
-            page.wait_for_timeout(300)
+            page.wait_for_timeout(1500)
             page.evaluate("testSettingsListener({type:'STATE_CHANGED',enabled:false,pollInterval:0},{id:'other-extension'})")
             expect(page.locator(selector).first).to_contain_text("kr")
             page.evaluate("testSettingsListener({type:'STATE_CHANGED',enabled:false,pollInterval:0},{id:'test-extension'})")
             expect(page.locator(selector)).to_have_count(0)
             before = page.evaluate("testCalls")
             page.evaluate("testOffset=600000")
-            page.wait_for_timeout(350)
+            page.wait_for_timeout(1500)
             assert page.evaluate("testCalls") == before, "OFF must stop new requests"
             page.evaluate("testMode='stale';testSettingsListener({type:'STATE_CHANGED',enabled:true,pollInterval:0},{id:'test-extension'})")
             expect(page.locator(selector).first).to_have_text("—")
-            page.wait_for_timeout(300)
+            page.wait_for_timeout(1500)
             before = page.evaluate("testCalls")
             page.evaluate("testOffset=1200000")
-            page.wait_for_timeout(350)
+            page.wait_for_timeout(1500)
             assert page.evaluate("testCalls") == before, "On-visible mode has no timer requests"
             page.evaluate("testMode='ok';testHidden=true;document.dispatchEvent(new Event('visibilitychange'));testHidden=false;document.dispatchEvent(new Event('visibilitychange'))")
             expect(page.locator(selector).first).to_contain_text("kr")
-            page.wait_for_timeout(300)
+            page.wait_for_timeout(1500)
             # Late responses from before OFF must not become a new-session value.
             page.evaluate("testMode='pending';document.dispatchEvent(new Event('visibilitychange'))")
             page.wait_for_function("typeof testResolve==='function'")
@@ -266,7 +284,7 @@ def verify_content_lifecycle(p):
             page.evaluate("interval=>testSettingsListener({type:'STATE_CHANGED',enabled:true,pollInterval:interval},{id:'test-extension'})", seconds * 1000)
             before = page.evaluate("testCalls")
             page.evaluate("offset=>testOffset=offset", seconds * 1000 - 1)
-            page.wait_for_timeout(300)
+            page.wait_for_timeout(1500)
             assert page.evaluate("testCalls") == before
             page.evaluate("offset=>testOffset=offset", seconds * 1000 + 1)
             page.wait_for_function("testCalls>" + str(before))
@@ -278,7 +296,7 @@ def verify_content_lifecycle(p):
         expect(amount).to_contain_text("kr")
         page.evaluate("testMode='reject';testOffset=11000;document.dispatchEvent(new Event('visibilitychange'))")
         expect(amount).to_contain_text("FAILED")
-        page.wait_for_timeout(300)
+        page.wait_for_timeout(1500)
         expect(amount).to_contain_text("FAILED")
         page.evaluate("testMode='ok';testOffset=22000;document.dispatchEvent(new Event('visibilitychange'))")
         expect(amount).to_contain_text("kr")
@@ -293,7 +311,7 @@ def verify_content_lifecycle(p):
                 mm_level:1,price:263.36,volume:1000},location.origin);
         })""")
         page.evaluate("testReject(new Error('Synthetic old request failure'))")
-        page.wait_for_timeout(300)
+        page.wait_for_timeout(1500)
         expect(amount).to_contain_text("kr")
 
         # A failed request for the old route must not postpone reads for the new book.
