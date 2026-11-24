@@ -76,6 +76,7 @@
       if (node.title !== title) node.title = title;
     }
     else if (entry?.failure) { const title = `Refresh failed: ${entry.failure}.`; if (node.title !== title) node.title = title; }
+    else if (status === "STALE" && node.classList.contains("avz-capacity-cell")) node.title = "No fresh order depth (STALE).";
     else node.removeAttribute("title");
   }
   function updateOrder() {
@@ -221,9 +222,12 @@
         statuses.push(status);
         values.set(id, status === "OK" ? q : {status});
         const count = (attempts.get(id)?.count ?? 0) + 1;
-        attempts.set(id, {count, due: transient(status) && count < 2
-          ? performance.now() + retryDelay(status, result?.retry_after) : Infinity});
         const ask = rows.find(r => r.id === id)?.ask;
+        const staleWithAsk = status === "STALE" && Number.isFinite(ask) && ask > 0;
+        const retry = count < 2 && (transient(status) || staleWithAsk);
+        const delay = staleWithAsk ? Math.max(3000, (result?.retry_after ?? 0) * 1000)
+          : retryDelay(status, result?.retry_after);
+        attempts.set(id, {count, due: retry ? performance.now() + delay : Infinity});
         if (status === "MM_MISSING" || (ask === null && ["STALE", "DEPTH_UNKNOWN", "DEPTH_UNAVAILABLE"].includes(status))) {
           paused.set(id, {ask, until: performance.now() + 30000});
         }

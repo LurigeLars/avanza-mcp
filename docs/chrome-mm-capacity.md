@@ -5,6 +5,11 @@ visible volume at that MM ask level**. It requires no investment amount, order
 field changes or per-trade clicks. It is not account buying power, total depth
 at all prices, an execution guarantee, or a commission-inclusive amount.
 
+Version **0.1.18** gives a visible list instrument with an actual ask price
+one retry three seconds after a stale response, behind unread instruments.
+No stale result is accepted; a dash without a retained verified value gets
+an explicit STALE tooltip. Existing shared cooldowns still apply.
+
 Version **0.1.17** removes the extra one-second browser delay between serial
 batches. The next 250 ms rendering tick may start the next batch after the
 previous response, subject to the existing bridge and provider pacing and
@@ -195,7 +200,7 @@ does not imply a fresh book. Delayed books cannot establish a new verified amoun
   per-instrument SLA.
 - STALE or a pending retry keeps the current view's last verified amount, even
   beyond fifteen seconds. Its original source time is never renewed. With no
-  verified value yet, a dash is shown. The backend's source-age validation is
+  verified value yet, a dash is shown (with a STALE tooltip for list rows). The backend's source-age validation is
   unchanged; retained display history is not a fresh quote and is dimmed.
 - OFFLINE, TIMEOUT, BUSY, DEPTH_UNAVAILABLE, AUTH_REQUIRED, RATE_LIMITED,
   PAIR_REQUIRED, CURRENCY_UNKNOWN and unverified DOM display FAILED and discard
