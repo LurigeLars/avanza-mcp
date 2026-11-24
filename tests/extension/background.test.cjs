@@ -147,3 +147,27 @@ test("current isolated content-script route survives same-document navigation", 
   assert.equal((await w.message(list, {...initial, url: "https://example.com/"})).status, "DENIED");
   assert.equal(w.requests(), 3);
 });
+
+test("bridge HTTP error status is preserved without exposing arbitrary text", async () => {
+  for (const [http, body, expected, seconds] of [
+    [429, {status: "BUSY"}, "BUSY", 30],
+    [504, {status: "TIMEOUT"}, "TIMEOUT", 30],
+    [400, {status: "INVALID"}, "INVALID", undefined],
+    [403, {status: "DENIED"}, "DENIED", undefined],
+    [503, {status: "secret"}, "OFFLINE", 30]
+  ]) {
+    const w = worker({token: "a".repeat(64)}, {now: 100000}, async () => ({ok: false, status: http, json: async () => body}));
+    const result = await w.send();
+    assert.equal(result.status, expected);
+    assert.equal(result.retry_after, seconds);
+  }
+});
+test("a mixed batch timeout does not stop healthy instruments, but a provider limit does", async () => {
+  for (const [status, expected] of [["TIMEOUT", undefined], ["RATE_LIMITED", 60]]) {
+    const w = worker({token: "a".repeat(64)}, {now: 100000}, async () =>
+      ok({items: {123: {status: "OK"}, 456: {status}}}));
+    const result = await w.message({type: "CAPACITY", ids: ["123", "456"]});
+    assert.equal(result.items[123].status, "OK");
+    assert.equal(result.retry_after, expected);
+  }
+});
