@@ -5,6 +5,12 @@ visible volume at that MM ask level**. It requires no investment amount, order
 field changes or per-trade clicks. It is not account buying power, total depth
 at all prices, an execution guarantee, or a commission-inclusive amount.
 
+Version **0.1.15** validates the current pathname supplied by the isolated
+content script after same-document navigation, rather than relying on Chrome’s
+potentially stale sender pathname. The HTTPS Avanza top-frame check and the
+read-only bridge, ID, pairing and freshness limits are unchanged. Reload the
+extension and existing Avanza tabs to activate the new scripts.
+
 Version **0.1.14** starts a new tab view with a dash while the first capacity
 read is pending, including while the order-depth DOM is still loading. A
 completed read or validation failure can then display FAILED. Previous-view
