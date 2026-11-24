@@ -247,6 +247,21 @@ def verify_content_lifecycle(p):
         assert page.evaluate("testIds.flat().filter(id=>id==='1020').length") == 1
         page.close()
 
+        # A stale quoted instrument gets one fast retry; successful and unquoted rows do not.
+        page = setup('/borshandlade-produkter/certifikat-torg/lista.html', LIST, mode='stale')
+        page.evaluate("testSettingsListener({type:'STATE_CHANGED',enabled:true,pollInterval:0},{id:'test-extension'})")
+        page.wait_for_function("testIds.flat().includes('130')")
+        first = page.locator('tbody .avz-capacity-cell').first
+        expect(first).to_have_attribute("title", "No fresh order depth (STALE).")
+        page.evaluate("testMode='ok';testOffset=3001")
+        expect(first).to_contain_text("kr")
+        page.wait_for_function("testIds.flat().filter(id=>id==='127').length===2")
+        assert page.evaluate("testIds.flat().filter(id=>id==='130').length") == 1
+        page.evaluate("testOffset=120000")
+        page.wait_for_timeout(750)
+        assert page.evaluate("testIds.flat().filter(id=>id==='123').length") == 2
+        page.close()
+
         # Settings must apply to an existing view, including replies issued before OFF.
         for path, body, selector in [
             ("/borshandlade-produkter/certifikat-torg/lista.html", LIST, "tbody .avz-capacity-cell"),
@@ -268,8 +283,13 @@ def verify_content_lifecycle(p):
             page.wait_for_timeout(1500)
             before = page.evaluate("testCalls")
             page.evaluate("testOffset=1200000")
+            if path.endswith("lista.html"):
+                page.wait_for_function("testCalls>=" + str(before + 2))
+                page.wait_for_timeout(750)
+                before = page.evaluate("testCalls")
+                page.evaluate("testOffset=1800000")
             page.wait_for_timeout(1500)
-            assert page.evaluate("testCalls") == before, "On-visible mode has no timer requests"
+            assert page.evaluate("testCalls") == before, "On-visible mode has no timer requests after bounded retries"
             page.evaluate("testMode='ok';testHidden=true;document.dispatchEvent(new Event('visibilitychange'));testHidden=false;document.dispatchEvent(new Event('visibilitychange'))")
             expect(page.locator(selector).first).to_contain_text("kr")
             page.wait_for_timeout(1500)
