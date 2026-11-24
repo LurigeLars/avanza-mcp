@@ -31,10 +31,15 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
   let avanza = false, page = false, orderId = null;
   try {
     const url = new URL(sender.url);
-    orderId = url.pathname.match(/^\/handla\/order\.html\/(?:kop|salj)\/([0-9]{1,12})\/?$/)?.[1] ?? null;
     avanza = !!sender.tab && sender.frameId === 0 && url.protocol === "https:"
       && ["www.avanza.se", "avanza.se"].includes(url.hostname);
-    page = avanza && (url.pathname === "/borshandlade-produkter/certifikat-torg/lista.html" || orderId);
+    // Chrome may retain the initial sender.url across history.pushState().
+    // Authenticate the frame origin, but validate the current route from our isolated content script.
+    const pathname = message?.pathname === undefined ? url.pathname : message.pathname;
+    if (avanza && typeof pathname === "string") {
+      orderId = pathname.match(/^\/handla\/order\.html\/(?:kop|salj)\/([0-9]{1,12})\/?$/)?.[1] ?? null;
+      page = pathname === "/borshandlade-produkter/certifikat-torg/lista.html" || orderId;
+    }
   } catch { /* Unknown sender is denied. */ }
   if (!(popup || avanza)) { reply({status: "DENIED"}); return false; }
   if (message?.type === "CAPACITY" && inFlight >= 4) { reply({status: "BACKOFF", retry_after: 5}); return false; }

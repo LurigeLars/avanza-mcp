@@ -353,8 +353,10 @@ def main():
                 errors = []
                 page.on("pageerror", lambda error: errors.append(str(error)))
                 context.route("https://www.avanza.se/**", lambda route: route.fulfill(
-                    content_type="text/html", body=LIST if "lista.html" in route.request.url else ORDER))
-                page.goto("https://www.avanza.se/borshandlade-produkter/certifikat-torg/lista.html?s=spread.asc")
+                    content_type="text/html", body=LIST if "certifikat-torg/" in route.request.url else ORDER))
+                # Exercise real MV3 messaging after SPA navigation, without reinjecting the content script.
+                page.goto("https://www.avanza.se/borshandlade-produkter/certifikat-torg/certifikat-torg.html")
+                page.evaluate("history.pushState({}, '', '/borshandlade-produkter/certifikat-torg/lista.html?s=spread.asc')")
                 page.wait_for_function("document.querySelector('tbody .avz-capacity-cell')?.textContent.includes('263')")
                 assert page.locator("tbody .avz-capacity-cell").count() == 10
                 expect(page.locator("thead .avz-capacity-cell")).to_have_text("Max buy capacity")
