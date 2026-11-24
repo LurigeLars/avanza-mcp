@@ -5,6 +5,17 @@ visible volume at that MM ask level**. It requires no investment amount, order
 field changes or per-trade clicks. It is not account buying power, total depth
 at all prices, an execution guarantee, or a commission-inclusive amount.
 
+Version **0.1.16** removes the twenty-visible-row limit. Newly visible
+instruments are queued in serial batches of at most five, with a one-second
+gap after each response. On-visible mode does not repeat successful reads
+until the next view; it reads new scroll rows and allows one bounded retry
+per instrument after transient failures. An isolated depth failure does not
+stop other rows. A shared provider limit or unavailable bridge pauses the
+queue; a second consecutive failure stops recovery until the next view or
+scheduled refresh. Retained values are dimmed and their tooltip identifies
+them as not live. Known HTTP error codes are preserved from a strict allowlist.
+Provider and bridge limits are unchanged.
+
 Version **0.1.15** validates the current pathname supplied by the isolated
 content script after same-document navigation, rather than relying on Chrome’s
 potentially stale sender pathname. The HTTPS Avanza top-frame check and the
@@ -25,8 +36,9 @@ Pairing controls collapse after setup and remain available under **Pair bridge a
 **Every minute** (default), **Every 2 minutes** and **Every 5 minutes**.
 Settings apply to open tabs immediately and survive popup/worker restarts.
 **When the tab is shown** reads on opening, returning to the tab or restoring a
-page, with no recurring bridge reads while staying there. Provider cooldowns
-still apply; a failed read in this mode waits for the next view. Avanza's own
+page, with no recurring successful reads while staying there. New visible rows are
+read when scrolling, and a transient failure gets a bounded retry. Provider
+cooldowns still apply. Avanza's own
 live stream continues normally and can update the order-page amount immediately.
 All extension labels and tooltips are English; Avanza's Swedish site and SEK
 number formatting are unchanged. Reload the extension and open Avanza tabs once
@@ -142,9 +154,9 @@ does not imply a fresh book. Delayed books cannot establish a new verified amoun
   worker. A slow instrument yields a per-item unavailable result rather than
   blocking the other books indefinitely. No delayed anonymous fallback is used
   in the integrated bridge; missing authentication displays `AUTH_REQUIRED`.
-- Up to **20 currently visible rows**, top first, are fetched progressively in
-  batches of five. Extra visible rows explicitly show the limit. Scrolling
-  brings other rows into scope. Hidden/offscreen rows cause no new fetches.
+- All currently visible rows are eligible for progressive batches of at most
+  five, with a one-second gap after each response. Newly visible rows are queued
+  ahead of failed-row retries. Hidden/offscreen rows cause no new fetches.
 - Version **0.1.4** pauses a row for **30 seconds** after `MM_MISSING`, or when
   the list has no usable ask and a probe returns stale/unavailable depth. The
   amount cell is blank during this pause. A changed list ask resumes reads at
@@ -161,11 +173,12 @@ does not imply a fresh book. Delayed books cannot establish a new verified amoun
   Per-instrument failures do not abort later rows. Order-page bridge
   fallback uses the same selected interval; passive DOM/stream updates
   remain immediate.
-  Whole-bridge failures, timeouts or busy results pause requests across tabs for
+  Whole-bridge failures, all-item timeouts or busy results pause requests across tabs for
   thirty seconds; rate limits pause them for sixty seconds. Missing authentication
   or pairing retains the selected retry interval. Provider `Retry-After` is also respected by
-  the broker. Rendering/freshness checks run every 250 ms and DOM
-  changes update the order panel through a MutationObserver. Returning to a
+  the broker. Rendering/freshness checks run every 250 ms. The list geometry
+  is cached and invalidated on relevant DOM changes, scrolling or resize;
+  DOM changes update the order panel through a MutationObserver. Returning to a
   visible tab or restoring a page triggers an immediate read; existing bridge
   limits and provider cooldown still apply. Browser scheduling
   and multi-batch upstream latency still apply; this is not an exact sixty-second
@@ -173,7 +186,7 @@ does not imply a fresh book. Delayed books cannot establish a new verified amoun
 - STALE or a pending retry keeps the current view's last verified amount, even
   beyond fifteen seconds. Its original source time is never renewed. With no
   verified value yet, a dash is shown. The backend's source-age validation is
-  unchanged; retained display history is not a fresh quote.
+  unchanged; retained display history is not a fresh quote and is dimmed.
 - OFFLINE, TIMEOUT, BUSY, DEPTH_UNAVAILABLE, AUTH_REQUIRED, RATE_LIMITED,
   PAIR_REQUIRED, CURRENCY_UNKNOWN and unverified DOM display FAILED and discard
   the retained amount. A pending retry does not clear that failure. Missing MM

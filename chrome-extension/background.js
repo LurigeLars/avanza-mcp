@@ -23,7 +23,15 @@ async function request(path, data, token) {
     headers: {"Content-Type": "application/json", "X-Avanza-Capacity": "1", ...(token ? {"X-Avanza-Token": token} : {})},
     body: JSON.stringify(data), signal: AbortSignal.timeout(3500)
   });
-  if (!response.ok) return {status: response.status === 401 ? "PAIR_REQUIRED" : response.status === 429 ? "RATE_LIMITED" : "OFFLINE"};
+  if (!response.ok) {
+    let body;
+    try { body = await response.json(); } catch { /* Unrecognized HTTP error. */ }
+    const allowed = {400: ["INVALID"], 401: ["PAIR_REQUIRED"], 403: ["DENIED", "PAIR_REQUIRED"],
+      413: ["INVALID_SIZE"], 429: ["BUSY", "RATE_LIMITED", "PAIR_LIMITED"], 503: ["OFFLINE"], 504: ["TIMEOUT"]};
+    if (allowed[response.status]?.includes(body?.status)) return {status: body.status};
+    return {status: response.status === 401 ? "PAIR_REQUIRED" : response.status === 429 ? "RATE_LIMITED"
+      : response.status === 504 ? "TIMEOUT" : "OFFLINE"};
+  }
   return response.json();
 }
 chrome.runtime.onMessage.addListener((message, sender, reply) => {
@@ -80,10 +88,11 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     if (!token) return {status: "PAIR_REQUIRED"};
     if (Number.isSafeInteger(capacityRetryUntil)) retryUntil = Math.max(retryUntil, capacityRetryUntil);
     if (Date.now() < retryUntil) return {status: "BACKOFF", retry_after: Math.ceil((retryUntil - Date.now()) / 1000)};
-    const result = await request("/capacity", {ids}, token).catch(() => ({status: "OFFLINE"}));
-    const statuses = [result.status, ...Object.values(result.items ?? {}).map(q => q?.status)];
-    const delay = statuses.includes("RATE_LIMITED") ? 60000
-      : statuses.some(s => ["TIMEOUT", "BUSY", "OFFLINE"].includes(s)) ? 30000 : 0;
+    const result = await request("/capacity", {ids}, token).catch(error => ({status: error?.name === "TimeoutError" ? "TIMEOUT" : "OFFLINE"}));
+    const statuses = Object.values(result.items ?? {}).map(q => q?.status);
+    const transient = s => ["TIMEOUT", "BUSY", "OFFLINE"].includes(s);
+    const delay = result.status === "RATE_LIMITED" || statuses.includes("RATE_LIMITED") ? 60000
+      : transient(result.status) || (statuses.length && statuses.every(transient)) ? 30000 : 0;
     if (delay) {
       retryUntil = Math.max(retryUntil, Date.now() + delay);
       await chrome.storage.local.set({capacityRetryUntil: retryUntil});
