@@ -105,7 +105,7 @@
     orderBusy = true;
     const currentGeneration = generation;
     try {
-      const result = await chrome.runtime.sendMessage({type: "CAPACITY", ids: [id]});
+      const result = await chrome.runtime.sendMessage({type: "CAPACITY", pathname: location.pathname, ids: [id]});
       if (!enabled || currentGeneration !== generation || document.hidden || C.bookId(location.href) !== id) return;
       orderReadComplete = true;
       const q = result?.items?.[id] ?? {status: result?.status ?? "OFFLINE"};
@@ -176,7 +176,7 @@
         const visibleIds = new Set(listRows().filter(r => !paused.has(r.id)).map(r => r.id));
         const group = ids.slice(offset, offset + 5).filter(id => visibleIds.has(id));
         if (!group.length) continue;
-        const result = await chrome.runtime.sendMessage({type: "CAPACITY", ids: group});
+        const result = await chrome.runtime.sendMessage({type: "CAPACITY", pathname: location.pathname, ids: group});
         if (!enabled || currentGeneration !== generation || location.href !== route || document.hidden) return;
         for (const id of group) {
           const q = result?.items?.[id] ?? {status: result?.status ?? "OFFLINE"};

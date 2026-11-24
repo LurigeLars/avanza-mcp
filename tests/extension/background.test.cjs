@@ -129,3 +129,21 @@ test("OFF remains available while all four capacity requests are busy", async ()
   waiting.forEach(resolve => resolve(ok({items: {}})));
   await Promise.all(pending);
 });
+
+test("current isolated content-script route survives same-document navigation", async () => {
+  const w = worker({token: "a".repeat(64)}, {now: 100000}, async () => ok({items: {123: {status: "OK"}}}));
+  const initial = {...sender, url: "https://www.avanza.se/hem/hem.html"};
+  const list = {type: "CAPACITY", pathname: "/borshandlade-produkter/certifikat-torg/lista.html", ids: ["123"]};
+  const order = {type: "CAPACITY", pathname: "/handla/order.html/kop/123", ids: ["123"]};
+  assert.equal((await w.message(list, initial)).items[123].status, "OK");
+  assert.equal((await w.message(order, initial)).items[123].status, "OK");
+  assert.equal((await w.message(list, {...sender, url: "https://www.avanza.se/handla/order.html/kop/456"})).items[123].status, "OK");
+  assert.equal((await w.message({...order, ids: ["456"]}, initial)).status, "INVALID");
+  assert.equal((await w.message({...order, ids: ["123", "456"]}, initial)).status, "INVALID");
+  assert.equal((await w.message({...list, pathname: "/hem/hem.html"}, sender)).status, "INVALID");
+  assert.equal((await w.message({...list, pathname: "https://www.avanza.se/borshandlade-produkter/certifikat-torg/lista.html"}, sender)).status, "INVALID");
+  assert.equal((await w.message({...list, pathname: null}, sender)).status, "INVALID");
+  assert.equal((await w.message(list, {...initial, frameId: 1})).status, "DENIED");
+  assert.equal((await w.message(list, {...initial, url: "https://example.com/"})).status, "DENIED");
+  assert.equal(w.requests(), 3);
+});
