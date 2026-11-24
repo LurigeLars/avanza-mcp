@@ -248,6 +248,7 @@
           if (!visibleIds.has(id)) cache.delete(id);
         }
       }
+      if (!globalPause && !terminal && nextPoll === Infinity && rows.every(r => attempts.has(r.id) || paused.has(r.id))) nextPoll = nextRead();
       renderList(listRows());
     } finally {
       // Serial batches, with a one-second gap even if the bridge responds instantly.
