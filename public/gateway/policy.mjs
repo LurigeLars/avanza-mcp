@@ -42,6 +42,7 @@ const MARKET_TOOLS = [
 ].join(',');
 
 const AUTH_TOOLS = [
+  'tool_usage',
   'connect_avanza',
   'disconnect_avanza',
   'get_auth_status',

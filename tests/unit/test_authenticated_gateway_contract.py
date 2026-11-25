@@ -33,9 +33,11 @@ async def test_gateway_allowlist_matches_single_authenticated_server_surface():
         server_tools = {tool.name for tool in await client.list_tools()}
 
     assert len(market_tools) == 37
-    assert len(auth_tools) == 26
-    assert len(allowed_tools) == 63
+    assert len(auth_tools) == 27
+    assert len(allowed_tools) == 64
     assert allowed_tools == server_tools
+    from avanza_mcp.tool_usage import KNOWN_TOOLS
+    assert KNOWN_TOOLS == server_tools - {"tool_usage"}
     assert "enrich_leveraged_snapshot" not in allowed_tools
     assert "get_orderbook_depth" not in allowed_tools
     assert {"get_credit_info", "get_current_offers"}.isdisjoint(allowed_tools)
