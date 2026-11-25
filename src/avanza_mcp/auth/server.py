@@ -11,6 +11,7 @@ from typing import Annotated, Any, Literal, TypeVar
 
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
+from ..tool_usage import install_tool_usage
 from pydantic import BaseModel, Field, ValidationError
 
 from .. import (
@@ -753,6 +754,7 @@ def create_auth_server(broker: AuthProcessBroker | None = None) -> FastMCP:
         )
 
     server.mount(public_mcp)
+    install_tool_usage(server)
     return server
 
 

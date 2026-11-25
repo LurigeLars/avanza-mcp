@@ -11,7 +11,7 @@ import {
 
 test('default allowlist is the authenticated Avanza and explicitly confirmed forum surface', () => {
   const allowed = parseAllowedTools();
-  assert.equal(allowed.size, 63);
+  assert.equal(allowed.size, 64);
   assert.equal(allowed.has('search_instruments'), true);
   assert.equal(allowed.has('screen_leveraged_instruments'), true);
   assert.equal(allowed.has('enrich_leveraged_snapshot'), false);
@@ -27,7 +27,7 @@ test('default allowlist is the authenticated Avanza and explicitly confirmed for
   assert.equal(allowed.has('create_forum_post'), true);
   assert.equal(allowed.has('reply_to_forum_post'), true);
   assert.equal(allowed.has('future_place_order'), false);
-  assert.equal(ALL_ALLOWED_TOOLS.split(',').length, 63);
+  assert.equal(ALL_ALLOWED_TOOLS.split(',').length, 64);
 });
 
 test('legacy authenticated profile token maps to the same single surface', () => {
