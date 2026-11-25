@@ -65,6 +65,12 @@ inside a dedicated isolated worker. Successful authenticated account and ordinar
 operations reset the 2-hour idle timer. Order-depth SSE snapshots deliberately do not reset
 it, matching Avanza's `aza-do-not-touch-session: true` semantics.
 
+Market-data, batch and order-depth commands share one paced keep-alive HTTP client inside
+the worker (16 in flight, 50 ms between request starts), so they reuse TLS connections and
+one 429 cooldown. During that cooldown the worker answers `read_rate_limited` with
+`retry_after` at once instead of sleeping. The client is closed as soon as the session ends,
+so no pooled client keeps session cookies past logout, invalidation or expiry.
+
 After 2 hours without qualifying authenticated activity the worker sends Avanza remote logout, clears local HTTP/session state, and exits. The memory-only session also has a 16-hour absolute lifetime that activity cannot extend. A process/server/computer restart therefore requires BankID again.
 
 ### one_shot

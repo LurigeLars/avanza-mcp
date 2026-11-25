@@ -298,7 +298,10 @@ async def test_order_depth_does_not_extend_memory_only_idle_timer(monkeypatch, c
         async def aclose(self):
             return None
 
-    async def order_depth(auth, command):
+        async def invalidate_session(self):
+            self.session = None
+
+    async def order_depth(auth, command, client=None):
         assert auth.session is session
         clock["now"] = worker._MEMORY_ONLY_IDLE_SECONDS + 1
         return {"ok": True, "result": {"bids": [], "asks": []}}
@@ -328,6 +331,112 @@ async def test_order_depth_does_not_extend_memory_only_idle_timer(monkeypatch, c
     ]
     assert len(instances) == 1
     assert instances[0].disconnect_calls == 1
+
+
+async def test_memory_only_daemon_reuses_one_market_client_per_session(
+    monkeypatch, capsys
+):
+    """Market commands share one paced client; it closes when the session ends."""
+    session = SessionMaterial((), "token")
+    clients = []
+
+    class FakeBrowserAuth:
+        def __init__(self, *args, **kwargs):
+            self.session = None
+
+        async def open_browser(self):
+            self.session = session
+            return worker.AuthStatus(state="connected", message="connected")
+
+        async def disconnect(self):
+            self.session = None
+            return worker.AuthStatus(state="disconnected", message="disconnected")
+
+        async def open_disconnect_browser(self):
+            return await self.disconnect()
+
+        def status(self):
+            state = "connected" if self.session is not None else "disconnected"
+            return worker.AuthStatus(state=state, message=state)
+
+        async def aclose(self):
+            return None
+
+        async def invalidate_session(self):
+            self.session = None
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.closed = False
+            self._rate_limit_until = 0.0
+            clients.append(self)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            self.closed = True
+
+    seen = []
+
+    async def market(auth, command, client=None):
+        seen.append(client)
+        if command["path"] == "/limited":
+            # Simulate the shared client recording an upstream Retry-After.
+            client._rate_limit_until = asyncio.get_running_loop().time() + 30
+        return {"ok": True, "result": {}}
+
+    async def batch(auth, command, client=None):
+        seen.append(client)
+        return {"ok": True, "result": []}
+
+    commands = iter(
+        [
+            {"action": "connect"},
+            {"action": "market", "path": "/a"},
+            {"action": "market_batch", "paths": []},
+            {"action": "market", "path": "/limited"},
+            {"action": "market", "path": "/b"},
+            {"action": "disconnect"},
+            {"action": "status"},
+            {"action": "shutdown"},
+        ]
+    )
+
+    def feed(loop, queue):
+        def push_next():
+            try:
+                queue.put_nowait(json.dumps(next(commands)))
+            except StopIteration:
+                return
+            # Leave time for one loop pass so session-end cleanup runs.
+            loop.call_later(0.3, push_next)
+
+        loop.call_soon(push_next)
+
+    monkeypatch.setattr(worker, "BrowserAuth", FakeBrowserAuth)
+    monkeypatch.setattr(worker, "AvanzaClient", FakeClient)
+    monkeypatch.setattr(worker, "_market_operation", market)
+    monkeypatch.setattr(worker, "_market_batch_operation", batch)
+    monkeypatch.setattr(worker, "_start_stdin_reader", feed)
+    monkeypatch.setattr(worker, "_parent_alive", lambda _pid: True)
+
+    assert await worker._run_daemon("memory_only", 123) == "shutdown"
+
+    payloads = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if line.strip()
+    ]
+    assert len(clients) == 1 and seen == [clients[0]] * 3
+    assert clients[0].kwargs["min_request_interval"] == (
+        worker._MARKET_BATCH_MIN_REQUEST_INTERVAL
+    )
+    assert clients[0].closed is True
+    # The command during cooldown fails fast instead of sleeping in the daemon.
+    assert payloads[4]["code"] == "read_rate_limited"
+    assert 0 < payloads[4]["retry_after"] <= 30
 
 
 async def test_verified_health_read_extends_memory_only_idle_timer(monkeypatch, capsys):
