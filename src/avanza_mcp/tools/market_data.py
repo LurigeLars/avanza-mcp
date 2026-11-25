@@ -71,7 +71,10 @@ async def get_stock_chart(
 
 @mcp.tool(annotations=READ_ONLY)
 async def get_orderbook(ctx: Context, order_book_id: OrderBookId) -> OrderDepth:
-    """Get latest available buy/sell depth; empty levels are valid. Not guaranteed real-time."""
+    """Get displayed bid/ask levels and sizes. Levels can be empty or delayed.
+
+    Use get_execution_quote to check authenticated bid/ask before trading.
+    """
     with api_errors():
         return await MarketDataService(ctx.lifespan_context["client"]).get_order_depth(
             order_book_id
