@@ -14,8 +14,19 @@ from avanza_mcp.services.leveraged_screen_service import (
     SuitabilityCriteria,
     _discovery_spread_percent,
     _execution_rank,
+    _number,
+    _validate_suitability,
     _timestamp_ms,
 )
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf"), "NaN", "Infinity"])
+def test_nonfinite_prices_and_thresholds_are_rejected(value):
+    assert _number(value) is None
+    assert _discovery_spread_percent(value, 10) is None
+    assert _discovery_spread_percent(10, value) is None
+    with pytest.raises(ValueError, match="finite"):
+        _validate_suitability(SuitabilityCriteria(min_stop_loss_buffer_percent=value))
 
 
 class FakeItem:
