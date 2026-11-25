@@ -66,7 +66,10 @@ async def filter_certificates(
 async def get_certificate_info(
     ctx: Context, order_book_id: OrderBookId
 ) -> CertificateInfo:
-    """Get certificate identity and quote with explicit freshness/source-age metadata."""
+    """Get certificate identity and quote with source-age metadata.
+
+    Use get_execution_quote to check authenticated bid/ask before trading.
+    """
     with api_errors():
         return await MarketDataService(
             ctx.lifespan_context["client"]

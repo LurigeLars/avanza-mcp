@@ -645,7 +645,10 @@ def create_auth_server(broker: AuthProcessBroker | None = None) -> FastMCP:
     async def get_portfolio_snapshot(
         limit: Annotated[int, Field(ge=1, le=100)] = 100,
     ) -> PortfolioSnapshot:
-        """Get one bounded current account/portfolio state snapshot."""
+        """Read accounts, holdings, cash, active orders, deals and stop losses together.
+
+        Use get_holdings when you only need current positions and cash.
+        """
         return await account_result(
             "portfolio_snapshot",
             PortfolioSnapshot,
