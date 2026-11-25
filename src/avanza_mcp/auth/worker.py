@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import logging
 import os
 import sys
@@ -1131,6 +1132,43 @@ async def _run_daemon(mode: str, parent_pid: int) -> str:
     _start_stdin_reader(loop, queue)
     last_activity: float | None = None
     session_started_at: float | None = None
+    # One paced keep-alive client per session: a fresh client per market command
+    # paid a new TLS handshake (~0.6 s) and reset the shared 429 cooldown.
+    market_client: AvanzaClient | None = None
+
+    async def close_market_client() -> None:
+        nonlocal market_client
+        if market_client is not None:
+            client, market_client = market_client, None
+            await client.__aexit__(None, None, None)
+
+    async def session_market_client() -> AvanzaClient:
+        nonlocal market_client
+        if market_client is None:
+            market_client = AvanzaClient(
+                session_provider=lambda: auth.session,
+                session_invalidated=auth.invalidate_session,
+                max_connections=_MARKET_BATCH_CONCURRENCY,
+                max_keepalive_connections=_MARKET_BATCH_CONCURRENCY,
+                max_in_flight_requests=_MARKET_BATCH_CONCURRENCY,
+                min_request_interval=_MARKET_BATCH_MIN_REQUEST_INTERVAL,
+            )
+            await market_client.__aenter__()
+        return market_client
+
+    def market_cooldown() -> dict[str, Any] | None:
+        # Fail fast instead of sleeping out Retry-After: a wait beyond the broker's
+        # command timeout would retire this daemon and its in-memory session.
+        if market_client is None:
+            return None
+        remaining = market_client._rate_limit_until - loop.time()
+        if remaining <= 0:
+            return None
+        return {
+            "ok": False,
+            "code": "read_rate_limited",
+            "retry_after": math.ceil(remaining),
+        }
 
     try:
         while True:
@@ -1148,6 +1186,8 @@ async def _run_daemon(mode: str, parent_pid: int) -> str:
             else:
                 last_activity = None
                 session_started_at = None
+                # Never keep session cookies in a pooled client after the session ends.
+                await close_market_client()
 
             expired = (
                 _daemon_session_expired(
@@ -1227,19 +1267,25 @@ async def _run_daemon(mode: str, parent_pid: int) -> str:
                 _emit(response)
                 continue
             if action == "market":
-                response = await _market_operation(auth, command)
+                response = market_cooldown() or await _market_operation(
+                    auth, command, await session_market_client()
+                )
                 if response.get("ok") is True and mode == "memory_only":
                     last_activity = time.monotonic()
                 _emit(response)
                 continue
             if action == "market_batch":
-                response = await _market_batch_operation(auth, command)
+                response = market_cooldown() or await _market_batch_operation(
+                    auth, command, await session_market_client()
+                )
                 if response.get("ok") is True and mode == "memory_only":
                     last_activity = time.monotonic()
                 _emit(response)
                 continue
             if action == "order_depth":
-                response = await _order_depth_operation(auth, command)
+                response = market_cooldown() or await _order_depth_operation(
+                    auth, command, await session_market_client()
+                )
                 # Avanza's order-depth SSE explicitly asks the server not to touch
                 # the session idle timer, so keep our local inactivity semantics aligned.
                 _emit(response)
@@ -1248,6 +1294,7 @@ async def _run_daemon(mode: str, parent_pid: int) -> str:
             _emit({"ok": False, "code": "operation_not_allowed"})
     finally:
         try:
+            await close_market_client()
             if auth.session is not None:
                 await auth.disconnect()
         finally:
