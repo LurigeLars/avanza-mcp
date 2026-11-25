@@ -59,6 +59,7 @@ def _rows(prefix: str, fills: list[tuple[str, str, str]], currency="SEK") -> dic
 def note(
     *, isin="SE0000000001", side="BUY", day="2026-11-12",
     fills=(("10", "12,00", "261112 09:15:01"),), page2=(), total=None, average=None,
+    page2_currency="SEK",
 ) -> bytes:
     verb = "köpt" if side == "BUY" else "sålt"
     quantity = sum(int(q.replace(" ", "")) for q, _, _ in (*fills, *page2))
@@ -78,7 +79,7 @@ def note(
     } | _rows("instrument_", list(fills))
     pages = [first]
     if page2:
-        pages.append({"isin_number_page2": isin} | _rows("instrument_page2_", list(page2)))
+        pages.append({"isin_number_page2": isin} | _rows("instrument_page2_", list(page2), currency=page2_currency))
     return _pdf(pages)
 
 
@@ -205,6 +206,9 @@ async def test_summer_time_fill_gets_cest_offset(archive_folder):
     (note(total="11"), "AMBIGUOUS", "quantity_mismatch"),
     (note(fills=(("9", "12,00", "261112 09:15:01"),)), "AMBIGUOUS", "quantity_mismatch"),
     (note(average="15,00"), "AMBIGUOUS", "price_mismatch"),
+    (note(fills=(("6", "12,00", "261112 09:15:01"),),
+          page2=(("4", "12,00", "261112 09:15:02"),), page2_currency="USD"),
+     "AMBIGUOUS", "mixed_fill_currencies"),
     (note(isin="SE0000000002"), "AMBIGUOUS", "isin_mismatch"),
     (note(side="SELL"), "AMBIGUOUS", "side_mismatch"),
     (note(fills=(("10", "12,00", "261111 23:59:59"),)), "AMBIGUOUS", "fill_date_mismatch"),

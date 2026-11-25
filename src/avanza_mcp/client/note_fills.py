@@ -24,7 +24,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
-PARSER_VERSION = "avanza-note-form-v1"
+PARSER_VERSION = "avanza-note-form-v2"
 TIMEZONE = "Europe/Stockholm"
 _STOCKHOLM = ZoneInfo(TIMEZONE)
 _MAX_PAGES = 20
@@ -235,7 +235,9 @@ def reconcile(
         return "AMBIGUOUS", "non_positive_fill"
     if expected is None or filled != expected or parsed.total_quantity != expected:
         return "AMBIGUOUS", "quantity_mismatch"
-    if parsed.average_price is not None and len({f.currency for f in parsed.fills}) == 1:
+    if len({f.currency for f in parsed.fills}) != 1:
+        return "AMBIGUOUS", "mixed_fill_currencies"
+    if parsed.average_price is not None:
         vwap = sum((f.quantity * f.price for f in parsed.fills), Decimal(0)) / filled
         # Fill prices are printed rounded; the declared average carries more decimals.
         if abs(vwap - parsed.average_price) > parsed.average_price * Decimal("0.001"):
