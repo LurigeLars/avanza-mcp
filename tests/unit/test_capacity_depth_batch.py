@@ -102,27 +102,59 @@ async def test_slow_http_item_does_not_block_other_depths_or_cancel_session():
             assert client._authenticated_session is session
 
 
-async def test_depth_rate_limit_respects_retry_after_without_more_worker_calls(monkeypatch):
+@pytest.mark.parametrize("path", [
+    "/_api/market-guide/stock/1/orderdepth",
+    "/_api/trading-critical/rest/marketdata/1",
+])
+async def test_batch_rate_limit_respects_retry_after_without_more_worker_calls(monkeypatch, path):
     broker = AuthProcessBroker(mode="persistent")
     command = AsyncMock(return_value={"ok": False, "code": "read_rate_limited", "retry_after": 120})
     monkeypatch.setattr(broker, "_persistent_market_command", command)
     try:
         for _ in range(2):
             with pytest.raises(AvanzaRateLimitError) as error:
-                await broker.market_data_batch(["/_api/market-guide/stock/1/orderdepth"])
+                await broker.market_data_batch([path])
             assert error.value.retry_after >= 119
         command.assert_awaited_once()
     finally:
         await broker.aclose()
 
 
-async def test_worker_carries_only_retry_after_from_rate_limit(monkeypatch):
+@pytest.mark.parametrize("path", [
+    "/_api/market-guide/stock/1/orderdepth",
+    "/_api/trading-critical/rest/marketdata/1",
+])
+async def test_worker_carries_only_retry_after_from_rate_limit(monkeypatch, path):
     async with AvanzaClient() as client:
         monkeypatch.setattr(client, "request_authenticated_batch", AsyncMock(return_value=[
             httpx.Response(429, headers={"Retry-After": "120"}, json={"message": "limited"})]))
         auth = worker._RequestAuth(SessionMaterial((), "test-token"))
-        result = await worker._market_batch_operation(auth, {"paths": ["/_api/market-guide/stock/1/orderdepth"]}, client)
+        result = await worker._market_batch_operation(auth, {"paths": [path]}, client)
         assert result == {"ok": False, "code": "read_rate_limited", "retry_after": 120}
+
+
+async def test_authenticated_batch_aborts_queued_reads_on_rate_limit():
+    seen = []
+    async def handler(request):
+        seen.append(request.url.path)
+        return httpx.Response(429, headers={"Retry-After": "120"})
+
+    session = SessionMaterial((), "test-token")
+    async with AvanzaClient(
+        session_provider=lambda: session, min_request_interval=0, request_jitter=0
+    ) as client:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), base_url="https://www.avanza.se"
+        ) as transport:
+            client._authenticated_client = transport
+            client._authenticated_session = session
+            paths = [f"/_api/trading-critical/rest/marketdata/{i}" for i in range(1, 9)]
+            with pytest.raises(AvanzaRateLimitError) as error:
+                async with asyncio.timeout(1):
+                    await client.request_authenticated_batch(paths, max_concurrency=1)
+            assert error.value.retry_after == 120
+            assert seen == [paths[0]]
+            assert client._authenticated_session is session
 
 
 async def test_metadata_and_authenticated_depth_overlap_without_increasing_batch_size():

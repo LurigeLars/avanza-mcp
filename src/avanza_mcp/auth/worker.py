@@ -718,6 +718,8 @@ async def _market_batch_operation(
                 max_concurrency=_MARKET_BATCH_CONCURRENCY,
                 **({"item_timeout": 1.5} if "orderdepth" in kinds else {}),
             )
+        except AvanzaRateLimitError as error:
+            return {"ok": False, "code": "read_rate_limited", "retry_after": error.retry_after}
         except AvanzaAuthError:
             await auth.invalidate_session()
             return {"ok": False, "code": "auth_expired"}
@@ -732,9 +734,9 @@ async def _market_batch_operation(
             if response.status_code == 401:
                 await auth.invalidate_session()
                 return {"ok": False, "code": "auth_expired"}
-            if response.status_code == 429 and "orderdepth" in kinds:
+            if response.status_code == 429:
                 try:
-                    active_client._handle_error(response, path, "depth-batch", authenticated=True)
+                    active_client._handle_error(response, path, "market-batch", authenticated=True)
                 except AvanzaRateLimitError as error:
                     return {"ok": False, "code": "read_rate_limited", "retry_after": error.retry_after}
             if response.status_code != 200:

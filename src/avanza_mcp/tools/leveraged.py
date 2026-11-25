@@ -151,7 +151,9 @@ async def screen_leveraged_instruments(
     bounded auth-worker batches. Repeat the returned snapshot_id until
     execution.enrichment.scan_complete is true. No provisional execution ranking is exposed before
     the full universe has been attempted; after completion it is globally ranked, the top 25 are
-    refetched once for final execution freshness, and only then paginated. page_size controls
+    refetched once for final execution freshness, and only then paginated. If rate limited,
+    wait for execution.enrichment.retry_after_seconds (if supplied) before retrying the same
+    snapshot; no partial execution ranking is returned. page_size controls
     response size, not the candidate pool. Without auth, the tool
     falls back to public structural discovery instead of failing. For authenticated leveraged data,
     freshness is based on bid/ask update age; last_trade is informational only.
@@ -233,7 +235,7 @@ async def screen_leveraged_instruments(
             batch_error = enrichment.get("error")
             authenticated_count = int(enrichment.get("authenticated_quote_count") or 0)
 
-            if batch_error is None and not scan_complete:
+            if batch_error in (None, "rate_limited") and not scan_complete:
                 discovery_ranking = result.get("ranking")
                 result["structural_pagination"] = result.get("pagination")
                 result["products"] = []
@@ -253,6 +255,12 @@ async def screen_leveraged_instruments(
                     "provisional execution ranking is returned. page_size only controls the final "
                     "returned slice and never limits candidate evaluation."
                 )
+                if batch_error == "rate_limited":
+                    result["data_note"] = (
+                        "Avanza rate limited authenticated market data. Respect "
+                        "execution.enrichment.retry_after_seconds before retrying the same "
+                        "snapshot. No provisional ranking is returned."
+                    )
             elif batch_error is None and scan_complete and authenticated_count > 0:
                 discovery_ranking = result.get("ranking")
                 result["structural_pagination"] = result.get("pagination")

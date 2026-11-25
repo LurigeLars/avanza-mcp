@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 from pydantic import Field
 
 from ..client.base import AvanzaClient
-from ..client.exceptions import AvanzaAuthError, AvanzaError
+from ..client.exceptions import AvanzaAuthError, AvanzaError, AvanzaRateLimitError
 from ..instrument_catalog import InstrumentCatalog, fresh_default_instrument_catalog
 from ..models.certificate import CertificateFilter, CertificateFilterRequest
 from ..models.filter import SortBy
@@ -1158,6 +1158,7 @@ class LeveragedScreenService:
         current_call_attempted_count = 0
         current_call_duration_ms = 0.0
         batch_error: str | None = None
+        retry_after: int | None = None
 
         if not cache_hit:
             start_index = snapshot.execution_next_index
@@ -1172,6 +1173,10 @@ class LeveragedScreenService:
                 quotes = await self._market.get_authenticated_market_data_quotes(
                     order_book_ids
                 )
+            except AvanzaRateLimitError as error:
+                batch_error = "rate_limited"
+                retry_after = error.retry_after
+                quotes = []
             except AvanzaAuthError:
                 batch_error = "auth_required"
                 quotes = []
@@ -1234,6 +1239,11 @@ class LeveragedScreenService:
                             shortlist_ids
                         )
                     )
+                except AvanzaRateLimitError as error:
+                    refreshed_quotes = []
+                    refresh_error = batch_error = "rate_limited"
+                    retry_after = error.retry_after
+                    scan_complete = False
                 except AvanzaAuthError:
                     refreshed_quotes = []
                     refresh_error = "auth_required"
@@ -1273,7 +1283,7 @@ class LeveragedScreenService:
                         )
                     )
 
-                snapshot.final_refresh_completed = True
+                snapshot.final_refresh_completed = refresh_error != "rate_limited"
                 snapshot.final_refresh_metadata = {
                     "requested_count": len(shortlist_ids),
                     "refreshed_count": refreshed_count,
@@ -1347,6 +1357,8 @@ class LeveragedScreenService:
         }
         if batch_error is not None:
             metadata["error"] = batch_error
+        if batch_error == "rate_limited":
+            metadata["retry_after_seconds"] = retry_after
         snapshot.execution_metadata = metadata
 
         if scan_complete:
