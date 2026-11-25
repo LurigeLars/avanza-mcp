@@ -70,7 +70,9 @@ This endpoint may be shared by multiple local HTTP MCP clients. It remains loopb
 For ChatGPT web, `compose.public.yaml` adds a Cloudflare Tunnel and a JWT-validating
 Node gateway; the raw FastMCP port is never published. The gateway also applies the
 explicit public tool allowlist and compacts tool definitions before they enter model
-context. Public upstream endpoints need no Avanza account authentication; remote MCP
+context. Cloudflare certificate refreshes share one in-flight request per gateway;
+failed refreshes are throttled for 30 seconds and never extend the one-hour
+successful certificate-cache lifetime. Public upstream endpoints need no Avanza account authentication; remote MCP
 access still requires Cloudflare Access.
 
 ## Tests
