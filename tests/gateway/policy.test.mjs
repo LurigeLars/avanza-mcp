@@ -160,3 +160,17 @@ test('model-facing response compaction removes only duplicate structuredContent'
   });
   assert.deepEqual(mismatched.result.structuredContent, { last: 123 });
 });
+
+
+test('gateway instructions apply to modern discovery and legacy initialization', () => {
+  for (const result of [
+    { supportedVersions: ['2026-07-28'], instructions: 'upstream' },
+    { serverInfo: { name: 'test', version: '1' }, instructions: 'upstream' },
+  ]) {
+    const out = rewriteResponse({ jsonrpc: '2.0', id: 1, result }, {
+      allowedTools: parseAllowedTools('search_instruments'),
+    });
+    assert.ok(out.result.instructions);
+    assert.notEqual(out.result.instructions, 'upstream');
+  }
+});
