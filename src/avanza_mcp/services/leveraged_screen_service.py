@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from threading import Lock
@@ -55,9 +56,10 @@ def _number(value: Any) -> float | None:
     if value is None or isinstance(value, bool):
         return None
     try:
-        return float(value)
-    except (TypeError, ValueError):
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
         return None
+    return number if math.isfinite(number) else None
 
 
 def _discovery_spread_percent(bid: Any, ask: Any) -> float | None:
@@ -367,6 +369,10 @@ def _normalize_suitability(
 
 
 def _validate_suitability(suitability: SuitabilityCriteria) -> None:
+    for value in (suitability.target_leverage, suitability.max_leverage_deviation,
+                  suitability.min_stop_loss_buffer_percent):
+        if value is not None and _number(value) is None:
+            raise ValueError("suitability thresholds must be finite numbers")
     if suitability.target_leverage is not None and suitability.target_leverage <= 0:
         raise ValueError("target_leverage must be > 0")
     if suitability.max_leverage_deviation is not None and suitability.max_leverage_deviation < 0:
