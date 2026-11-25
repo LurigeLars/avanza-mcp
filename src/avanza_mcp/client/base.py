@@ -695,11 +695,25 @@ class AvanzaClient:
                         await self._pace_request_start()
                         try:
                             async with asyncio.timeout(item_timeout):
-                                return await auth_client.get(path)
+                                response = await auth_client.get(path)
+                            if response.status_code == 429:
+                                self._handle_error(
+                                    response, path, "market-batch", authenticated=True
+                                )
+                            return response
                         except (httpx.HTTPError, TimeoutError):
                             return None
 
-            return list(await asyncio.gather(*(fetch_one(path) for path in paths)))
+            tasks = [asyncio.create_task(fetch_one(path)) for path in paths]
+            try:
+                return list(await asyncio.gather(*tasks))
+            except BaseException:
+                # Stop queued and in-flight reads before releasing the client lease.
+                # In particular, do not wait out Retry-After inside a failed batch.
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                raise
 
     def _handle_error(
         self,

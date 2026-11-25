@@ -117,7 +117,7 @@ class AuthProcessBroker:
         self._ui_action: str | None = None
         self._ui_reaper: asyncio.Task[None] | None = None
         self._market_auth_backoff_until: dict[str, float] = {}
-        self._depth_rate_limit_until = 0.0
+        self._batch_rate_limit_until: dict[str, float] = {}
         self._closed = False
         self._exit_watchers: set[asyncio.Task[None]] = set()
         self._connected_pids: set[int] = set()
@@ -388,8 +388,13 @@ class AuthProcessBroker:
             return None
 
         family = next(iter(families))
-        if family == "stock_orderdepth" and self._depth_rate_limit_until > monotonic():
-            raise AvanzaRateLimitError(int(self._depth_rate_limit_until - monotonic()) + 1)
+        def require_batch_available() -> None:
+            remaining = self._batch_rate_limit_until.get(family, 0.0) - monotonic()
+            if remaining > 0:
+                raise AvanzaRateLimitError(int(remaining) + 1)
+            self._batch_rate_limit_until.pop(family, None)
+
+        require_batch_available()
         retry_after = self._market_auth_backoff_until.get(family)
         now = monotonic()
         if retry_after is not None:
@@ -403,6 +408,7 @@ class AuthProcessBroker:
         }
         try:
             async with self._operation_lock:
+                require_batch_available()
                 if self.mode == "persistent":
                     if self._persistent_disconnect_active():
                         return None
@@ -434,10 +440,10 @@ class AuthProcessBroker:
             self._market_auth_backoff_until.pop(family, None)
             return raw
         code = response.get("code")
-        if family == "stock_orderdepth" and code == "read_rate_limited":
+        if code == "read_rate_limited":
             seconds = response.get("retry_after")
             seconds = max(5, seconds) if type(seconds) is int and seconds >= 0 else 60
-            self._depth_rate_limit_until = monotonic() + seconds
+            self._batch_rate_limit_until[family] = monotonic() + seconds
             raise AvanzaRateLimitError(seconds)
         if code in {"no_session", "auth_required", "auth_expired"}:
             return None

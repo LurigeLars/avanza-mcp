@@ -941,7 +941,8 @@ async def test_screen_tool_returns_public_fallback_when_auth_is_unavailable(monk
 
 
 @pytest.mark.asyncio
-async def test_screen_tool_hides_provisional_ranking_while_full_scan_is_partial(monkeypatch):
+@pytest.mark.parametrize("rate_limited", [False, True])
+async def test_screen_tool_hides_provisional_ranking_while_full_scan_is_partial(monkeypatch, rate_limited):
     async def fake_screen(self, *_args, **_kwargs):
         return {
             "snapshot_id": "b" * 32,
@@ -985,6 +986,7 @@ async def test_screen_tool_hides_provisional_ranking_while_full_scan_is_partial(
                 "remaining_count": 150,
                 "scan_complete": False,
                 "batch_size": 150,
+                **({"error": "rate_limited", "retry_after_seconds": 120} if rate_limited else {}),
             },
         }
 
@@ -1010,6 +1012,50 @@ async def test_screen_tool_hides_provisional_ranking_while_full_scan_is_partial(
     assert payload["execution"]["enrichment"]["scan_complete"] is False
     assert payload["execution"]["enrichment"]["remaining_count"] == 150
     assert payload["structural_pagination"]["returned"] == 5
+    assert payload["snapshot_id"] == "b" * 32
+    if rate_limited:
+        assert payload["execution"]["enrichment"]["retry_after_seconds"] == 120
+        assert "rate limited" in payload["data_note"]
+
+
+@pytest.mark.asyncio
+async def test_rate_limited_scan_and_final_refresh_are_retryable(monkeypatch):
+    from avanza_mcp.client.exceptions import AvanzaRateLimitError
+
+    service = LeveragedScreenService(object(), catalog=FourRowLocalUniverseCatalog())
+    fake = FakeMarket()
+    service._market = fake
+    original = fake.get_authenticated_market_data_quotes
+    calls = 0
+
+    async def fetch(ids):
+        nonlocal calls
+        calls += 1
+        if calls in (1, 3):
+            raise AvanzaRateLimitError(120)
+        return await original(ids)
+
+    monkeypatch.setattr(fake, "get_authenticated_market_data_quotes", fetch)
+    first = await service.screen("4478", "long", ["warrant"], 1)
+    args = (first["snapshot_id"], "4478", "long", 0, 1)
+
+    limited = await service.enrich_snapshot(*args)
+    assert limited["enrichment"]["error"] == "rate_limited"
+    assert limited["enrichment"]["retry_after_seconds"] == 120
+    assert limited["enrichment"]["attempted_count"] == 0
+    assert limited["products"] == []
+
+    final_limited = await service.enrich_snapshot(*args)
+    assert final_limited["enrichment"]["attempted_count"] == 4
+    assert final_limited["enrichment"]["scan_complete"] is False
+    assert final_limited["enrichment"]["error"] == "rate_limited"
+    assert final_limited["products"] == []
+
+    complete = await service.enrich_snapshot(*args)
+    assert complete["enrichment"]["scan_complete"] is True
+    assert complete["enrichment"]["final_refresh"]["refreshed_count"] == 4
+    assert complete["returned"] == 1
+    assert len(fake.market_data_batch_calls) == 2
 
 
 @pytest.mark.asyncio
