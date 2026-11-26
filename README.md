@@ -597,6 +597,9 @@ a 200-note export limit.
 
 ## ChatGPT / remote deployment
 
+The optional Docker/Cloudflare gateway uses the shared local-only `dockerlocal-gateway:node-26.13.1-r1` image. Provision it first with the reviewed `build-gateway-runtime.ps1` in [Docker-MCP](https://github.com/LurigeLars/Docker-MCP) (pinned Node base, Alpine security upgrades, npm removed, immutable Scout review). The image is never pulled from a registry. Independent deployments can build and review that same versioned image locally from the recipe before starting Compose; normal non-Docker MCP operation is unchanged.
+
+
 This repository does not provide a hosted MCP endpoint.
 
 For ChatGPT, the maintained deployment pattern is:
